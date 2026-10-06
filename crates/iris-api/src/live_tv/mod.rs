@@ -12,6 +12,7 @@
 //! to the next source when the active one dies.
 
 pub mod channels;
+pub mod dlive;
 pub mod epg;
 pub mod m3u;
 pub mod proxy;
@@ -59,6 +60,16 @@ const PROBE_CONCURRENCY: usize = 12;
 /// Consecutive segment/key fetch failures on the live source before it is
 /// demoted and the next feed elected.
 const SEGMENT_FAIL_THRESHOLD: u64 = 5;
+/// The same for a dlive source: its feeds are restreams of restreams, and
+/// Vavoo is right behind.
+const DLIVE_SEGMENT_FAIL_THRESHOLD: u64 = 3;
+
+/// Proxied segment fetch deadline for a dlive source (a Player 1 segment is
+/// a 2–5 MB image).
+const DLIVE_SEGMENT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Cap on an image-wrapped segment buffered for unwrapping.
+const MAX_WRAPPED_SEGMENT_BYTES: usize = 32 * 1024 * 1024;
 
 /// Per-source fetch timeout for playlist requests — bounds the worst case
 /// when rotating through several dead sources in one request.
@@ -169,10 +180,11 @@ fn channel_counts(entries: Vec<m3u::M3uEntry>) -> ChannelCounts {
 
 /// The picker: only countries with something to watch, each with its count.
 /// A loaded country's own list is the exact count; otherwise the index. A
-/// country with extra playlists or Vavoo groups configured stays even when the
-/// index misses it (its count is unknown until loaded). Without any index
-/// (upstream down) every country stays, count unknown — a picker that hides
-/// everything would be worse than one that offers an empty country.
+/// country with extra playlists, Vavoo groups or dlive ids configured stays
+/// even when the index misses it (its count is unknown until loaded). Without
+/// any index (upstream down) every country stays, count unknown — a picker
+/// that hides everything would be worse than one that offers an empty
+/// country.
 fn picker_entries(
     countries: &[Country],
     counts: Option<&ChannelCounts>,
@@ -228,6 +240,58 @@ pub struct MasterPlaylist {
     /// instead of giving up on a fixed budget — M6 is carried by four Vavoo
     /// feeds and a two-rotation cap could never reach the fourth.
     pub source_count: usize,
+}
+
+/// A source resolved to the URL and headers its playlist is fetched with.
+struct Upstream {
+    url: String,
+    user_agent: Option<String>,
+    referrer: Option<String>,
+}
+
+/// One election attempt on an internet source.
+enum Attempt {
+    Elected(String, Url),
+    /// Skipped for a reason that is not the source's (no cooldown).
+    Deferred(String),
+    Failed(String),
+}
+
+/// A failed playlist fetch; `status` is set when the host answered.
+struct FetchFailure {
+    status: Option<u16>,
+    error: LiveTvError,
+}
+
+impl FetchFailure {
+    /// The host answered 200 with something unusable.
+    fn answered(why: &str) -> Self {
+        Self {
+            status: Some(200),
+            error: LiveTvError::Upstream(why.into()),
+        }
+    }
+
+    /// Unreachable, too slow, overloaded: what a host outage looks like, as
+    /// opposed to "this channel isn't here".
+    fn is_outage(&self) -> bool {
+        self.status.is_none_or(|s| s >= 500 || s == 429)
+    }
+}
+
+/// A proxied upstream response. `from_dlive`: the channel's active source is
+/// a dlive one, whose segments must unwrap to TS or count as failures.
+pub struct ProxiedResponse {
+    pub resp: reqwest::Response,
+    pub final_url: Url,
+    pub from_dlive: bool,
+}
+
+#[derive(Default)]
+struct ActiveUpstream {
+    user_agent: Option<String>,
+    referrer: Option<String>,
+    dlive: Option<(u32, u8)>,
 }
 
 /// Now/next programme pair for one channel.
@@ -427,6 +491,11 @@ struct ServiceInner {
     /// Vavoo aggregator: catalog fetch + on-demand `vavoo://` resolution
     /// (see [`vavoo::Vavoo`]).
     vavoo: vavoo::Vavoo,
+    /// dlive.sx: daily list, budgeted embed scraping, `dlive://` resolution
+    /// (see [`dlive::Dlive`]).
+    dlive: Arc<dlive::Dlive>,
+    /// Last dlive edge generation whose Player 1 cooldowns were cleared.
+    dlive_edge_seen: AtomicU64,
 }
 
 /// A cached logo — the bytes + content-type on success, or just the forwarded
@@ -482,6 +551,7 @@ impl LiveTvService {
             .redirect(reqwest::redirect::Policy::limited(5))
             .danger_accept_invalid_certs(true)
             .build()?;
+        let dlive = Arc::new(dlive::Dlive::new(cfg.dlive.clone(), http.clone()));
         Ok(Self {
             inner: Arc::new(ServiceInner {
                 signer: proxy::Signer::new(jwt_secret),
@@ -501,6 +571,8 @@ impl LiveTvService {
                 logo_http,
                 transcode: transcode::TranscodeManager::default(),
                 vavoo: vavoo::Vavoo::default(),
+                dlive,
+                dlive_edge_seen: AtomicU64::new(0),
             }),
         })
     }
@@ -552,6 +624,9 @@ impl LiveTvService {
             cfg.extra_playlists.keys().map(String::as_str).collect();
         if cfg.vavoo_enabled {
             configured.extend(cfg.vavoo_countries.keys().map(String::as_str));
+        }
+        if cfg.dlive.enabled {
+            configured.extend(cfg.dlive.countries.keys().map(String::as_str));
         }
         Ok(picker_entries(
             &countries,
@@ -670,6 +745,21 @@ impl LiveTvService {
                     "live tv vavoo channels merged"
                 );
                 playlists.push((SourceOrigin::Vavoo, entries));
+            }
+        }
+        // dlive channels (resolved lazily on zap), one list per player. Same
+        // best effort: no channel list yet means no dlive sources this round.
+        if self.inner.dlive.enabled() {
+            for (origin, entries) in self.inner.dlive.entries(country).await {
+                if !entries.is_empty() {
+                    tracing::info!(
+                        country,
+                        ?origin,
+                        dlive_channels = entries.len(),
+                        "live tv dlive channels merged"
+                    );
+                    playlists.push((origin, entries));
+                }
             }
         }
 
@@ -900,68 +990,51 @@ impl LiveTvService {
         let channel = &snap.channels[idx];
         let channel_key = format!("{country}:{id}");
         let now_ms = epoch_ms();
+        self.dlive_housekeeping(channel);
 
+        let n = channel.sources.len();
         let start = election_start(channel, snap.active_source[idx].load(Ordering::Relaxed));
         let mut last_err = String::new();
-        // Two passes: healthy sources first, then the ones that were cooling
-        // down. Pass 1 must run whenever pass 0 didn't succeed — not only
-        // when it tried nothing — otherwise one transient failure on the
-        // only-live source makes the channel 502 for its whole cooldown
-        // while the request never even tries it.
-        let mut tried = vec![false; channel.sources.len()];
-        for pass in 0..2 {
-            for step in 0..channel.sources.len() {
-                let si = (start + step) % channel.sources.len();
+        // Pass 0: healthy sources. Pass 1: the ones cooling down — it must
+        // run whenever pass 0 didn't succeed, not only when it tried nothing,
+        // otherwise one transient failure on the only-live source makes the
+        // channel 502 for its whole cooldown. Pass 2: dlive sources skipped
+        // for a reason that is not theirs (breaker open, embed not scraped
+        // yet), retried only because nothing else played.
+        let mut tried = vec![false; n];
+        let mut deferred: Vec<usize> = Vec::new();
+        for pass in 0..3 {
+            let order: Vec<usize> = if pass < 2 {
+                (0..n).map(|step| (start + step) % n).collect()
+            } else {
+                std::mem::take(&mut deferred)
+            };
+            for (k, &si) in order.iter().enumerate() {
                 let health = &snap.health[idx][si];
-                if tried[si] || (pass == 0 && health.in_cooldown(now_ms)) {
+                if pass < 2 && (tried[si] || (pass == 0 && health.in_cooldown(now_ms))) {
                     continue;
                 }
                 tried[si] = true;
                 let source = &channel.sources[si];
                 if source.tier == SourceTier::Tuner {
-                    let Some(pinned) = self.tuner_admission(&country, id, &source.url).await else {
-                        // At mux capacity: skip WITHOUT marking failure —
-                        // capacity is not a source defect, and the next
-                        // election re-checks (the tuner is always tried
-                        // first).
-                        last_err = "tuner at mux capacity".into();
-                        continue;
-                    };
-                    // The household tuner serves raw MPEG-TS, not HLS: feed
-                    // it through the shared ffmpeg manager in remux mode
-                    // (-c copy) and point the master at the tuner segment
-                    // route. Any failure (box off, no lock) marks the source
-                    // and falls through to the internet tiers.
                     match self
-                        .inner
-                        .transcode
-                        .master_playlist(
-                            Mode::Remux,
-                            &channel_key,
-                            &source.url,
-                            DEFAULT_UA,
-                            None,
-                            pinned,
-                        )
+                        .attempt_tuner(&snap, idx, si, &country, id, now_ms)
                         .await
                     {
-                        Ok(body) => {
-                            return Ok(tuner_elected(&snap, idx, si, &channel_key, &body));
-                        }
+                        Ok(elected) => return Ok(elected),
                         Err(e) => {
-                            snap.health[idx][si].mark_failure(now_ms);
-                            tracing::debug!(
-                                channel = %channel_key,
-                                error = %e,
-                                "tuner source failed, rotating to internet tiers"
-                            );
-                            last_err = e.to_string();
+                            last_err = e;
                             continue;
                         }
                     }
                 }
-                match self.fetch_source_playlist(source).await {
-                    Ok((body, base)) => {
+                let last_option = if pass < 2 {
+                    deferred.is_empty() && tried.iter().all(|t| *t)
+                } else {
+                    k + 1 == order.len()
+                };
+                match self.attempt_source(source, last_option, pass == 2).await {
+                    Attempt::Elected(body, base) => {
                         snap.active_source[idx].store(si, Ordering::Relaxed);
                         health.mark_success();
                         tracing::info!(
@@ -981,10 +1054,16 @@ impl LiveTvService {
                             ),
                             source_index: si,
                             upstream_host: base.host_str().unwrap_or("unknown").to_string(),
-                            source_count: channel.sources.len(),
+                            source_count: n,
                         });
                     }
-                    Err(e) => {
+                    Attempt::Deferred(why) => {
+                        if pass < 2 {
+                            deferred.push(si);
+                        }
+                        last_err = why;
+                    }
+                    Attempt::Failed(e) => {
                         health.mark_failure(now_ms);
                         tracing::debug!(
                             channel = %channel_key,
@@ -992,12 +1071,173 @@ impl LiveTvService {
                             error = %e,
                             "live tv source failed, rotating"
                         );
-                        last_err = e.to_string();
+                        last_err = e;
                     }
                 }
             }
         }
         Err(LiveTvError::Upstream(last_err))
+    }
+
+    /// The tuner branch of an election. `Err` carries why the election moves
+    /// on to the internet sources.
+    async fn attempt_tuner(
+        &self,
+        snap: &CountrySnapshot,
+        idx: usize,
+        si: usize,
+        country: &str,
+        id: &str,
+        now_ms: u64,
+    ) -> Result<MasterPlaylist, String> {
+        let channel_key = format!("{country}:{id}");
+        let source = &snap.channels[idx].sources[si];
+        let Some(pinned) = self.tuner_admission(country, id, &source.url).await else {
+            // At mux capacity: skip WITHOUT marking failure — capacity is
+            // not a source defect, and the next election re-checks (the
+            // tuner is always tried first).
+            return Err("tuner at mux capacity".into());
+        };
+        // The household tuner serves raw MPEG-TS, not HLS: feed it through
+        // the shared ffmpeg manager in remux mode (-c copy) and point the
+        // master at the tuner segment route. Any failure (box off, no lock)
+        // marks the source and falls through to the internet tiers.
+        match self
+            .inner
+            .transcode
+            .master_playlist(
+                Mode::Remux,
+                &channel_key,
+                &source.url,
+                DEFAULT_UA,
+                None,
+                pinned,
+            )
+            .await
+        {
+            Ok(body) => Ok(tuner_elected(snap, idx, si, &channel_key, &body)),
+            Err(e) => {
+                snap.health[idx][si].mark_failure(now_ms);
+                tracing::debug!(
+                    channel = %channel_key,
+                    error = %e,
+                    "tuner source failed, rotating to internet tiers"
+                );
+                Err(e.to_string())
+            }
+        }
+    }
+
+    /// Per-zap dlive upkeep, all off the request path: queue the embeds this
+    /// channel's dlive sources lack, and clear Player 1 cooldowns earned on
+    /// an edge host that has since been replaced.
+    fn dlive_housekeeping(&self, channel: &Channel) {
+        let dlive = &self.inner.dlive;
+        if !dlive.enabled() {
+            return;
+        }
+        dlive.prefetch(
+            channel
+                .sources
+                .iter()
+                .filter_map(|s| dlive::parse_sentinel(&s.url)),
+        );
+        let generation = dlive.edge_generation();
+        if self
+            .inner
+            .dlive_edge_seen
+            .swap(generation, Ordering::Relaxed)
+            != generation
+        {
+            for (url, health) in self.inner.health.read().expect("poisoned").iter() {
+                if dlive::parse_sentinel(url).is_some_and(|(_, player)| player == 1) {
+                    health.mark_success();
+                }
+            }
+        }
+    }
+
+    /// Resolve and fetch one internet source for the election. A dlive
+    /// source gets a short first-byte deadline unless it is the channel's
+    /// `last_option`; `last_resort` lets it past an open breaker.
+    async fn attempt_source(
+        &self,
+        source: &channels::StreamSource,
+        last_option: bool,
+        last_resort: bool,
+    ) -> Attempt {
+        let Some((id, player)) = dlive::parse_sentinel(&source.url) else {
+            let upstream = match self.resolve_upstream(source).await {
+                Ok(u) => u,
+                Err(e) => return Attempt::Failed(e.to_string()),
+            };
+            return match self
+                .fetch_playlist_at(&upstream, PLAYLIST_TIMEOUT, PLAYLIST_TIMEOUT)
+                .await
+            {
+                Ok((body, base)) => Attempt::Elected(body, base),
+                Err(f) => Attempt::Failed(f.error.to_string()),
+            };
+        };
+        let dlive = &self.inner.dlive;
+        if !dlive.enabled() {
+            return Attempt::Failed("dlive disabled".into());
+        }
+        let first_byte = if last_option && !dlive.breaker_open() {
+            dlive.cold_start_timeout()
+        } else {
+            dlive.first_byte_timeout()
+        };
+        let mode = dlive::ResolveMode {
+            bypass_breaker: last_resort,
+            inline_embed: last_resort,
+        };
+        let mut re_resolved = false;
+        loop {
+            let resolved = match dlive.resolve(id, player, mode).await {
+                Ok(r) => r,
+                Err(dlive::ResolveError::Skip(why)) => return Attempt::Deferred(why.into()),
+                Err(e @ dlive::ResolveError::Missing(_)) => return Attempt::Failed(e.to_string()),
+                Err(e @ dlive::ResolveError::Outage(_)) => {
+                    dlive.note_outage();
+                    return Attempt::Failed(e.to_string());
+                }
+            };
+            let upstream = Upstream {
+                url: resolved.url.clone(),
+                user_agent: resolved.user_agent.clone(),
+                referrer: resolved.referrer.clone(),
+            };
+            match self
+                .fetch_playlist_at(&upstream, first_byte, first_byte + PLAYLIST_TIMEOUT)
+                .await
+            {
+                Ok((body, base)) => {
+                    dlive.note_ok();
+                    return Attempt::Elected(body, base);
+                }
+                // A signature or token that expired early: resolve afresh
+                // once, then give up on this source.
+                Err(f) if f.status == Some(403) && resolved.is_signed() && !re_resolved => {
+                    dlive.invalidate(id, player);
+                    re_resolved = true;
+                }
+                Err(f) => {
+                    if resolved.is_signed() {
+                        dlive.invalidate(id, player);
+                    }
+                    if f.is_outage() {
+                        dlive.note_outage();
+                        if player == 1 && f.status.is_none() {
+                            dlive.spawn_learn_edge();
+                        }
+                    } else {
+                        dlive.note_ok();
+                    }
+                    return Attempt::Failed(f.error.to_string());
+                }
+            }
+        }
     }
 
     /// Tuner-branch election prelude: mux admission + pinned flag.
@@ -1208,6 +1448,14 @@ impl LiveTvService {
                 index_source_entries(country, &entries, name_logo, &mut seen, index);
             }
         }
+        if self.inner.dlive.enabled() {
+            let countries: Vec<String> = self.inner.dlive.countries().cloned().collect();
+            for country in countries {
+                for (_, entries) in self.inner.dlive.entries(&country).await {
+                    index_source_entries(&country, &entries, name_logo, &mut seen, index);
+                }
+            }
+        }
     }
 
     /// Folded channel-name → logo URL, from iptv-org's channels + logos DBs
@@ -1290,8 +1538,14 @@ impl LiveTvService {
         let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
         let channel = &snap.channels[idx];
         let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
-        let source = &channel.sources[active];
-        let upstream_url = self.resolve_source_url(source).await?;
+        // ffmpeg reads the upstream directly, which dlive sources defeat
+        // (image-wrapped segments, 5-minute tokens baked into every URI):
+        // transcode the best other source instead.
+        let si = transcode_source(channel, &snap.health[idx], active, epoch_ms())
+            .ok_or_else(|| LiveTvError::Upstream("no transcodable source".into()))?;
+        let source = &channel.sources[si];
+        let upstream = self.resolve_upstream(source).await?;
+        let upstream_url = upstream.url;
         // The elected source can be the tuner: its re-encode tunes an adapter
         // like a remux does, so it goes through the same mux admission.
         if let Some(freq) = transcode::tuner_freq(&upstream_url)
@@ -1505,6 +1759,11 @@ impl LiveTvService {
                     if vavoo::stream_id(&source.url).is_some() {
                         continue;
                     }
+                    // Same for dlive: a probe would spend the dlive.sx page
+                    // budget a whole country at a time.
+                    if dlive::parse_sentinel(&source.url).is_some() {
+                        continue;
+                    }
                     // Tuner sources are raw-TS /tune endpoints: probing one
                     // would START A TUNE on the box (evicting a real viewer)
                     // and then fail playlist parsing, cooling the tuner down
@@ -1549,49 +1808,52 @@ impl LiveTvService {
         });
     }
 
-    /// Concrete upstream URL for a source: a `vavoo://<id>` sentinel is
+    /// Concrete upstream for a non-dlive source: a `vavoo://<id>` sentinel is
     /// resolved to a fresh tokenised playlist (the token + edge host rotate,
     /// hence resolve-on-use), every other URL passes through unchanged.
-    async fn resolve_source_url(
+    async fn resolve_upstream(
         &self,
         source: &channels::StreamSource,
-    ) -> Result<String, LiveTvError> {
-        match vavoo::stream_id(&source.url) {
+    ) -> Result<Upstream, LiveTvError> {
+        let url = match vavoo::stream_id(&source.url) {
             Some(id) => self
                 .inner
                 .vavoo
                 .resolve(&self.inner.http, id)
                 .await
-                .ok_or_else(|| LiveTvError::Upstream("vavoo resolve failed".into())),
-            None => Ok(source.url.clone()),
-        }
+                .ok_or_else(|| LiveTvError::Upstream("vavoo resolve failed".into()))?,
+            None => source.url.clone(),
+        };
+        Ok(Upstream {
+            url,
+            user_agent: source.user_agent.clone(),
+            referrer: source.referrer.clone(),
+        })
     }
 
     async fn fetch_source_playlist(
         &self,
         source: &channels::StreamSource,
     ) -> Result<(String, Url), LiveTvError> {
-        let effective_url = self.resolve_source_url(source).await?;
-        let mut req = self
-            .inner
-            .http
-            .get(&effective_url)
-            .timeout(PLAYLIST_TIMEOUT);
-        if let Some(ua) = &source.user_agent {
-            req = req.header(reqwest::header::USER_AGENT, ua);
-        }
-        if let Some(referrer) = &source.referrer {
-            req = req.header(reqwest::header::REFERER, referrer);
-        }
-        let resp = req
-            .send()
+        let upstream = self.resolve_upstream(source).await?;
+        self.fetch_playlist_at(&upstream, PLAYLIST_TIMEOUT, PLAYLIST_TIMEOUT)
             .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(upstream_err)?;
-        let final_url = resp.url().clone();
-        let body = read_playlist(resp).await?;
+            .map_err(|f| f.error)
+    }
+
+    /// Fetch a source's playlist: response headers within `first_byte`, the
+    /// whole exchange within `total`.
+    async fn fetch_playlist_at(
+        &self,
+        upstream: &Upstream,
+        first_byte: Duration,
+        total: Duration,
+    ) -> Result<(String, Url), FetchFailure> {
+        let (body, final_url) = self
+            .fetch_upstream_text(upstream, &upstream.url, first_byte, total)
+            .await?;
         if !body.trim_start().starts_with("#EXTM3U") {
-            return Err(LiveTvError::Upstream("not an HLS playlist".into()));
+            return Err(FetchFailure::answered("not an HLS playlist"));
         }
         // A 200 master proves nothing when it came from an indirection host
         // (github-hosted relays always serve their checked-in master, even
@@ -1601,24 +1863,53 @@ impl LiveTvService {
         if let Some(variant) = first_variant_uri(&body) {
             let vurl = final_url
                 .join(variant)
-                .map_err(|e| LiveTvError::Upstream(format!("bad variant uri: {e}")))?;
-            let mut vreq = self.inner.http.get(vurl).timeout(PLAYLIST_TIMEOUT);
-            if let Some(ua) = &source.user_agent {
-                vreq = vreq.header(reqwest::header::USER_AGENT, ua);
-            }
-            if let Some(referrer) = &source.referrer {
-                vreq = vreq.header(reqwest::header::REFERER, referrer);
-            }
-            let vresp = vreq
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .map_err(upstream_err)?;
-            let vbody = read_playlist(vresp).await?;
+                .map_err(|e| FetchFailure::answered(&format!("bad variant uri: {e}")))?;
+            let (vbody, _) = self
+                .fetch_upstream_text(upstream, vurl.as_str(), first_byte, total)
+                .await?;
             if !vbody.trim_start().starts_with("#EXTM3U") {
-                return Err(LiveTvError::Upstream("variant is not HLS".into()));
+                return Err(FetchFailure::answered("variant is not HLS"));
             }
         }
+        Ok((body, final_url))
+    }
+
+    async fn fetch_upstream_text(
+        &self,
+        upstream: &Upstream,
+        url: &str,
+        first_byte: Duration,
+        total: Duration,
+    ) -> Result<(String, Url), FetchFailure> {
+        let mut req = self.inner.http.get(url).timeout(total);
+        if let Some(ua) = &upstream.user_agent {
+            req = req.header(reqwest::header::USER_AGENT, ua);
+        }
+        if let Some(referrer) = &upstream.referrer {
+            req = req.header(reqwest::header::REFERER, referrer);
+        }
+        let resp = tokio::time::timeout(first_byte, req.send())
+            .await
+            .map_err(|_| FetchFailure {
+                status: None,
+                error: LiveTvError::Upstream("no response within the deadline".into()),
+            })?
+            .map_err(|e| FetchFailure {
+                status: None,
+                error: upstream_err(e),
+            })?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(FetchFailure {
+                status: Some(status.as_u16()),
+                error: LiveTvError::Upstream(format!("upstream answered HTTP {}", status.as_u16())),
+            });
+        }
+        let final_url = resp.url().clone();
+        let body = read_playlist(resp).await.map_err(|error| FetchFailure {
+            status: None,
+            error,
+        })?;
         Ok((body, final_url))
     }
 
@@ -1630,7 +1921,7 @@ impl LiveTvService {
         channel_key: &str,
         encoded_url: &str,
         sig: &str,
-    ) -> Result<(reqwest::Response, Url), LiveTvError> {
+    ) -> Result<ProxiedResponse, LiveTvError> {
         let upstream = proxy::decode_upstream(encoded_url).ok_or(LiveTvError::BadProxyRequest)?;
         if !self
             .inner
@@ -1642,23 +1933,95 @@ impl LiveTvService {
         // Recover the channel's pinned headers; a channel that vanished in a
         // playlist refresh still streams with defaults (sig proves we minted
         // the URL).
-        let (user_agent, referrer) = self.channel_headers(channel_key).await;
-        let mut req = self.inner.http.get(upstream.clone());
-        if let Some(ua) = user_agent {
-            req = req.header(reqwest::header::USER_AGENT, ua);
+        let active = self.active_upstream(channel_key).await;
+        let dlive = &self.inner.dlive;
+        let mut target = upstream.clone();
+        if let Some((id, player)) = active.dlive
+            && let Some(current) = dlive.refresh_upstream(id, player, &upstream).await
+        {
+            target = current;
         }
-        if let Some(r) = referrer {
-            req = req.header(reqwest::header::REFERER, r);
-        }
+        let send = |url: Url| {
+            let timeout = active.dlive.map(|_| {
+                if proxy::is_playlist(&url, None) {
+                    PLAYLIST_TIMEOUT
+                } else {
+                    DLIVE_SEGMENT_TIMEOUT
+                }
+            });
+            let mut req = self.inner.http.get(url);
+            if let Some(ua) = &active.user_agent {
+                req = req.header(reqwest::header::USER_AGENT, ua);
+            }
+            if let Some(r) = &active.referrer {
+                req = req.header(reqwest::header::REFERER, r);
+            }
+            if let Some(t) = timeout {
+                req = req.timeout(t);
+            }
+            req.send()
+        };
         // NOTE: no `error_for_status` here. Live segments roll off the
         // window, so a slightly-late fetch legitimately 404s — that must be
         // forwarded to the player AS a 404 (hls.js retries / gap-skips it),
         // NOT rewritten to a 502 that reads as a dead gateway and tanks the
         // stream. Only a real connection failure (can't reach the host) maps
         // to Upstream/502 below.
-        let resp = req.send().await.map_err(upstream_err)?;
+        let mut resp = send(target).await.map_err(upstream_err)?;
+        // A dlive signature/token the client still holds went stale: resolve
+        // afresh once and retry with the live one.
+        if resp.status() == reqwest::StatusCode::FORBIDDEN
+            && let Some((id, player)) = active.dlive
+            && player != 1
+        {
+            dlive.invalidate(id, player);
+            if let Some(current) = dlive.refresh_upstream(id, player, &upstream).await {
+                resp = send(current).await.map_err(upstream_err)?;
+            }
+        }
         let final_url = resp.url().clone();
-        Ok((resp, final_url))
+        Ok(ProxiedResponse {
+            resp,
+            final_url,
+            from_dlive: active.dlive.is_some(),
+        })
+    }
+
+    /// Buffer an image-wrapped segment and return the TS inside (with its
+    /// content type). When nothing unwraps, a dlive source counts a segment
+    /// failure (its demotion rotates the channel to the next source); any
+    /// other source's image passes through untouched.
+    pub async fn wrapped_segment(
+        &self,
+        channel_key: &str,
+        resp: reqwest::Response,
+        content_type: Option<String>,
+        from_dlive: bool,
+    ) -> Result<(Vec<u8>, String), LiveTvError> {
+        let unwrapped = match read_capped(resp, MAX_WRAPPED_SEGMENT_BYTES).await {
+            Ok(bytes) => tokio::task::spawn_blocking(move || {
+                let ts = dlive::unwrap::unwrap_segment(&bytes);
+                (bytes, ts)
+            })
+            .await
+            .ok(),
+            Err(_) => None,
+        };
+        let served = match unwrapped {
+            Some((_, Some(ts))) => (ts, "video/mp2t".to_string()),
+            Some((bytes, None)) if !from_dlive => (
+                bytes,
+                content_type.unwrap_or_else(|| "application/octet-stream".into()),
+            ),
+            _ => {
+                self.note_segment_result(channel_key, false).await;
+                return Err(LiveTvError::Upstream(
+                    "no TS inside the wrapped segment".into(),
+                ));
+            }
+        };
+        self.note_segment_result(channel_key, true).await;
+        Ok(served)
     }
 
     /// Record the outcome of a segment/key fetch for the channel's active
@@ -1683,14 +2046,26 @@ impl LiveTvService {
             health.segment_failures.store(0, Ordering::Relaxed);
             return;
         }
+        let is_dlive = snap.channels[idx]
+            .sources
+            .get(active)
+            .is_some_and(|s| dlive::parse_sentinel(&s.url).is_some());
+        let threshold = if is_dlive {
+            DLIVE_SEGMENT_FAIL_THRESHOLD
+        } else {
+            SEGMENT_FAIL_THRESHOLD
+        };
         let fails = health.segment_failures.fetch_add(1, Ordering::Relaxed) + 1;
-        if fails < SEGMENT_FAIL_THRESHOLD {
+        if fails < threshold {
             return;
         }
         // Too many bad segments — cool this source down and elect the next
         // healthy one. Reset the counter so the replacement gets a clean run.
         health.mark_failure(epoch_ms());
         health.segment_failures.store(0, Ordering::Relaxed);
+        if is_dlive {
+            self.inner.dlive.note_outage();
+        }
         let now_ms = epoch_ms();
         let next = (0..snap.channels[idx].sources.len())
             .find(|&si| si != active && !snap.health[idx][si].in_cooldown(now_ms));
@@ -1705,22 +2080,39 @@ impl LiveTvService {
         );
     }
 
-    async fn channel_headers(&self, channel_key: &str) -> (Option<String>, Option<String>) {
+    /// Headers (and dlive identity) of the channel's active source, for its
+    /// proxied requests. A dlive source's headers come from its resolution.
+    async fn active_upstream(&self, channel_key: &str) -> ActiveUpstream {
         let Some((country, id)) = channel_key.split_once(':') else {
-            return (None, None);
+            return ActiveUpstream::default();
         };
         let Ok(snap) = self.channels(country).await else {
-            return (None, None);
+            return ActiveUpstream::default();
         };
         let Some(idx) = snap.channel_index(id) else {
-            return (None, None);
+            return ActiveUpstream::default();
         };
         let active = snap.active_source[idx].load(Ordering::Relaxed);
-        let source = snap.channels[idx]
+        let Some(source) = snap.channels[idx]
             .sources
             .get(active)
-            .or_else(|| snap.channels[idx].sources.first());
-        source.map_or((None, None), |s| (s.user_agent.clone(), s.referrer.clone()))
+            .or_else(|| snap.channels[idx].sources.first())
+        else {
+            return ActiveUpstream::default();
+        };
+        if let Some((id, player)) = dlive::parse_sentinel(&source.url) {
+            let (user_agent, referrer) = self.inner.dlive.cached_headers(id, player);
+            return ActiveUpstream {
+                user_agent,
+                referrer,
+                dlive: Some((id, player)),
+            };
+        }
+        ActiveUpstream {
+            user_agent: source.user_agent.clone(),
+            referrer: source.referrer.clone(),
+            dlive: None,
+        }
     }
 
     /// Now/next for every channel of a country that has a guide match.
@@ -1864,6 +2256,19 @@ impl LiveTvService {
                 loop {
                     ticker.tick().await;
                     crate::supervise::tick("live tv reaper", svc.inner.transcode.reap_idle()).await;
+                }
+            });
+        }
+        // dlive: load the channel list at boot, then scrape the configured
+        // channels' embeds one a minute, so a zap never waits on dlive.sx.
+        if self.inner.dlive.enabled() {
+            let dlive = self.inner.dlive.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_mins(1));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticker.tick().await;
+                    crate::supervise::tick("live tv dlive warm-up", dlive.warm()).await;
                 }
             });
         }
@@ -2055,6 +2460,26 @@ fn election_start(channel: &Channel, stored: usize) -> usize {
         .iter()
         .position(|s| s.tier == SourceTier::Tuner)
         .unwrap_or(stored % channel.sources.len())
+}
+
+/// Source the transcoder reads: the active one unless it is dlive, else the
+/// first non-dlive source in election order from it, healthy ones first.
+fn transcode_source(
+    channel: &Channel,
+    health: &[Arc<SourceHealth>],
+    active: usize,
+    now_ms: u64,
+) -> Option<usize> {
+    let n = channel.sources.len();
+    let candidates: Vec<usize> = (0..n)
+        .map(|step| (active + step) % n)
+        .filter(|&si| dlive::parse_sentinel(&channel.sources[si].url).is_none())
+        .collect();
+    candidates
+        .iter()
+        .copied()
+        .find(|&si| !health[si].in_cooldown(now_ms))
+        .or_else(|| candidates.first().copied())
 }
 
 /// Mux frequency of a channel's tuner source, when it has one.

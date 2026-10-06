@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::error::{ApiError, ApiResult};
-use crate::live_tv::{LiveTvError, LiveTvService, proxy};
+use crate::live_tv::{LiveTvError, LiveTvService, ProxiedResponse, proxy};
 use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
@@ -444,7 +444,11 @@ pub(crate) async fn live_proxy(
     Query(params): Query<LiveProxyParams>,
 ) -> ApiResult<Response> {
     let svc = service(&state)?;
-    let (resp, final_url) = svc.proxy_fetch(&params.c, &params.u, &params.s).await?;
+    let ProxiedResponse {
+        resp,
+        final_url,
+        from_dlive,
+    } = svc.proxy_fetch(&params.c, &params.u, &params.s).await?;
     let status = resp.status();
     let upstream_ct = resp
         .headers()
@@ -453,14 +457,40 @@ pub(crate) async fn live_proxy(
         .map(str::to_string);
     let is_playlist = proxy::is_playlist(&final_url, upstream_ct.as_deref());
 
+    // Segments disguised as images (dlive's Player 1) are unwrapped to TS.
+    if !is_playlist
+        && status.is_success()
+        && upstream_ct
+            .as_deref()
+            .is_some_and(|ct| ct.to_ascii_lowercase().starts_with("image/"))
+    {
+        let (body, content_type) = svc
+            .wrapped_segment(&params.c, resp, upstream_ct, from_dlive)
+            .await?;
+        return Response::builder()
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::CONTENT_LENGTH, body.len())
+            .body(Body::from(body))
+            .map_err(ApiError::from);
+    }
+
     // Forward the upstream status verbatim (a live segment that has rolled
     // off the window legitimately 404s — the player retries / gap-skips it).
     // Only genuine connection failures became a 502 back in `proxy_fetch`.
     // For segments, feed the outcome into source health so a persistently
-    // broken origin gets demoted and the next feed elected.
+    // broken origin gets demoted and the next feed elected. A dlive segment
+    // answered with a web page is a failure too (no player can use it).
     if !is_playlist {
-        svc.note_segment_result(&params.c, status.is_success())
+        let html = from_dlive
+            && upstream_ct
+                .as_deref()
+                .is_some_and(|ct| ct.to_ascii_lowercase().starts_with("text/html"));
+        svc.note_segment_result(&params.c, status.is_success() && !html)
             .await;
+        if html {
+            return Err(ApiError::Upstream("dlive segment is a web page".into()));
+        }
     }
     if !status.is_success() {
         return Response::builder()

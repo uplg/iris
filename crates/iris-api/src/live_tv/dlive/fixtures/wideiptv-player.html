@@ -1,0 +1,145 @@
+<!DOCTYPE html><html><body><video id="videoPlayer"></video>
+<script>
+        // Configuration
+        const config = {
+            streamUrl: "https:\/\/ds167.bluetier.top\/France2\/index.m3u8?token=RnJhbmNlMnxub19jaGVja19pcHwxNzkxMzA2NjE4.c5352444506b29226dd2ffb94bf77a81a894423e27550cb4cd0d04e3097bcd3b",
+            channelSlug: "France2",
+            tokenExpiresIn: 300, // seconds
+            currentToken: "RnJhbmNlMnxub19jaGVja19pcHwxNzkxMzA2NjE4.c5352444506b29226dd2ffb94bf77a81a894423e27550cb4cd0d04e3097bcd3b"        };
+        
+        let hls = null;
+        let tokenRefreshTimer = null;
+        let expiryCountdown = null;
+        
+        // Initialize player
+        function initPlayer() {
+            const video = document.getElementById('videoPlayer');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    enableWorker: true,
+                    lowLatencyMode: true,
+                    backBufferLength: 90,
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 60,
+                    maxBufferSize: 60 * 1000 * 1000,
+                    maxBufferHole: 0.5,
+                    highBufferWatchdogPeriod: 2,
+                    nudgeOffset: 0.1,
+                    nudgeMaxRetry: 3,
+                    maxFragLookUpTolerance: 0.25,
+                    liveSyncDurationCount: 3,
+                    liveMaxLatencyDurationCount: 10,
+                    liveDurationInfinity: true,
+                    enableSoftwareAES: true
+                });
+                
+                hls.loadSource(config.streamUrl);
+                hls.attachMedia(video);
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.play().catch(e => console.log('Auto-play prevented:', e));
+                    loadingOverlay.style.display = 'none';
+                });
+                
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.error('Network error');
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.error('Media error');
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                console.error('Fatal error');
+                                break;
+                        }
+                    }
+                });
+                
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS support (Safari)
+                video.src = config.streamUrl;
+                video.addEventListener('loadedmetadata', function() {
+                    loadingOverlay.style.display = 'none';
+                });
+            } else {
+                alert('Your browser does not support HLS playback');
+            }
+        }
+        
+        // Token refresh system
+        function scheduleTokenRefresh() {
+            // Refresh token 30 seconds before expiry
+            const refreshTime = (config.tokenExpiresIn - 30) * 1000;
+            
+            tokenRefreshTimer = setTimeout(async () => {
+                await refreshToken();
+            }, refreshTime);
+        }
+        
+        async function refreshToken() {
+            try {
+                const response = await fetch(`https://wideiptv.top/api/refresh_token.php`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        channel: config.channelSlug,
+                        current_token: config.currentToken
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Update stream URL with new token
+                    const newStreamUrl = config.streamUrl.replace(/token=[^&]+/, 'token=' + data.token);
+                    config.streamUrl = newStreamUrl;
+                    config.currentToken = data.token;
+                    config.tokenExpiresIn = data.expires_in;
+                    
+                    // Reload stream with new token
+                    if (hls) {
+                        hls.loadSource(newStreamUrl);
+                    }
+                    
+                    console.log('Token refreshed successfully');
+                    
+                    // Schedule next refresh
+                    scheduleTokenRefresh();
+                } else {
+                    console.error('Token refresh failed');
+                }
+            } catch (error) {
+                console.error('Token refresh error:', error);
+            }
+        }
+        
+
+        
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            initPlayer();
+            scheduleTokenRefresh();
+        });
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (hls) {
+                hls.destroy();
+            }
+            if (tokenRefreshTimer) {
+                clearTimeout(tokenRefreshTimer);
+            }
+            if (expiryCountdown) {
+                clearInterval(expiryCountdown);
+            }
+        });
+    </script>
+</body></html>
