@@ -10,10 +10,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DismissGoneRequest
@@ -24,12 +26,20 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.formatSize
-import studio.kahn.iris.tv.ui.formatSpeed
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.formatSpeed
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.timeLeft
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.state.LiveRead
+import studio.kahn.iris.tv.ui.state.FAST_MS
+import studio.kahn.iris.tv.ui.state.SLOW_MS
 
 /** The library's two views (web: Titles / Downloads and seeding). */
 enum class LibraryView(val label: String) {
@@ -130,7 +140,7 @@ private fun List<TorrentView>.anyMoving() = any(::moving)
  * Reads poll only while the screen is started ([pollWhileStarted]), quick while a download
  * moves; every action waits for the server and reads again before showing a change.
  */
-class LibraryViewModel(private val container: AppContainer, initialView: LibraryView) : ViewModel() {
+class LibraryViewModel(private val container: AppContainer, initialView: LibraryView?) : ViewModel() {
     private val torrents = LiveRead({ t: Torrents? -> if (t?.items?.anyMoving() == true) FAST_MS else SLOW_MS }) {
         val v = (container.api().library("torrents") as LibraryResponse.TorrentsWrapper).value
         Torrents(v.items, v.totalUploadedBytes, v.totalDownloadedBytes)
@@ -145,8 +155,19 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     private val watchlist = LiveRead({ _: List<WatchlistItem>? -> 5 * 60_000L }) { container.api().watchlist() }
 
     private val controls = MutableStateFlow(
-        Controls(initialView, TitleFilters(), "", emptySet(), null),
+        Controls(initialView ?: LibraryView.Titles, TitleFilters(), "", emptySet(), null),
     )
+    private var chosen = false
+
+    init {
+        if (initialView == null) {
+            viewModelScope.launch {
+                val kept = container.prefsStore.libraryView.first()
+                val view = LibraryView.entries.firstOrNull { it.name == kept } ?: LibraryView.Titles
+                if (!chosen) controls.update { it.copy(view = view) }
+            }
+        }
+    }
 
     /** The title opened last: coming back lands on it. */
     var lastOpened: String? = null
@@ -184,7 +205,12 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
         listOf(torrents, collections, summary, watching, watchlist).forEach { it.poke() }
     }
 
-    fun choose(view: LibraryView) = controls.update { it.copy(view = view, notice = null) }
+    /** The view chosen, kept on this device for the next visit. */
+    fun choose(view: LibraryView) {
+        chosen = true
+        controls.update { it.copy(view = view, notice = null) }
+        viewModelScope.launch { container.prefsStore.setLibraryView(view.name) }
+    }
 
     fun setFilters(filters: TitleFilters) = controls.update { it.copy(filters = filters) }
 
@@ -255,11 +281,11 @@ fun titlesUi(
         val id = c.id.toString()
         val base = titleStatus(c, activity[id])
         val resume = resumeBy[id]
-        val plain = base.tone == Tone.Ok
+        val plain = base.tone == StatusTone.Ok
         val progress = resume?.durationSeconds?.takeIf { it > 0 && plain }?.let { (resume.positionSeconds / it).toFloat().coerceIn(0f, 1f) }
         val status = when {
             plain && resume != null -> inProgress(c, resume)
-            plain && (fresh[id] ?: 0) > 0 -> Status(Tone.Ok, plural(fresh[id] ?: 0, "new episode"))
+            plain && (fresh[id] ?: 0) > 0 -> Status(StatusTone.Ok, plural(fresh[id] ?: 0, "new episode"))
             else -> base
         }
         TitleCard(
@@ -281,9 +307,9 @@ private fun inProgress(c: CollectionListItem, w: ContinueWatchingItem): Status {
     val code = episodeCode(w.season, w.episode)
     val d = w.durationSeconds
     return when {
-        c.kind == MediaKind.tv && code != null -> Status(Tone.Info, "In progress · $code")
-        d != null && d > w.positionSeconds -> Status(Tone.Info, timeLeft(d - w.positionSeconds))
-        else -> Status(Tone.Info, "In progress")
+        c.kind == MediaKind.tv && code != null -> Status(StatusTone.Info, "In progress · $code")
+        d != null && d > w.positionSeconds -> Status(StatusTone.Info, timeLeft(d - w.positionSeconds))
+        else -> Status(StatusTone.Info, "In progress")
     }
 }
 

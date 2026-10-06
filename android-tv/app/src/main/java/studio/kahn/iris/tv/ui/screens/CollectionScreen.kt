@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
@@ -51,6 +52,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.Artwork
@@ -62,8 +64,9 @@ import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.FramedBlock
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LanguageChip
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.Meter
@@ -74,28 +77,22 @@ import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StaleNotice
-import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
+import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.screens.library.CollectionPage
 import studio.kahn.iris.tv.ui.screens.library.CollectionUiState
 import studio.kahn.iris.tv.ui.screens.library.CollectionViewModel
 import studio.kahn.iris.tv.ui.screens.library.EpisodeAction
 import studio.kahn.iris.tv.ui.screens.library.EpisodeRowUi
 import studio.kahn.iris.tv.ui.screens.library.FileUi
-import studio.kahn.iris.tv.ui.screens.library.FocusKeys
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.GoneUi
 import studio.kahn.iris.tv.ui.screens.library.LanguagesUi
-import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.PackUi
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
-import studio.kahn.iris.tv.ui.screens.library.Tone
-import studio.kahn.iris.tv.ui.screens.library.ToneLine
 import studio.kahn.iris.tv.ui.screens.library.audioWords
 import studio.kahn.iris.tv.ui.screens.library.busyKey
-import studio.kahn.iris.tv.ui.screens.library.languageName
-import studio.kahn.iris.tv.ui.screens.library.neighbourOf
-import studio.kahn.iris.tv.ui.screens.library.plural
 import studio.kahn.iris.tv.ui.screens.library.subtitleWords
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
@@ -105,6 +102,10 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /** Everything a title's page hands back. */
 @Immutable
@@ -190,13 +191,22 @@ fun CollectionContent(
     actions: CollectionActions,
     lastRow: String? = null,
 ) {
-    val layout = IrisLayout.current
     val page = state.page
-    Box(
-        Modifier
+    val hasEpisodes = page.valueOrNull?.episodes?.isNotEmpty() == true
+    FooterLayout(
+        footer = {
+            ScreenFooter(
+                buildList {
+                    add(KeyHint(Keys.OK, if (hasEpisodes) "Play or grab" else "Choose"))
+                    if (hasEpisodes) add(KeyHint(Keys.HOLD_OK, "Everything for an episode"))
+                    add(KeyHint(Keys.BACK, "To the top, then the library"))
+                },
+            ) { NoticeLine(state.notice) }
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         when (page) {
             Loadable.Loading -> LoadingState(label = "Loading the title…")
             is Loadable.Failed -> ErrorState(
@@ -205,27 +215,9 @@ fun CollectionContent(
                 title = if (page.error.status == 404) "This title is no longer in the library" else "Couldn't load this title",
             )
             is Loadable.Ready, is Loadable.Stale -> {
-                val p = page.valueOrNull ?: return@Box
-                TitlePage(p, state, actions, lastRow, page.errorOrNull)
+                val p = page.valueOrNull ?: return@FooterLayout
+                TitlePage(p, state, actions, lastRow, page.errorOrNull, footer)
             }
-        }
-        Column(
-            Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .background(IrisColor.ground)
-                .padding(horizontal = layout.safeHorizontal, vertical = IrisSpace.s4),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            NoticeLine(state.notice)
-            val hasEpisodes = page.valueOrNull?.episodes?.isNotEmpty() == true
-            KeyHints(
-                buildList {
-                    add(KeyHint(Keys.OK, if (hasEpisodes) "Play or grab" else "Choose"))
-                    if (hasEpisodes) add(KeyHint(Keys.HOLD_OK, "Everything for an episode"))
-                    add(KeyHint(Keys.BACK, "To the top, then the library"))
-                },
-            )
         }
     }
 }
@@ -242,18 +234,13 @@ private fun TitlePage(
     actions: CollectionActions,
     lastRow: String?,
     stale: studio.kahn.iris.tv.ui.state.UiError?,
+    footer: Dp,
 ) {
     val layout = IrisLayout.current
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val playFocus = remember { FocusRequester() }
-    val keys = remember { FocusKeys() }
-    var refocus by remember { mutableStateOf<List<String>?>(null) }
-    LaunchedEffect(refocus) {
-        val wanted = refocus ?: return@LaunchedEffect
-        refocus = null
-        if (!keys.focus(*wanted.toTypedArray())) runCatching { playFocus.requestFocus() }
-    }
+    val keys = rememberFocusReturn(fallback = playFocus)
     var atPlay by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
@@ -267,7 +254,7 @@ private fun TitlePage(
             val item = episodesStart + index
             if (list.layoutInfo.visibleItemsInfo.none { it.index == item }) list.scrollToItem(item)
             snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.index == item } }.first { it }
-            keys.focus("ep:$focusKey")
+            keys.focus(listOf("ep:$focusKey"))
         } else {
             snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
             runCatching { playFocus.requestFocus() }
@@ -296,8 +283,9 @@ private fun TitlePage(
             state = list,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(top = IrisSpace.s1, bottom = 80.dp, start = IrisSpace.s2, end = IrisSpace.s2),
+                .fillMaxSize()
+                .padding(bottom = footer),
+            contentPadding = PaddingValues(top = IrisSpace.s1, bottom = IrisSpace.s4, start = IrisSpace.s2, end = IrisSpace.s2),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
         ) {
             item(key = "head") {
@@ -307,7 +295,7 @@ private fun TitlePage(
                     actions = actions,
                     stale = stale,
                     onLanguages = { sheet = Sheet.Languages },
-                    languagesFocus = keys.of(LANGUAGES_KEY),
+                    languagesFocus = keys.requester(LANGUAGES_KEY),
                     playFocus = playFocus,
                     onPlayFocused = { atPlay = it },
                 )
@@ -324,7 +312,7 @@ private fun TitlePage(
                             if (main != null) actions.onEpisode(row, main) else sheet = Sheet.Episode(row)
                         },
                         onLongClick = { sheet = Sheet.Episode(row) },
-                        modifier = Modifier.focusRequester(keys.of("ep:${row.key}")),
+                        modifier = Modifier.focusRequester(keys.requester("ep:${row.key}")),
                     )
                 }
                 p.emptyEpisodes?.let { words -> item(key = "no-episodes") { Hint(words) } }
@@ -337,7 +325,7 @@ private fun TitlePage(
                     row,
                     actions.onRelease.copy(onDelete = { deleting = it }),
                     state.busy,
-                    Modifier.focusRequester(keys.of("disk:${row.infohash}")),
+                    Modifier.focusRequester(keys.requester("disk:${row.infohash}")),
                     showTitle = false,
                 )
             }
@@ -373,7 +361,7 @@ private fun TitlePage(
             onAction = { row, action -> actions.onEpisode(row, action) },
             onDismiss = {
                 sheet = null
-                refocus = listOf("ep:${s.row.key}")
+                keys.returnTo("ep:${s.row.key}")
             },
         )
         Sheet.Languages -> state.languages?.valueOrNull?.let { langs ->
@@ -384,12 +372,12 @@ private fun TitlePage(
                 onSave = { a, s2 ->
                     actions.onSaveLanguages(a, s2) {
                         sheet = null
-                        refocus = listOf(LANGUAGES_KEY)
+                        keys.returnTo(LANGUAGES_KEY)
                     }
                 },
                 onDismiss = {
                     sheet = null
-                    refocus = listOf(LANGUAGES_KEY)
+                    keys.returnTo(LANGUAGES_KEY)
                 },
             )
         }
@@ -403,11 +391,11 @@ private fun TitlePage(
             onConfirm = {
                 deleting = null
                 actions.onRelease.onDelete(row)
-                refocus = listOfNotNull(neighbourOf(p.onDisk.map { it.infohash }, row.infohash)?.let { "disk:$it" })
+                keys.returnTo("disk:${row.infohash}", p.onDisk.map { "disk:${it.infohash}" }, leaving = true)
             },
             onCancel = {
                 deleting = null
-                refocus = listOf("disk:${row.infohash}")
+                keys.returnTo("disk:${row.infohash}")
             },
         )
     }
@@ -568,7 +556,7 @@ private fun EpisodeCard(
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
             Text(row.heading, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            ToneLine(row.state.tone, if (busy) "Asking the server…" else row.state.text)
+            StatusLine(if (busy) "Asking the server…" else row.state.text, tone = row.state.tone)
             row.state.progress?.let { Meter(it, Modifier.widthIn(max = 240.dp)) }
             row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
@@ -606,7 +594,7 @@ private fun GoneRow(g: GoneUi, busy: Set<String>, actions: CollectionActions) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-            g.watchLine?.let { ToneLine(if (g.watched) Tone.Ok else Tone.Info, it) }
+            g.watchLine?.let { StatusLine(it, tone = if (g.watched) StatusTone.Ok else StatusTone.Info) }
             Text(g.name, style = IrisType.mono, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(g.facts, style = IrisType.meta, color = IrisColor.inkMuted)
         }
@@ -653,44 +641,21 @@ internal fun EpisodeSheet(
     onAction: (EpisodeRowUi, EpisodeAction) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val first = remember { FocusRequester() }
-    var waiting by remember { mutableStateOf<String?>(null) }
-    var seen by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    LaunchedEffect(busy, waiting) {
-        val key = waiting ?: return@LaunchedEffect
-        if (key in busy) seen = true else if (seen) onDismiss()
-    }
-    SidePanel(title = row.title, onDismiss = onDismiss, footer = "Back closes this panel") {
-        Column(Modifier.padding(horizontal = IrisSpace.s4), verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-            ToneLine(row.state.tone, row.state.text)
-            row.aired?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
-            row.overview?.let { Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 6, overflow = TextOverflow.Ellipsis) }
-            row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
-            if (row.actions.isEmpty()) Hint("Nothing to do yet: no release of this episode is known.")
-            Spacer(Modifier.height(IrisSpace.s2))
-            row.actions.forEachIndexed { i, action ->
-                val key = action.busyKey()
-                ActionButton(
-                    action.label,
-                    {
-                        if (action is EpisodeAction.Play) {
-                            onDismiss()
-                        } else {
-                            waiting = key
-                            seen = false
-                        }
-                        onAction(row, action)
-                    },
-                    style = if (i == 0) ActionStyle.Primary else ActionStyle.Secondary,
-                    busy = key in busy,
-                    busyText = "Asking the server…",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(if (i == 0) Modifier.focusRequester(first) else Modifier),
-                )
-            }
-        }
+    ActionSheet(
+        title = row.title,
+        actions = row.actions,
+        label = { it.label },
+        busyLabel = { "Asking the server…" },
+        waits = { it !is EpisodeAction.Play },
+        inFlight = { it.busyKey() in busy },
+        onAction = { onAction(row, it) },
+        onDismiss = onDismiss,
+    ) {
+        StatusLine(row.state.text, tone = row.state.tone)
+        row.aired?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+        row.overview?.let { Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 6, overflow = TextOverflow.Ellipsis) }
+        row.details.forEach { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+        if (row.actions.isEmpty()) Hint("Nothing to do yet: no release of this episode is known.")
     }
 }
 
@@ -714,7 +679,7 @@ internal fun LanguagesPanel(
             modifier = Modifier.padding(horizontal = IrisSpace.s4),
         )
         PanelLabel("Audio")
-        ChosenPanelOptions(
+        PanelOptions(
             options = listOf("") + langs.audioOptions,
             selected = audio,
             onSelect = { audio = it },

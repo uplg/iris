@@ -46,87 +46,15 @@ import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 
-/** A [Tone] drawn as a [StatusLine]: words, an icon, and the tone's color. */
-@Composable
-fun ToneLine(tone: Tone, text: String, modifier: Modifier = Modifier, style: TextStyle = IrisType.meta) {
-    when (tone) {
-        Tone.Ok -> StatusLine(text, modifier, StatusTone.Ok, style)
-        Tone.Busy -> StatusLine(text, modifier, StatusTone.Ok, style, icon = Icons.Rounded.Downloading)
-        Tone.Available -> StatusLine(text, modifier, StatusTone.Ok, style, icon = Icons.Rounded.Download)
-        Tone.Warn -> StatusLine(text, modifier, StatusTone.Warn, style)
-        Tone.Info -> StatusLine(text, modifier, StatusTone.Muted, style, icon = Icons.Rounded.Info)
-    }
-}
-
 /**
  * The [StatusTone] of a poster's status line. A card is narrow: the plain states go without an
  * icon so their words fit, the words alone carry them.
  */
-fun Tone.cardTone(): StatusTone = when (this) {
-    Tone.Available -> StatusTone.Ok
-    Tone.Warn -> StatusTone.Warn
-    Tone.Ok, Tone.Busy, Tone.Info -> StatusTone.Muted
-}
-
-/**
- * A focus requester per item key, so focus can go back to an item (or its neighbour) once a
- * panel or a dialog closes. Asking for a key whose item is not on screen does nothing.
- */
-@Stable
-class FocusKeys {
-    private val map = HashMap<Any, FocusRequester>()
-
-    fun of(key: Any): FocusRequester = map.getOrPut(key) { FocusRequester() }
-
-    /** Focuses the first of [keys] whose item is composed; false when none is. */
-    fun focus(vararg keys: Any?): Boolean = keys.filterNotNull().any { k ->
-        map[k]?.let { r -> runCatching { r.requestFocus(); true }.getOrDefault(false) } == true
-    }
-}
-
-/**
- * [studio.kahn.iris.tv.ui.components.PanelOptions] whose chosen option carries [selectedFocus],
- * so a panel opens on what is chosen (the shared one has no way to reach an option).
- */
-@Composable
-fun <T> ChosenPanelOptions(
-    options: List<T>,
-    selected: T?,
-    onSelect: (T) -> Unit,
-    label: (T) -> String,
-    selectedFocus: FocusRequester,
-) {
-    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-        options.forEach { option ->
-            PanelOption(
-                label(option),
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                modifier = if (option == selected) Modifier.focusRequester(selectedFocus) else Modifier,
-            )
-        }
-    }
-}
-
-/** The item after [key] in [keys], else the one before: where focus goes once [key] leaves. */
-fun <T> neighbourOf(keys: List<T>, key: T): T? {
-    val i = keys.indexOf(key)
-    return if (i < 0) null else keys.getOrNull(i + 1) ?: keys.getOrNull(i - 1)
-}
-
-/** What an action ended with, said once on the screen it happened on. */
-@Immutable
-data class Notice(val text: String, val failed: Boolean)
-
-/** The notice line: the server's answer to the last action, announced politely. */
-@Composable
-fun NoticeLine(notice: Notice?, modifier: Modifier = Modifier) {
-    if (notice == null) return
-    StatusLine(
-        notice.text,
-        modifier.semantics { liveRegion = LiveRegionMode.Polite },
-        tone = if (notice.failed) StatusTone.Down else StatusTone.Ok,
-    )
+fun StatusTone.cardTone(): StatusTone = when (this) {
+    StatusTone.Available -> StatusTone.Ok
+    StatusTone.Warn -> StatusTone.Warn
+    StatusTone.Down -> StatusTone.Down
+    StatusTone.Ok, StatusTone.Busy, StatusTone.Info, StatusTone.Muted -> StatusTone.Muted
 }
 
 /** What a release row can do; a null callback hides the action. */
@@ -182,7 +110,7 @@ fun ReleaseItem(
                     row.progressWords?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1) }
                 }
             }
-            ToneLine(row.status.tone, row.status.text)
+            StatusLine(row.status.text, tone = row.status.tone)
             Text(row.facts, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (!wide) ReleaseButtons(row, actions, busy, Modifier.padding(top = IrisSpace.s1), end = false)
         }

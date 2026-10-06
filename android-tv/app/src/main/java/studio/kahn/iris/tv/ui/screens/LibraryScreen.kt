@@ -44,6 +44,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
@@ -53,6 +54,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
@@ -66,17 +68,15 @@ import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.components.TextInput
-import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
 import studio.kahn.iris.tv.ui.screens.library.DownloadsUi
-import studio.kahn.iris.tv.ui.screens.library.FocusKeys
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
 import studio.kahn.iris.tv.ui.screens.library.LibraryView
 import studio.kahn.iris.tv.ui.screens.library.LibraryViewModel
-import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
-import studio.kahn.iris.tv.ui.screens.library.neighbourOf
 import studio.kahn.iris.tv.ui.screens.library.ShowFilter
 import studio.kahn.iris.tv.ui.screens.library.Sort
 import studio.kahn.iris.tv.ui.screens.library.TitleCard
@@ -92,6 +92,8 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.components.NoticeLine
+import studio.kahn.iris.tv.ui.components.PanelOptions
 
 /** Everything the library screen hands back to its ViewModel and to navigation. */
 @Immutable
@@ -109,8 +111,8 @@ data class LibraryActions(
  * The library (TVLibrary board, web `/library`): Titles (a poster grid with type and state
  * filters, a find field and a sort) or Downloads and seeding (every release by what it is
  * doing, with play, pause or resume and delete). In the Library section the shell draws the
- * header above it; the `Torrents` route opens it alone ([initialView] Downloads), with its own
- * top margin.
+ * header above it and opens it on the view last chosen on this device ([initialView] null);
+ * the `Torrents` route opens it alone ([initialView] Downloads), with its own top margin.
  */
 @Composable
 fun LibraryScreen(
@@ -118,7 +120,7 @@ fun LibraryScreen(
     onOpenCollection: (collectionId: String) -> Unit,
     onOpenTorrent: (infohash: String) -> Unit,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
-    initialView: LibraryView = LibraryView.Titles,
+    initialView: LibraryView? = null,
 ) {
     val vm = irisViewModel(container) { c, _ -> LibraryViewModel(c, initialView) }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -169,18 +171,12 @@ fun LibraryContent(
     val grid = rememberLazyGridState()
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val keys = remember { FocusKeys() }
-    // Where focus goes back once a dialog or a panel closes: the first of these keys on screen.
-    var refocus by remember { mutableStateOf<List<String>?>(null) }
-    LaunchedEffect(refocus) {
-        val wanted = refocus ?: return@LaunchedEffect
-        refocus = null
-        if (!keys.focus(*wanted.toTypedArray())) runCatching { top.requestFocus() }
-    }
+    val keys = rememberFocusReturn(fallback = top)
 
-    // The Titles view places its own focus (the title opened last); Downloads starts at the top.
-    LaunchedEffect(Unit) {
-        if (state.view != LibraryView.Downloads) return@LaunchedEffect
+    // The Titles view places its own focus (the title opened last); Downloads starts at the top,
+    // also when it is the view kept on this device (it arrives after the first frame).
+    LaunchedEffect(state.view) {
+        if (state.view != LibraryView.Downloads || contentFocused) return@LaunchedEffect
         snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
         runCatching { top.requestFocus() }
     }
@@ -197,12 +193,13 @@ fun LibraryContent(
             .fillMaxSize()
             .background(IrisColor.ground),
     ) {
-        Column(
-            Modifier
+        FooterLayout(
+            footer = { LibraryHints(state, focusedIndex) },
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(top = if (standalone) layout.safeVertical else 0.dp)
                 .onFocusChanged { contentFocused = it.hasFocus },
-        ) {
+        ) { footer ->
             val heading: @Composable () -> Unit = {
                 PageHeading(
                     state = state,
@@ -217,6 +214,7 @@ fun LibraryContent(
                     state = state,
                     grid = grid,
                     heading = heading,
+                    footer = footer,
                     lastOpened = lastOpened,
                     focusedIndex = focusedIndex,
                     top = top,
@@ -229,6 +227,7 @@ fun LibraryContent(
                 LibraryView.Downloads -> DownloadsPane(
                     state = state,
                     list = list,
+                    footer = footer,
                     keys = keys,
                     heading = heading,
                     actions = actions.copy(onRelease = actions.onRelease.copy(onDelete = { deleting = it })),
@@ -236,7 +235,6 @@ fun LibraryContent(
                 )
             }
         }
-        LibraryHints(state, focusedIndex, Modifier.align(Alignment.BottomStart))
 
         when (panel) {
             Panel.None -> Unit
@@ -246,7 +244,7 @@ fun LibraryContent(
                 onFilters = actions.onFilters,
                 onDismiss = {
                     panel = Panel.None
-                    refocus = listOf(FIND_KEY)
+                    keys.returnTo(FIND_KEY)
                 },
             )
             Panel.FindRelease -> FindReleasePanel(
@@ -254,7 +252,7 @@ fun LibraryContent(
                 onQuery = actions.onReleaseQuery,
                 onDismiss = {
                     panel = Panel.None
-                    refocus = listOf(FIND_KEY)
+                    keys.returnTo(FIND_KEY)
                 },
             )
         }
@@ -268,11 +266,11 @@ fun LibraryContent(
                     hiding = null
                     actions.onHide(card)
                     val ids = state.titles.valueOrNull?.cards?.map { it.id }.orEmpty()
-                    refocus = listOfNotNull(neighbourOf(ids, card.id), card.id)
+                    keys.returnTo(card.id, ids, leaving = true)
                 },
                 onCancel = {
                     hiding = null
-                    refocus = listOf(card.id)
+                    keys.returnTo(card.id)
                 },
             )
         }
@@ -286,11 +284,11 @@ fun LibraryContent(
                     deleting = null
                     actions.onRelease.onDelete(row)
                     val ids = state.downloads.valueOrNull?.groups?.flatMap { g -> g.rows.map { it.infohash } }.orEmpty()
-                    refocus = listOfNotNull(neighbourOf(ids, row.infohash), row.infohash)
+                    keys.returnTo(row.infohash, ids, leaving = true)
                 },
                 onCancel = {
                     deleting = null
-                    refocus = listOf(row.infohash)
+                    keys.returnTo(row.infohash)
                 },
             )
         }
@@ -327,10 +325,11 @@ private fun TitlesPane(
     state: LibraryUiState,
     grid: LazyGridState,
     heading: @Composable () -> Unit,
+    footer: Dp,
     lastOpened: String?,
     focusedIndex: MutableIntState,
     top: FocusRequester,
-    keys: FocusKeys,
+    keys: FocusReturn,
     actions: LibraryActions,
     onFind: () -> Unit,
     onSort: () -> Unit,
@@ -344,7 +343,7 @@ private fun TitlesPane(
             Modifier
                 .fillMaxSize()
                 .padding(horizontal = layout.safeHorizontal)
-                .padding(top = IrisSpace.s1, bottom = FOOTER),
+                .padding(top = IrisSpace.s1, bottom = footer),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s6),
         ) {
             heading()
@@ -371,18 +370,20 @@ private fun TitlesPane(
         val index = target + HEADER_ITEMS
         if (grid.layoutInfo.visibleItemsInfo.none { it.index == index }) grid.scrollToItem(index)
         snapshotFlow { grid.layoutInfo.visibleItemsInfo.any { it.index == index } }.first { it }
-        keys.focus(ui.cards[target].id)
+        keys.focus(listOf(ui.cards[target].id))
     }
     PosterGrid(
         items = ui.cards,
         key = { it.id },
         state = grid,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = footer),
         contentPadding = PaddingValues(
             start = layout.safeHorizontal,
             end = layout.safeHorizontal,
             top = IrisSpace.s1,
-            bottom = FOOTER + IrisSpace.s6,
+            bottom = IrisSpace.s6,
         ),
         header = {
             item(key = "heading", span = { GridItemSpan(maxLineSpan) }) { heading() }
@@ -403,8 +404,9 @@ private fun TitlesPane(
             meta = card.meta,
             status = card.status.text,
             statusTone = card.status.tone.cardTone(),
+            dimmed = card.ghost,
             modifier = Modifier
-                .focusRequester(keys.of(card.id))
+                .focusRequester(keys.requester(card.id))
                 .onFocusChanged { if (it.hasFocus) focusedIndex.intValue = index },
         )
     }
@@ -412,7 +414,6 @@ private fun TitlesPane(
 
 private const val HEADER_ITEMS = 2
 private const val FIND_KEY = "find"
-private val FOOTER = 46.dp
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -420,7 +421,7 @@ private fun Filters(
     state: LibraryUiState,
     ui: TitlesUi,
     actions: LibraryActions,
-    keys: FocusKeys,
+    keys: FocusReturn,
     onFind: () -> Unit,
     onSort: () -> Unit,
 ) {
@@ -470,7 +471,7 @@ private fun Filters(
                 text = if (f.query.isBlank()) "Find a title" else "Finding “${f.query.trim()}”",
                 selected = f.query.isNotBlank(),
                 onClick = onFind,
-                modifier = Modifier.focusRequester(keys.of(FIND_KEY)),
+                modifier = Modifier.focusRequester(keys.requester(FIND_KEY)),
             )
             Pill(text = f.sort.words, selected = false, onClick = onSort)
         }
@@ -489,8 +490,9 @@ private fun Filters(
 private fun DownloadsPane(
     state: LibraryUiState,
     list: LazyListState,
-    keys: FocusKeys,
+    keys: FocusReturn,
     heading: @Composable () -> Unit,
+    footer: Dp,
     actions: LibraryActions,
     onFind: () -> Unit,
 ) {
@@ -499,12 +501,14 @@ private fun DownloadsPane(
     val ui: DownloadsUi? = downloads.valueOrNull
     LazyColumn(
         state = list,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = footer),
         contentPadding = PaddingValues(
             start = layout.safeHorizontal,
             end = layout.safeHorizontal,
             top = IrisSpace.s1,
-            bottom = FOOTER + IrisSpace.s6,
+            bottom = IrisSpace.s6,
         ),
     ) {
         item(key = "heading") { heading() }
@@ -529,7 +533,7 @@ private fun DownloadsPane(
                                 text = if (state.releaseQuery.isBlank()) "Find a release" else "Finding “${state.releaseQuery.trim()}”",
                                 selected = state.releaseQuery.isNotBlank(),
                                 onClick = onFind,
-                                modifier = Modifier.focusRequester(keys.of(FIND_KEY)),
+                                modifier = Modifier.focusRequester(keys.requester(FIND_KEY)),
                             )
                             Text(ui.countWords, style = IrisType.meta, color = IrisColor.inkMuted)
                             if (state.releaseQuery.isNotBlank()) Pill("Clear the search", selected = false, onClick = { actions.onReleaseQuery("") })
@@ -551,7 +555,7 @@ private fun DownloadsPane(
                             row,
                             actions.onRelease,
                             state.busy,
-                            Modifier.focusRequester(keys.of(row.infohash)),
+                            Modifier.focusRequester(keys.requester(row.infohash)),
                             actionsBeside = layout.width >= 840.dp,
                         )
                     }
@@ -609,7 +613,7 @@ internal fun FindAndSortPanel(
                 .focusRequester(first),
         )
         PanelLabel("Sort")
-        ChosenPanelOptions(
+        PanelOptions(
             options = Sort.entries,
             selected = f.sort,
             onSelect = { onFilters(f.copy(sort = it)) },

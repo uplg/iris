@@ -52,7 +52,10 @@ import studio.kahn.iris.tv.ui.components.Chip
 import studio.kahn.iris.tv.ui.components.ChipSize
 import studio.kahn.iris.tv.ui.components.ChipTone
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
+import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.FramedBlock
+import studio.kahn.iris.tv.ui.components.PageEnd
+import studio.kahn.iris.tv.ui.components.focusReturn
 import studio.kahn.iris.tv.ui.components.PosterCard
 import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.Spinner
@@ -63,6 +66,11 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.codecWord
+import studio.kahn.iris.tv.ui.format.kindWord
+import studio.kahn.iris.tv.ui.format.languageLabel
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /**
  * One release as a list row (TVSearchList, TVTitleReleases): what it is in
@@ -212,17 +220,7 @@ fun SummaryLine(words: String?, failed: List<ProviderResultMeta>, onRetry: () ->
 @Composable
 fun GrabRefusal(grab: GrabUi, onClose: () -> Unit, modifier: Modifier = Modifier) {
     val refused = grab as? GrabUi.Refused ?: return
-    val close = remember { FocusRequester() }
-    LaunchedEffect(refused) { runCatching { close.requestFocus() } }
-    FramedBlock(modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Assertive }) {
-        Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-                StatusLine("Nothing was downloaded", tone = StatusTone.Down, style = IrisType.bodyStrong)
-                Text(refused.message, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            }
-            ActionButton("Close", onClose, style = ActionStyle.Secondary, size = ActionSize.Small, modifier = Modifier.focusRequester(close))
-        }
-    }
+    NoticeLine(Notice("Nothing was downloaded", StatusTone.Down), modifier, detail = refused.message, onClose = onClose)
 }
 
 /** The asks of a grab (a huge pack, a second copy of a movie) as a confirmation. */
@@ -248,88 +246,25 @@ fun GrabAsk(grab: GrabUi, onConfirm: () -> Unit, onCancel: () -> Unit) {
     }
 }
 
-/** The end of a paged list: the next page loading, its failure with a retry, or the end said. */
+/** The end of the releases: the next page loading, its failure with a retry, or the end said. */
 @Composable
 fun MoreFooter(loadingMore: Boolean, error: UiError?, hasNext: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().heightIn(min = IrisSize.control), contentAlignment = Alignment.Center) {
-        when {
-            error != null -> Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3), verticalAlignment = Alignment.CenterVertically) {
-                StatusLine("The next page did not load: ${error.message}", tone = StatusTone.Down)
-                ActionButton("Try again", onRetry, style = ActionStyle.Secondary, size = ActionSize.Small, icon = Icons.Rounded.Refresh)
-            }
-            loadingMore || hasNext -> Row(
-                Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Spinner(Modifier.size(10.dp), color = IrisColor.inkMuted)
-                Text("Loading more releases…", style = IrisType.meta, color = IrisColor.inkMuted)
-            }
-            else -> Text("That is every release the trackers sent.", style = IrisType.meta, color = IrisColor.inkMuted)
-        }
-    }
-}
-
-/** Asks for the next page when the last items come into view: driven by scrolling, no timer. */
-@Composable
-fun LoadMoreAtEnd(state: LazyListState, enabled: Boolean, onLoadMore: () -> Unit) {
-    val load by rememberUpdatedState(onLoadMore)
-    LaunchedEffect(state, enabled) {
-        if (!enabled) return@LaunchedEffect
-        snapshotFlow {
-            val info = state.layoutInfo
-            (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - LOOKAHEAD
-        }.distinctUntilChanged().filter { it }.collect { load() }
-    }
-}
-
-@Composable
-fun LoadMoreAtEnd(state: LazyGridState, enabled: Boolean, onLoadMore: () -> Unit) {
-    val load by rememberUpdatedState(onLoadMore)
-    LaunchedEffect(state, enabled) {
-        if (!enabled) return@LaunchedEffect
-        snapshotFlow {
-            val info = state.layoutInfo
-            (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - LOOKAHEAD * 2
-        }.distinctUntilChanged().filter { it }.collect { load() }
-    }
-}
-
-private const val LOOKAHEAD = 4
-
-/**
- * A vertical list of rows with the [studio.kahn.iris.tv.ui.components.CardRow]
- * contract: stable keys, focus restored to the row focused last.
- */
-@Composable
-fun ReleaseList(
-    state: LazyListState,
-    modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(4.dp),
-    content: LazyListScope.() -> Unit,
-) {
-    LazyColumn(
-        modifier = modifier
-            .focusRestorer()
-            .focusGroup(),
-        state = state,
-        contentPadding = contentPadding,
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-        content = content,
+    PageEnd(
+        loadingMore = loadingMore,
+        error = error,
+        hasNext = hasNext,
+        onRetry = onRetry,
+        loadingText = "Loading more releases…",
+        endText = "That is every release the trackers sent.",
+        modifier = modifier,
     )
 }
-
-/** Remembers which item was focused last so coming back (from a release) lands on it again. */
-fun Modifier.rememberedFocus(key: String, restoreKey: String?, restore: FocusRequester, onFocused: (String) -> Unit): Modifier =
-    (if (key == restoreKey) focusRequester(restore) else this).onFocusChanged { if (it.isFocused) onFocused(key) }
 
 /** The rows of [releases] with their stable keys. */
 fun LazyListScope.releaseRows(
     releases: List<SearchResult>,
     grab: GrabUi,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
     onOpen: (SearchResult) -> Unit,
     onGrab: (SearchResult) -> Unit,
     withTitle: Boolean = true,
@@ -342,7 +277,7 @@ fun LazyListScope.releaseRows(
             onLongClick = { onGrab(r) },
             withTitle = withTitle,
             busy = grab is GrabUi.Busy && grab.key == key,
-            modifier = Modifier.rememberedFocus(key, restoreKey, restore, onFocused),
+            modifier = Modifier.focusReturn(remembered, key),
         )
     }
 }

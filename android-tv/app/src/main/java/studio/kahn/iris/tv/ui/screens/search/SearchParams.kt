@@ -11,6 +11,8 @@ import studio.kahn.iris.tv.data.ProviderResultMeta
 import studio.kahn.iris.tv.data.SearchResponse
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SearchViewMode
+import studio.kahn.iris.tv.ui.format.LANGUAGE_TAGS
+import studio.kahn.iris.tv.ui.format.plural
 
 /** What a search asks the trackers for, as web `search/params.ts` writes it. */
 enum class SearchKind(val label: String, val apiKind: String?) {
@@ -39,20 +41,6 @@ val SearchViewMode.label: String
         SearchViewMode.GRID -> "Grid"
         SearchViewMode.LIST -> "List"
     }
-
-/** The search language tags (`SearchResult.language_tag`), as web `LANGUAGE_TAGS` says them. */
-data class LanguageTag(val tag: String, val short: String, val long: String)
-
-val LANGUAGE_TAGS = listOf(
-    LanguageTag("fr", "French (VF)", "French audio (VF)"),
-    LanguageTag("en", "English", "English audio"),
-    LanguageTag("multi", "Several (MULTI)", "Several audio languages (MULTI)"),
-    LanguageTag("vost", "Original with subtitles (VOSTFR)", "Original audio, French subtitles (VOSTFR)"),
-    LanguageTag("vo", "Original (VO)", "Original audio (VO)"),
-)
-
-fun languageLabel(tag: String?, long: Boolean = true): String? =
-    LANGUAGE_TAGS.firstOrNull { it.tag == tag }?.let { if (long) it.long else it.short }
 
 /** One choice of the audio filter; [tag] null = any language. */
 data class AudioOption(val tag: String?, val label: String, val count: Int) {
@@ -104,7 +92,7 @@ fun failedTrackers(meta: List<ProviderResultMeta>): List<ProviderResultMeta> = m
 fun summary(matches: Int, releases: Int, meta: List<ProviderResultMeta>): String {
     val answered = meta.count { it.error == null }
     val parts = mutableListOf<String>()
-    if (matches > 0) parts += "$matches ${if (matches == 1) "match" else "matches"} in your library"
+    if (matches > 0) parts += "${plural(matches, "match", "matches")} in your library"
     val rel = plural(releases, "release")
     parts += if (answered > 0) "$rel from ${plural(answered, "tracker")}" else rel
     val failed = failedTrackers(meta).map { it.id }

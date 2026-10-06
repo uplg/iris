@@ -12,11 +12,13 @@ import studio.kahn.iris.tv.data.GenreOption
 import studio.kahn.iris.tv.data.LanguageOption
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.TopTab
+import studio.kahn.iris.tv.ui.nav.TopLevelShell
 import studio.kahn.iris.tv.ui.screens.DiscoverContent
 import studio.kahn.iris.tv.ui.screens.HomeContent
 import studio.kahn.iris.tv.ui.screens.OnboardingContent
 import studio.kahn.iris.tv.ui.screens.home.CardAction
-import studio.kahn.iris.tv.ui.screens.home.CardMenu
+import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.screens.home.CardModel
 import studio.kahn.iris.tv.ui.screens.home.DiscoverUiState
 import studio.kahn.iris.tv.ui.screens.home.HeroAction
@@ -25,12 +27,12 @@ import studio.kahn.iris.tv.ui.screens.home.HeroModel
 import studio.kahn.iris.tv.ui.screens.home.HomeUiState
 import studio.kahn.iris.tv.ui.screens.home.MoodModel
 import studio.kahn.iris.tv.ui.screens.home.MoodResultsModel
-import studio.kahn.iris.tv.ui.screens.home.Notice
 import studio.kahn.iris.tv.ui.screens.home.OnboardingUiState
 import studio.kahn.iris.tv.ui.screens.home.Picks
 import studio.kahn.iris.tv.ui.screens.home.ShelfModel
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** Home, Discover and the first-run sheet, from fake states (TV.dc.html), at every size. */
 @RunWith(RobolectricTestRunner::class)
@@ -96,7 +98,6 @@ class HomeScreenshots {
     )
 
     private val home = HomeUiState(
-        account = "Leonard",
         hero = hero,
         heroPending = false,
         rightNow = Loadable.Ready(listOf("2 downloads · 64% · 23 min left", "3 new episodes on your watchlist", "412 GB free on disk")),
@@ -115,18 +116,21 @@ class HomeScreenshots {
     )
 
     @Composable
-    private fun Home(state: HomeUiState) {
-        HomeContent(
-            state = state,
-            onSelectTab = {},
-            onAccount = {},
-            onHeroAction = {},
-            onCardAction = { _, _ -> },
-            onRetry = {},
-            onOpenDiscover = {},
-            onOpenLibrary = {},
-            onOpenSearch = {},
-        )
+    private fun Home(state: HomeUiState, over: @Composable () -> Unit = {}) {
+        TopLevelShell(TopTab.Home, "Leonard", onSelect = {}, onAccount = {}, headerOverContent = true) {
+            Box {
+                HomeContent(
+                    state = state,
+                    onHeroAction = {},
+                    onCardAction = { _, _ -> },
+                    onRetry = {},
+                    onOpenDiscover = {},
+                    onOpenLibrary = {},
+                    onOpenSearch = {},
+                )
+                over()
+            }
+        }
     }
 
     @Test
@@ -141,7 +145,6 @@ class HomeScreenshots {
     fun homeEmpty() = shots.snap("home_empty") {
         Home(
             HomeUiState(
-                account = "Leonard",
                 heroPending = false,
                 rightNow = Loadable.Failed(UiError(UiError.OFFLINE_MESSAGE, code = UiError.NETWORK)),
                 continueWatching = Loadable.Ready(emptyList()),
@@ -152,14 +155,15 @@ class HomeScreenshots {
     }
 
     @Test
-    fun cardMenu() = shots.snap("home_card_menu") {
-        Box {
-            Home(home)
-            CardMenu(
-                eyebrow = "Continue watching",
+    fun cardMenu() = shots.snapEverySize("home_card_menu") {
+        Home(home) {
+            ActionSheet(
                 title = "Severance",
+                eyebrow = "Continue watching",
                 actions = listOf(CardAction.Play, CardAction.StartOver, CardAction.OpenSeries, CardAction.MarkWatched, CardAction.RemoveFromContinue),
-                busy = CardAction.MarkWatched,
+                label = { it.label },
+                busyLabel = { it.busyLabel },
+                inFlight = { it == CardAction.MarkWatched },
                 onAction = {},
                 onDismiss = {},
             )
@@ -168,8 +172,7 @@ class HomeScreenshots {
 
     @Test
     fun onboarding() = shots.snapEverySize("onboarding") {
-        Box {
-            Home(home)
+        Home(home) {
             OnboardingContent(
                 state = OnboardingUiState(
                     picks = Picks(languages = listOf("fr"), genres = listOf(18), includeAnime = true),
@@ -194,7 +197,6 @@ class HomeScreenshots {
         .mapIndexed { i, label -> MoodModel("m$i", label, null, "Now: Title ${i + 1}") }
 
     private val discover = DiscoverUiState(
-        account = "Leonard",
         kind = MediaKind.movie,
         board = Loadable.Ready(moods),
         forYou = Loadable.Ready(home.forYou),
@@ -202,16 +204,16 @@ class HomeScreenshots {
 
     @Composable
     private fun Discover(state: DiscoverUiState) {
-        DiscoverContent(
-            state = state,
-            onSelectTab = {},
-            onAccount = {},
-            onKind = {},
-            onOpenMood = {},
-            onCloseMood = {},
-            onCardAction = { _, _ -> },
-            onRetry = {},
-        )
+        TopLevelShell(TopTab.Discover, "Leonard", onSelect = {}, onAccount = {}) {
+            DiscoverContent(
+                state = state,
+                onKind = {},
+                onOpenMood = {},
+                onCloseMood = {},
+                onCardAction = { _, _ -> },
+                onRetry = {},
+            )
+        }
     }
 
     @Test

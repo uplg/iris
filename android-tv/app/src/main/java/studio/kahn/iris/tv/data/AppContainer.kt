@@ -8,6 +8,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -53,6 +54,10 @@ interface AppContainer {
     val clientOutdated: StateFlow<Boolean>
     fun apiFor(baseUrl: String): IrisApi
 }
+
+/** The API of the paired server; fails (a read error said in words) when the TV is signed out. */
+suspend fun AppContainer.api(): IrisApi =
+    apiFor(sessionStore.serverUrl.first() ?: error("This TV is signed out. Pair it again from Settings."))
 
 class DefaultAppContainer(context: Context) : AppContainer {
     override val sessionStore: SessionStore = SessionStore(context.applicationContext)

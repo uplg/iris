@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,7 +29,9 @@ import studio.kahn.iris.tv.data.UserResponse
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.state.load
+import studio.kahn.iris.tv.ui.state.pollUntil
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** The parts of Settings, in rail order. */
 enum class SettingsSection(val label: String) {
@@ -78,6 +79,10 @@ sealed interface SettingsDialog {
 /** What the last action did, said in its section. */
 @Immutable
 data class Outcome(val section: SettingsSection, val text: String, val failed: Boolean = false)
+
+/** The outcome said in [section], when it is that section's. */
+fun Outcome?.notice(section: SettingsSection): Notice? =
+    this?.takeIf { it.section == section }?.let { Notice(it.text, failed = it.failed) }
 
 /** Which field of the open dialog an error is about. */
 enum class DialogField { First, Second }
@@ -321,16 +326,15 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         waiting?.cancel()
         mutable.update { it.copy(waitingForDevice = true) }
         waiting = viewModelScope.launch {
-            val tries = CODE_LIFE_MS / DEVICE_POLL_MS
-            repeat(tries.toInt()) {
-                delay(DEVICE_POLL_MS)
+            val signedIn = pollUntil(DEVICE_POLL_MS, CODE_LIFE_MS) {
                 readDevices()
-                if ((mutable.value.devices.valueOrNull?.size ?: 0) > had) {
-                    mutable.update {
-                        it.copy(waitingForDevice = false, outcome = Outcome(SettingsSection.Devices, "The other TV is paired and signed in."))
-                    }
-                    return@launch
+                (mutable.value.devices.valueOrNull?.size ?: 0) > had
+            }
+            if (signedIn) {
+                mutable.update {
+                    it.copy(waitingForDevice = false, outcome = Outcome(SettingsSection.Devices, "The other TV is paired and signed in."))
                 }
+                return@launch
             }
             mutable.update {
                 it.copy(

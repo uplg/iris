@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentView
@@ -23,6 +24,11 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.prettySceneName
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.state.LiveRead
+import studio.kahn.iris.tv.ui.state.FAST_MS
+import studio.kahn.iris.tv.ui.state.SLOW_MS
 
 /** A release's own page: what it is, what it does, its video files. */
 @Immutable

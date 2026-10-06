@@ -33,8 +33,9 @@ import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.SectionTitle
@@ -43,11 +44,9 @@ import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.screens.library.DetailUiState
 import studio.kahn.iris.tv.ui.screens.library.DetailViewModel
-import studio.kahn.iris.tv.ui.screens.library.NoticeLine
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleaseItem
 import studio.kahn.iris.tv.ui.screens.library.ReleaseRow
-import studio.kahn.iris.tv.ui.screens.library.plural
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 import studio.kahn.iris.tv.ui.state.irisViewModel
@@ -56,6 +55,8 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 @Immutable
 data class DetailActions(
@@ -102,16 +103,19 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
     val layout = IrisLayout.current
     val firstFile = remember { FocusRequester() }
     var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
-    Box(
-        Modifier
+    FooterLayout(
+        footer = {
+            ScreenFooter(listOf(KeyHint(Keys.OK, "Play"), KeyHint(Keys.BACK, "Back"))) { NoticeLine(state.notice) }
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         when (val page = state.page) {
             Loadable.Loading -> LoadingState(label = "Loading the release…")
             is Loadable.Failed -> ErrorState(page.error.message, actions.onRetry)
             is Loadable.Ready, is Loadable.Stale -> {
-                val p = page.valueOrNull ?: return@Box
+                val p = page.valueOrNull ?: return@FooterLayout
                 LaunchedEffect(p.files.isNotEmpty()) { if (p.files.isNotEmpty()) runCatching { firstFile.requestFocus() } }
                 val compact = layout.height < 500.dp
                 Row(
@@ -125,8 +129,10 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                         Artwork(p.title, p.posterUrl, width = if (compact) 96.dp else IrisSize.posterAside, titleStyle = IrisType.group)
                     }
                     LazyColumn(
-                        Modifier.weight(1f),
-                        contentPadding = PaddingValues(bottom = 80.dp, start = IrisSpace.s2, end = IrisSpace.s2, top = IrisSpace.s1),
+                        Modifier
+                            .weight(1f)
+                            .padding(bottom = footer),
+                        contentPadding = PaddingValues(bottom = IrisSpace.s4, start = IrisSpace.s2, end = IrisSpace.s2, top = IrisSpace.s1),
                         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
                     ) {
                         item(key = "title") {
@@ -165,17 +171,6 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                     }
                 }
             }
-        }
-        Column(
-            Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .background(IrisColor.ground)
-                .padding(horizontal = layout.safeHorizontal, vertical = IrisSpace.s4),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            NoticeLine(state.notice)
-            KeyHints(listOf(KeyHint(Keys.OK, "Play"), KeyHint(Keys.BACK, "Back")))
         }
         deleting?.let { row ->
             ConfirmDialog(

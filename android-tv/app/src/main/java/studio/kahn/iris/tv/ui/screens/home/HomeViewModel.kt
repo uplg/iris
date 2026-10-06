@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
@@ -43,10 +43,10 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
-
-/** A line the screen says after an action, in words (and its tone). */
-@Immutable
-data class Notice(val text: String, val tone: StatusTone = StatusTone.Muted)
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.state.FAST_MS
+import studio.kahn.iris.tv.ui.state.SLOW_MS
+import studio.kahn.iris.tv.ui.state.pollWhile
 
 /** Where an action leads; the screen navigates. */
 sealed interface HomeEvent {
@@ -59,7 +59,6 @@ sealed interface HomeEvent {
 /** Everything the home draws, in words. */
 @Immutable
 data class HomeUiState(
-    val account: String? = null,
     val hero: HeroModel? = null,
     /** True until the home knows what its hero is (or that it has none). */
     val heroPending: Boolean = true,
@@ -84,7 +83,6 @@ internal data class MetaKey(val id: Long, val kind: MediaKind?)
 /** What the home read, as read: [homeUi] turns it into words. */
 @Immutable
 internal data class HomeData(
-    val account: String? = null,
     val continueWatching: Loadable<List<ContinueWatchingItem>> = Loadable.Loading,
     val watchlist: Loadable<List<WatchlistItem>> = Loadable.Loading,
     val forYou: Loadable<ForYou> = Loadable.Loading,
@@ -132,7 +130,6 @@ internal fun homeUi(d: HomeData): HomeUiState {
         )
     val collections = d.collections.valueOrNull.orEmpty()
     return HomeUiState(
-        account = d.account,
         hero = hero,
         heroPending = heroPending,
         rightNow = d.summary.map(::rightNow),
@@ -155,15 +152,6 @@ internal fun heroPrefsKey(item: ContinueWatchingItem): String = item.collectionI
 
 internal fun featuredMetaKey(r: studio.kahn.iris.tv.data.SearchResult): MetaKey? =
     (r.titleMatch?.tmdbId ?: r.tmdbId)?.let { MetaKey(it, r.titleMatch?.kind ?: r.kind) }
-
-/** The signed-in server's API, or a readable failure when the TV is not paired. */
-internal suspend fun AppContainer.api(): IrisApi =
-    apiFor(sessionStore.serverUrl.first() ?: throw IllegalStateException("This TV is signed out. Pair it again from Settings."))
-
-/** The name the header shows: the account's display name, else the start of its email. */
-internal suspend fun AppContainer.accountName(): String? =
-    (runCatching { api().me().displayName }.getOrNull() ?: sessionStore.session.first()?.email?.substringBefore('@'))
-        ?.takeIf { it.isNotBlank() }
 
 /**
  * The home (TV.dc.html): reads every row when the screen starts (so coming back from the
@@ -188,10 +176,6 @@ class HomeViewModel(
 
     init {
         viewModelScope.launch {
-            val name = container.accountName()
-            data.update { it.copy(account = name) }
-        }
-        viewModelScope.launch {
             val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
             val available = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest) is AppUpdater.VersionStatus.UpdateAvailable
             data.update { it.copy(updateAvailable = available) }
@@ -201,10 +185,7 @@ class HomeViewModel(
     /** Run by the screen while it is started: one full read, then the live loop. */
     suspend fun refreshWhileStarted() {
         refreshRows()
-        while (true) {
-            refreshLive()
-            delay(if (somethingMoves()) FAST_MS else SLOW_MS)
-        }
+        pollWhile({ if (somethingMoves()) FAST_MS else SLOW_MS }) { refreshLive() }
     }
 
     fun retry() {
@@ -464,8 +445,6 @@ class HomeViewModel(
     }
 
     internal companion object {
-        const val FAST_MS = 3_000L
-        const val SLOW_MS = 30_000L
         const val FOR_YOU_STALE_MS = 60_000L
         const val COLLECTIONS_MOVING_MS = 10_000L
         const val COLLECTIONS_IDLE_MS = 60_000L

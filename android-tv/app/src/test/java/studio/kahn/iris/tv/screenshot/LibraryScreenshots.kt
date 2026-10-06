@@ -30,7 +30,6 @@ import studio.kahn.iris.tv.ui.screens.library.DetailUiState
 import studio.kahn.iris.tv.ui.screens.library.HistoryUiState
 import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
 import studio.kahn.iris.tv.ui.screens.library.LibraryView
-import studio.kahn.iris.tv.ui.screens.library.Notice
 import studio.kahn.iris.tv.ui.screens.library.ReleaseActions
 import studio.kahn.iris.tv.ui.screens.library.ReleasePage
 import studio.kahn.iris.tv.ui.screens.library.ReleaseFile
@@ -47,6 +46,7 @@ import studio.kahn.iris.tv.ui.screens.library.titlesUi
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.screenshot.LibraryFixtures as F
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** The library, a title's page, a release and the history, from fake server answers. */
 @RunWith(RobolectricTestRunner::class)

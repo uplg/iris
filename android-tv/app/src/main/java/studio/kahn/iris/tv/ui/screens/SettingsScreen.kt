@@ -70,7 +70,6 @@ import studio.kahn.iris.tv.ui.screens.settings.FormDialog
 import studio.kahn.iris.tv.ui.screens.settings.PASSWORD_MIN
 import studio.kahn.iris.tv.ui.screens.settings.RailItem
 import studio.kahn.iris.tv.ui.screens.settings.SUBTITLES_OFF
-import studio.kahn.iris.tv.ui.screens.settings.SecretInput
 import studio.kahn.iris.tv.ui.screens.settings.SettingsActions
 import studio.kahn.iris.tv.ui.screens.settings.SettingsDialog
 import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
@@ -90,6 +89,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.components.PanelOptions
 
 /**
  * Settings and the account: the web's account page (who I am, playback
@@ -371,21 +371,24 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
                 busy = state.busy == Busy.PASSWORD,
                 busyText = "Changing…",
             ) {
-                SecretInput(
+                TextInput(
                     current,
                     { current = it },
                     label = "Current password",
-                    imeAction = ImeAction.Next,
+                    masked = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }),
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(first),
                 )
                 if (error != null && error.field == DialogField.First) StatusLine(error.text, tone = StatusTone.Down)
-                SecretInput(
+                TextInput(
                     next,
                     { next = it },
                     label = "New password, $PASSWORD_MIN characters or more",
+                    masked = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { actions.onChangePassword(current, next) }),
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -488,18 +491,7 @@ private fun LanguagePanel(
         addAll(languageOptions(current))
     }
     SidePanel(title = title, onDismiss = onDismiss, footer = "Saved for every device at once.") {
-        val first = remember { FocusRequester() }
-        LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
         if (error != null) StatusLine(error, tone = StatusTone.Down, modifier = Modifier.padding(horizontal = 10.dp))
-        Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-            options.forEach { option ->
-                PanelOption(
-                    words(option),
-                    selected = option == current,
-                    onClick = { onPick(option) },
-                    modifier = if (option == current) Modifier.focusRequester(first) else Modifier,
-                )
-            }
-        }
+        PanelOptions(options, selected = current, onSelect = onPick, label = words, focusOnOpen = true)
     }
 }

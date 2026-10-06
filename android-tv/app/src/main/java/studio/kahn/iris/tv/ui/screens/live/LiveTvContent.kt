@@ -76,6 +76,7 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.plural
 
 /** What the channel list draws. */
 @Immutable
@@ -165,6 +166,7 @@ fun LiveTvContent(
                         onPickCountry(it.code)
                     },
                     label = { "${it.flag} ${it.name}" },
+                    focusOnOpen = true,
                 )
             }
         }
@@ -298,7 +300,7 @@ private fun LazyGridScope.sectionHeader(title: String, count: Int, first: Boolea
     item(key = "head:$title", span = { GridItemSpan(maxLineSpan) }) {
         SectionTitle(
             title,
-            meta = if (count == 1) "1 channel" else "$count channels",
+            meta = plural(count, "channel"),
             modifier = Modifier.padding(top = if (first) 0.dp else IrisSpace.s5),
         )
     }

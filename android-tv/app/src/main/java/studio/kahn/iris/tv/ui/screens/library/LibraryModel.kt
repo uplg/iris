@@ -9,16 +9,21 @@ import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.ui.formatSize
-import studio.kahn.iris.tv.ui.formatSpeed
+import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.formatSpeed
+import studio.kahn.iris.tv.ui.format.percent
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.prettySceneName
+import studio.kahn.iris.tv.ui.format.recentTime
+import studio.kahn.iris.tv.ui.components.StatusTone
 
 // The library's facts in words, as the web's `lib/library/model.ts` says them.
 
 /** What a state line means. Each is drawn with words and an icon, never color alone. */
-enum class Tone { Ok, Busy, Warn, Info, Available }
-
 @Immutable
-data class Status(val tone: Tone, val text: String)
+data class Status(val tone: StatusTone, val text: String)
 
 enum class TitleKind(val word: String, val filterLabel: String) {
     Movie("Movie", "Movies"),
@@ -89,16 +94,16 @@ fun titleMeta(c: CollectionListItem): String =
 
 /** A title's state in words: on disk, downloading, needs a hand, or gone. */
 fun titleStatus(c: CollectionListItem, a: Activity?): Status {
-    if (c.ghost == true) return Status(Tone.Info, "No longer on disk")
+    if (c.ghost == true) return Status(StatusTone.Info, "No longer on disk")
     if (a != null && a.fetching.isNotEmpty()) {
         val pct = percent(bytesPct(a.fetching))
         val what = if (a.fetching.size == 1) seasonOf(a.fetching[0].name) else plural(a.fetching.size, "release")
-        if (a.trouble) return Status(Tone.Warn, "Download stuck · $pct")
-        return Status(Tone.Busy, if (what != null) "Downloading $what · $pct" else "Downloading · $pct")
+        if (a.trouble) return Status(StatusTone.Warn, "Download stuck · $pct")
+        return Status(StatusTone.Busy, if (what != null) "Downloading $what · $pct" else "Downloading · $pct")
     }
-    if (c.kind == MediaKind.tv && c.episodeCount > 0) return Status(Tone.Ok, "${plural(c.episodeCount, "episode")} on disk")
-    if (c.torrentCount > 1) return Status(Tone.Ok, "${plural(c.torrentCount, "release")} on disk")
-    return Status(Tone.Ok, "On disk")
+    if (c.kind == MediaKind.tv && c.episodeCount > 0) return Status(StatusTone.Ok, "${plural(c.episodeCount, "episode")} on disk")
+    if (c.torrentCount > 1) return Status(StatusTone.Ok, "${plural(c.torrentCount, "release")} on disk")
+    return Status(StatusTone.Ok, "On disk")
 }
 
 enum class TypeFilter(val label: String, val kind: TitleKind?) {
@@ -196,24 +201,24 @@ fun ratioOf(sent: Long, received: Long?): Double? =
 fun releaseStatus(t: TorrentView): Status {
     val pct = percent(min(100.0, max(0.0, t.progressPct)))
     if (t.state == TorrentState.error) {
-        return Status(Tone.Warn, t.error?.let { "Error · $it" } ?: "Error · the engine stopped this release")
+        return Status(StatusTone.Warn, t.error?.let { "Error · $it" } ?: "Error · the engine stopped this release")
     }
     if (t.state == TorrentState.paused) {
         if (done(t)) {
             val from = t.sourceProvider?.let { "$it releases never seed" } ?: "its tracker does not seed"
-            return Status(Tone.Info, "Paused after download · $from")
+            return Status(StatusTone.Info, "Paused after download · $from")
         }
-        return Status(Tone.Warn, "Paused · $pct")
+        return Status(StatusTone.Warn, "Paused · $pct")
     }
     if (done(t)) {
         val who = if (t.peers == 0) "nobody downloading now" else "${plural(t.peers, "peer")} downloading"
-        return Status(Tone.Ok, "Seeding · $who · ${formatSpeed(t.uploadSpeedBps)} up")
+        return Status(StatusTone.Ok, "Seeding · $who · ${formatSpeed(t.uploadSpeedBps)} up")
     }
-    if (t.state == TorrentState.initializing) return Status(Tone.Busy, "Checking files · $pct")
-    if (groupOf(t) == ReleaseGroup.Attention) return Status(Tone.Warn, "Stalled · no peers · $pct")
+    if (t.state == TorrentState.initializing) return Status(StatusTone.Busy, "Checking files · $pct")
+    if (groupOf(t) == ReleaseGroup.Attention) return Status(StatusTone.Warn, "Stalled · no peers · $pct")
     val parts = mutableListOf("Downloading · $pct", formatSpeed(t.downloadSpeedBps), plural(t.peers, "peer"))
     etaSeconds(t)?.let { parts += "about ${duration(it)}" }
-    return Status(Tone.Busy, parts.joinToString(" · "))
+    return Status(StatusTone.Busy, parts.joinToString(" · "))
 }
 
 /** What a release's delete removes, named. */
@@ -260,13 +265,6 @@ fun releaseFacts(t: TorrentView, now: java.time.Instant = java.time.Instant.now(
         "${formatSize(t.uploadedBytesTotal)} sent",
         ratio?.let { "ratio %.2f".format(java.util.Locale.ROOT, it) },
     ).joinToString(" · ")
-}
-
-/** `42% overall · about 12 min`, or `Nothing downloading`. */
-fun downloadingLine(s: HomeSummary): String {
-    if (s.downloading == 0) return "Nothing downloading"
-    val eta = s.downloadingEtaSeconds
-    return if (eta != null) "${percent(s.downloadingPct)} overall · about ${duration(eta.toDouble())}" else "${percent(s.downloadingPct)} overall"
 }
 
 /** The library's facts line: `64 titles · 412 GB free of 2 TB · 2 downloading · 5 seeding`. */

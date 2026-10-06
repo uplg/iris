@@ -61,7 +61,7 @@ class GettingReadyTest {
         )
         assertEquals(listOf(StepState.Done, StepState.Current, StepState.Pending, StepState.Pending), r.steps.map { it.state })
         assertEquals("38 peers", r.steps[0].detail)
-        assertEquals("64 % · 8.0 MB/s", r.steps[1].detail)
+        assertEquals("64% · 8.0 MB/s", r.steps[1].detail)
         assertEquals(0.64f, r.steps[1].progress!!, 0.001f)
     }
 
@@ -95,7 +95,7 @@ class GettingReadyTest {
         val server = r.steps[3]
         assertEquals("Preparing the stream on the server", server.label)
         assertEquals(StepState.Current, server.state)
-        assertEquals("42 %", server.detail)
+        assertEquals("42%", server.detail)
         assertEquals(StepState.Pending, r.steps.last().state)
     }
 
@@ -135,7 +135,7 @@ class GettingReadyTest {
         assertEquals("1080p AV1, converted on the server", playWords("1080p AV1", PlayRoute.ServerTranscode))
         assertEquals("Plays directly", playWords(null, PlayRoute.Direct))
         assertEquals("Playing from disk · 1080p HEVC", factsLine(torrent(finished = true), "1080p HEVC"))
-        assertEquals("Playing while it downloads, 64 %", factsLine(torrent(), null))
+        assertEquals("Playing while it downloads, 64%", factsLine(torrent(), null))
     }
 }
 

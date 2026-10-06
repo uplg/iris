@@ -41,8 +41,7 @@ sealed interface GrabOutcome {
  * 409 whose message names the release holding it): map them with `toUiError`.
  */
 suspend fun AppContainer.grabRelease(target: GrabTarget, consent: GrabConsent = GrabConsent()): GrabOutcome {
-    val url = sessionStore.serverUrl.first() ?: error("This TV is signed out. Pair it again from Settings.")
-    val api = apiFor(url)
+    val api = api()
     val body = ResolveBody(
         externalId = target.externalId,
         providerId = target.providerId,

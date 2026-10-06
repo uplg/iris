@@ -46,7 +46,6 @@ import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.TextInput
-import studio.kahn.iris.tv.ui.screens.settings.SecretInput
 import studio.kahn.iris.tv.ui.screens.settings.SetupUiState
 import studio.kahn.iris.tv.ui.screens.settings.SetupViewModel
 import studio.kahn.iris.tv.ui.state.irisViewModel
@@ -141,10 +140,12 @@ fun SetupContent(
                         .fillMaxWidth()
                         .focusRequester(emailFocus),
                 )
-                SecretInput(
+                TextInput(
                     value = state.password,
                     onValueChange = onPasswordChange,
                     label = "Password",
+                    masked = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { onSignIn() }),
                     modifier = Modifier.fillMaxWidth(),
                 )

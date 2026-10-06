@@ -6,6 +6,10 @@ import java.time.ZoneId
 import kotlin.math.max
 import kotlin.math.min
 import studio.kahn.iris.tv.data.HistoryItem
+import studio.kahn.iris.tv.ui.format.clock
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.onDay
+import studio.kahn.iris.tv.ui.format.percent
 
 // A watch history grouped by what was watched (web `lib/history/groups.ts` and `words.ts`):
 // a series under its title with its episodes, a film on one line. A title whose files were all
@@ -74,4 +78,4 @@ fun historyLabel(group: HistoryGroup, it: HistoryItem): String =
     if (group.solo) group.title else whatWatched(it) ?: it.torrentName
 
 fun historyFacts(it: HistoryItem, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String =
-    "${progressWords(it.positionSeconds, it.durationSeconds, it.completed)} · Last watched ${onDay(it.lastWatchedAt, now, zone)}"
+    "${progressWords(it.positionSeconds, it.durationSeconds, it.completed)} · Last watched ${onDay(it.lastWatchedAt, now.atZone(zone))}"

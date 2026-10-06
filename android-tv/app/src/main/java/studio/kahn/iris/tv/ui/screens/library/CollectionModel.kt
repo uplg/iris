@@ -15,7 +15,16 @@ import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.isVideoPath
-import studio.kahn.iris.tv.ui.formatSize
+import studio.kahn.iris.tv.ui.format.clock
+import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.languageLabel
+import studio.kahn.iris.tv.ui.format.percent
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.recentTime
+import studio.kahn.iris.tv.ui.format.timeLeft
+import studio.kahn.iris.tv.ui.components.StatusTone
 
 // A title's episodes as one row each, whatever holds them (on disk, offered, reclaimed), and
 // what the page says about them: web `lib/collection/merge.ts` and `status.ts`.
@@ -183,13 +192,8 @@ private val WORD = mapOf(
     "multi" to "several languages",
     "vostfr" to "original with French subtitles",
 )
-private val TAG_LONG = mapOf(
-    "french" to "French audio (VF)",
-    "english" to "English audio",
-    "multi" to "Several audio languages (MULTI)",
-    "vostfr" to "Original audio, French subtitles (VOSTFR)",
-    "vo" to "Original audio (VO)",
-)
+// A release's language tag in the library's words, mapped to the search's tag for its label.
+private val SEARCH_TAG = mapOf("french" to "fr", "english" to "en", "multi" to "multi", "vostfr" to "vost", "vo" to "vo")
 private val ISO = mapOf("french" to "fr", "english" to "en")
 
 /** A release language inside a sentence: `Play in French`. */
@@ -197,9 +201,9 @@ fun languageWord(lang: String?): String? = lang?.let { WORD[it] }
 
 /** `English audio (original)`, `French audio (VF)`. [original] is TMDB's ISO 639-1. */
 fun audioChip(lang: String, original: String? = null): String? {
-    if (lang !in TAG_LONG) return null
+    val label = languageLabel(SEARCH_TAG[lang]) ?: return null
     if (original != null && ISO[lang] == original) return "${WORD[lang]} audio (original)"
-    return TAG_LONG[lang]
+    return label
 }
 
 /** The release tags of a title as preference codes (`multi` and `unknown` name no language). */
@@ -331,7 +335,7 @@ enum class Verb(val words: String) {
 }
 
 @Immutable
-data class RowState(val tone: Tone, val text: String, val progress: Float? = null, val verb: Verb? = null)
+data class RowState(val tone: StatusTone, val text: String, val progress: Float? = null, val verb: Verb? = null)
 
 /** An episode row's state in words: what can be done with it now. */
 fun rowState(
@@ -350,30 +354,30 @@ fun rowState(
         val length = p?.durationSeconds?.takeIf { it > 0 } ?: runtime
         if (t != null && downloading(t)) {
             return RowState(
-                if (t.state == TorrentState.error) Tone.Warn else Tone.Busy,
+                if (t.state == TorrentState.error) StatusTone.Warn else StatusTone.Busy,
                 "Downloading · ${percent(t.progressPct)} · ${eta(t)}",
                 verb = Verb.PlayWhileDownloading,
             )
         }
         if (first.watched || p?.completed == true) {
-            return RowState(Tone.Ok, if (length != null) "Watched · ${duration(length)}" else "Watched", verb = Verb.WatchAgain)
+            return RowState(StatusTone.Ok, if (length != null) "Watched · ${duration(length)}" else "Watched", verb = Verb.WatchAgain)
         }
         if (p != null && p.positionSeconds > 0) {
             val left = length?.let { " · ${timeLeft(it - p.positionSeconds)}" }.orEmpty()
-            return RowState(Tone.Info, "In progress$left", length?.let { (p.positionSeconds / it).toFloat() }, Verb.Resume)
+            return RowState(StatusTone.Info, "In progress$left", length?.let { (p.positionSeconds / it).toFloat() }, Verb.Resume)
         }
-        return RowState(Tone.Ok, if (length != null) "On disk · ${duration(length)}" else "On disk", verb = Verb.Play)
+        return RowState(StatusTone.Ok, if (length != null) "On disk · ${duration(length)}" else "On disk", verb = Verb.Play)
     }
     if (gone.isNotEmpty()) {
         val watched = gone.any { it.watched }
-        return RowState(Tone.Info, if (watched) "Watched · removed from disk to free space" else "Removed from disk to free space")
+        return RowState(StatusTone.Info, if (watched) "Watched · removed from disk to free space" else "Removed from disk to free space")
     }
     if (offers.isNotEmpty()) {
         val langs = offers.mapNotNull { languageWord(it.language) }.distinct()
         val said = if (langs.isNotEmpty()) " · ${langs.joinToString(", ")} audio" else ""
-        return RowState(Tone.Available, "Available · ${plural(offers.size, "release")}$said")
+        return RowState(StatusTone.Available, "Available · ${plural(offers.size, "release")}$said")
     }
-    return RowState(Tone.Info, "Not available yet")
+    return RowState(StatusTone.Info, "Not available yet")
 }
 
 /** Offers grouped by language: one Grab and play per language (the server picks the best). */

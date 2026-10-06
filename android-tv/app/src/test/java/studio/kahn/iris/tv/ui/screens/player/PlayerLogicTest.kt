@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import studio.kahn.iris.tv.data.EpisodePoint
 import studio.kahn.iris.tv.data.EpisodeStatus
+import studio.kahn.iris.tv.ui.format.episodeCode
 
 class SeekAccelerationTest {
     @Test

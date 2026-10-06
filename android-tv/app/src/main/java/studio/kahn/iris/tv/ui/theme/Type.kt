@@ -29,9 +29,6 @@ val CalSans = FontFamily(
 /** Borel: the "Iris" wordmark only (web `--font-brand`). */
 val Borel = FontFamily(Font(R.font.borel_display_regular, FontWeight.Normal))
 
-val FontDisplay: FontFamily = Fraunces
-val FontText: FontFamily = CalSans
-val FontBrand: FontFamily = Borel
 /** Release names and file names (web `--font-mono`: the system monospace). */
 val FontMono: FontFamily = FontFamily.Monospace
 

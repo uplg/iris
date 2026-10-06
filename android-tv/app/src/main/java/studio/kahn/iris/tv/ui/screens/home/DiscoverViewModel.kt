@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CatalogCard
 import studio.kahn.iris.tv.data.DismissRequest
 import studio.kahn.iris.tv.data.ForYou
@@ -27,6 +28,8 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.components.Notice
 
 /** One mood's titles, in words. */
 @Immutable
@@ -34,7 +37,6 @@ data class MoodResultsModel(val id: String, val label: String, val count: String
 
 @Immutable
 data class DiscoverUiState(
-    val account: String? = null,
     val kind: MediaKind = MediaKind.movie,
     val board: Loadable<List<MoodModel>> = Loadable.Loading,
     /** Non-null while a mood is open (Back returns to the board). */
@@ -46,7 +48,6 @@ data class DiscoverUiState(
 
 @Immutable
 internal data class DiscoverData(
-    val account: String? = null,
     val kind: MediaKind = MediaKind.movie,
     val mood: String? = null,
     val boards: Map<MediaKind, Loadable<MoodBoard>> = emptyMap(),
@@ -72,7 +73,6 @@ internal fun discoverUi(d: DiscoverData): DiscoverUiState {
         )
     }
     return DiscoverUiState(
-        account = d.account,
         kind = d.kind,
         board = board.map { b -> b.moods.map(::moodModel) },
         mood = mood,
@@ -108,10 +108,6 @@ class DiscoverViewModel(
     private val eventChannel = Channel<DiscoverEvent>(Channel.BUFFERED)
     val events: Flow<DiscoverEvent> = eventChannel.receiveAsFlow()
     private var forYouReadAt: Long? = null
-
-    init {
-        viewModelScope.launch { data.update { it.copy(account = container.accountName()) } }
-    }
 
     /** Run by the screen each time it starts: what it shows, read again (suggestions at most once a minute). */
     suspend fun refreshOnStart() {

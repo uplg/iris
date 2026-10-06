@@ -36,8 +36,11 @@ import studio.kahn.iris.tv.ui.components.Artwork
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.FooterLayout
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PillChoice
 import studio.kahn.iris.tv.ui.components.SectionTitle
@@ -47,9 +50,9 @@ import studio.kahn.iris.tv.ui.screens.search.AudioOption
 import studio.kahn.iris.tv.ui.screens.search.GrabAsk
 import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
 import studio.kahn.iris.tv.ui.screens.search.GrabUi
-import studio.kahn.iris.tv.ui.screens.search.LoadMoreAtEnd
+import studio.kahn.iris.tv.ui.components.LoadMoreAtEnd
 import studio.kahn.iris.tv.ui.screens.search.MoreFooter
-import studio.kahn.iris.tv.ui.screens.search.ReleaseList
+import studio.kahn.iris.tv.ui.components.RowList
 import studio.kahn.iris.tv.ui.screens.search.SearchKind
 import studio.kahn.iris.tv.ui.screens.search.SearchSort
 import studio.kahn.iris.tv.ui.screens.search.SeasonOption
@@ -57,7 +60,7 @@ import studio.kahn.iris.tv.ui.screens.search.TitleReleasesUiState
 import studio.kahn.iris.tv.ui.screens.search.TitleReleasesViewModel
 import studio.kahn.iris.tv.ui.screens.search.SummaryLine
 import studio.kahn.iris.tv.ui.screens.search.failedTrackers
-import studio.kahn.iris.tv.ui.screens.search.languageLabel
+import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
 import studio.kahn.iris.tv.ui.screens.search.releaseRows
 import studio.kahn.iris.tv.ui.state.Loadable
@@ -123,29 +126,36 @@ fun TitleReleasesScreen(
 @Composable
 fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: TitleReleasesActions) {
     val layout = IrisLayout.current
-    val restore = remember { FocusRequester() }
-    var restoreKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val remembered = rememberFocusReturn()
     val head = state.head
     // The first release once they arrive; coming back from one, the row left.
     val first = state.shown.firstOrNull()?.let(::releaseKey)
     LaunchedEffect(first != null) {
         if (first == null) return@LaunchedEffect
-        if (restoreKey == null) restoreKey = first
         withFrameNanos { }
         withFrameNanos { }
-        runCatching { restore.requestFocus() }
+        remembered.focus(listOfNotNull(remembered.last ?: first))
     }
     val narrow = layout.width < 900.dp
 
-    Box(
-        Modifier
+    FooterLayout(
+        footer = {
+            ScreenFooter(
+                listOf(
+                    KeyHint(Keys.OK, "See the release"),
+                    KeyHint(Keys.HOLD_OK, "Download and play"),
+                    KeyHint(Keys.BACK, "To the search results"),
+                ),
+            )
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         Row(
             Modifier
                 .fillMaxSize()
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = 55.dp),
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = footer),
             horizontalArrangement = Arrangement.spacedBy(IrisSpace.s9),
         ) {
             Column(
@@ -204,19 +214,9 @@ fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: Tit
                     }
                 }
                 GrabRefusal(grab, actions.onDismissGrab)
-                Body(state, grab, actions, restoreKey, restore) { restoreKey = it }
+                Body(state, grab, actions, remembered)
             }
         }
-        KeyHints(
-            hints = listOf(
-                KeyHint(Keys.OK, "See the release"),
-                KeyHint(Keys.HOLD_OK, "Download and play"),
-                KeyHint(Keys.BACK, "To the search results"),
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp),
-        )
         GrabAsk(grab, onConfirm = actions.onConfirmGrab, onCancel = actions.onDismissGrab)
     }
 }
@@ -226,9 +226,7 @@ private fun Body(
     state: TitleReleasesUiState,
     grab: GrabUi,
     actions: TitleReleasesActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
     val bottom = IrisSpace.s3
     when (val results = state.results) {
@@ -248,8 +246,8 @@ private fun Body(
             val list = rememberLazyListState()
             val hasNext = page.next != null
             LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
-            ReleaseList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
-                releaseRows(state.shown, grab, restoreKey, restore, onFocused, actions.onRelease, actions.onGrab, withTitle = false)
+            RowList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
+                releaseRows(state.shown, grab, remembered, actions.onRelease, actions.onGrab, withTitle = false)
                 item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
             }
         }

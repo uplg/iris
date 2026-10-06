@@ -192,17 +192,6 @@ fun ReadRow(
     )
 }
 
-/** The words of the last action of a section, success or failure, in a polite live region. */
-@Composable
-fun OutcomeLine(outcome: Outcome?, section: SettingsSection) {
-    if (outcome == null || outcome.section != section) return
-    StatusLine(
-        outcome.text,
-        tone = if (outcome.failed) StatusTone.Down else StatusTone.Ok,
-        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-    )
-}
-
 /**
  * A centered dialog with fields ([content]: [studio.kahn.iris.tv.ui.components.TextInput]s),
  * then [confirmLabel] and Cancel. Back, a tap on the scrim or Cancel call

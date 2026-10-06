@@ -18,7 +18,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -39,6 +42,7 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 
 private const val POSTER_ASPECT = 2f / 3f
 private const val STILL_ASPECT = 16f / 9f
+private val GREYED = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
 
 /**
  * A 2:3 poster card (Library, Search titles, Discover).
@@ -51,6 +55,7 @@ private const val STILL_ASPECT = 16f / 9f
  * - [badge] is laid over the artwork's corner (the provider in a release grid).
  * - Below: an optional [progress] meter (always say the value in [meta] or
  *   [status] too), the title line, [meta] (muted), then [status] in its tone.
+ * - [dimmed]: the artwork greyed (a title no longer on disk); [status] says why.
  * - Focused: the card grows to 1.06 and the artwork wears the accent ring.
  *   [onLongClick] = hold OK / touch long press (the boards' "Hold OK" menu).
  */
@@ -67,6 +72,7 @@ fun PosterCard(
     meta: String? = null,
     status: String? = null,
     statusTone: StatusTone = StatusTone.Muted,
+    dimmed: Boolean = false,
     onLongClick: (() -> Unit)? = null,
 ) {
     ArtCard(
@@ -83,6 +89,7 @@ fun PosterCard(
         meta = meta,
         status = status,
         statusTone = statusTone,
+        dimmed = dimmed,
         onLongClick = onLongClick,
     )
 }
@@ -119,6 +126,7 @@ fun StillCard(
         meta = meta,
         status = status,
         statusTone = statusTone,
+        dimmed = false,
         onLongClick = onLongClick,
     )
 }
@@ -138,6 +146,7 @@ private fun ArtCard(
     meta: String?,
     status: String?,
     statusTone: StatusTone,
+    dimmed: Boolean,
     onLongClick: (() -> Unit)?,
 ) {
     FocusSurface(
@@ -161,6 +170,7 @@ private fun ArtCard(
                 badge = badge,
                 framed = !focused,
                 titleStyle = fallbackTitle,
+                dimmed = dimmed,
             )
             if (progress != null) Meter(progress)
             Text(title, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -177,6 +187,7 @@ private fun ArtCard(
  * first, the image on top once decoded. Use it directly for a non-focusable
  * poster (a page's aside, the getting-ready screen); [width] lets Coil
  * decode at that size. [showTitle] false for a mini poster beside a row.
+ * [dimmed]: greyed and faded (web `ghost-card`), for what is no longer on disk.
  */
 @Composable
 fun Artwork(
@@ -190,11 +201,13 @@ fun Artwork(
     framed: Boolean = true,
     titleStyle: TextStyle = IrisType.panel,
     showTitle: Boolean = true,
+    dimmed: Boolean = false,
 ) {
     val shape = IrisShape.card
     Box(
         (if (width != null) modifier.width(width) else modifier.fillMaxWidth())
             .aspectRatio(aspect)
+            .graphicsLayer { alpha = if (dimmed) DISABLED_ALPHA else 1f }
             .clip(shape)
             .background(IrisColor.art)
             .then(if (framed) Modifier.border(1.dp, IrisColor.line, shape) else Modifier),
@@ -234,6 +247,7 @@ fun Artwork(
                 model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                colorFilter = if (dimmed) GREYED else null,
                 modifier = Modifier.matchParentSize(),
             )
         }

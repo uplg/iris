@@ -20,8 +20,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -31,11 +29,11 @@ import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.StatusLine
-import studio.kahn.iris.tv.ui.components.TopTab
-import studio.kahn.iris.tv.ui.components.TvHeader
 import studio.kahn.iris.tv.ui.screens.home.CardAction
 import studio.kahn.iris.tv.ui.screens.home.CardMenuHost
 import studio.kahn.iris.tv.ui.screens.home.DiscoverEvent
@@ -49,6 +47,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.components.NoticeLine
 
 /**
  * Discover (web `routes/discover`): tonight's moods, movies or series (a board of tiles,
@@ -58,9 +57,7 @@ import studio.kahn.iris.tv.ui.theme.IrisType
 @Composable
 fun DiscoverScreen(
     container: AppContainer,
-    onSelectTab: (TopTab) -> Unit,
     onOpenSearch: (query: String) -> Unit,
-    onOpenSettings: () -> Unit,
 ) {
     val vm = irisViewModel(container) { c, saved -> DiscoverViewModel(c, saved) }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -74,8 +71,6 @@ fun DiscoverScreen(
     }
     DiscoverContent(
         state = state,
-        onSelectTab = onSelectTab,
-        onAccount = onOpenSettings,
         onKind = vm::setKind,
         onOpenMood = { vm.openMood(it.id) },
         onCloseMood = vm::closeMood,
@@ -87,8 +82,6 @@ fun DiscoverScreen(
 @Composable
 fun DiscoverContent(
     state: DiscoverUiState,
-    onSelectTab: (TopTab) -> Unit,
-    onAccount: () -> Unit,
     onKind: (MediaKind) -> Unit,
     onOpenMood: (MoodModel) -> Unit,
     onCloseMood: () -> Unit,
@@ -96,12 +89,10 @@ fun DiscoverContent(
     onRetry: () -> Unit,
 ) {
     val layout = IrisLayout.current
-    val header = remember { FocusRequester() }
     val kindFocus = remember { FocusRequester() }
-    val focus = rememberCardFocus()
-    val tiles = remember { HashMap<String, FocusRequester>() }
-    val tileFocus = { id: String -> tiles.getOrPut(id) { FocusRequester() } }
-    var headerFocused by remember { mutableStateOf(false) }
+    val focus = rememberCardFocus(fallback = kindFocus)
+    val tiles = rememberFocusReturn()
+    val tileFocus = { id: String -> tiles.requester(id) }
     var lastMood by remember { mutableStateOf<String?>(null) }
     var focusPlaced by remember { mutableStateOf(false) }
 
@@ -124,51 +115,50 @@ fun DiscoverContent(
         if (id != null) {
             lastMood = id
         } else {
-            lastMood?.let { previous -> runCatching { tileFocus(previous).requestFocus() } }
+            lastMood?.let { previous -> tiles.returnTo(previous) }
             lastMood = null
         }
     }
     BackHandler(enabled = mood != null, onBack = onCloseMood)
-    BackHandler(enabled = mood == null && !headerFocused) { runCatching { header.requestFocus() } }
 
-    Column(
-        Modifier
+    val footer: @Composable () -> Unit = {
+        ScreenFooter(
+            listOf(
+                KeyHint(Keys.OK, if (mood == null) "Open, find releases" else "Find releases"),
+                KeyHint(Keys.HOLD_OK, "Not interested"),
+                KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
+            ),
+        ) { NoticeLine(state.notice) }
+    }
+    FooterLayout(
+        footer = footer,
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { bottom ->
         val moodCols = moodColumns()
         val posterCols = posterColumns()
         LazyColumn(
             Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxSize()
+                .padding(bottom = bottom),
             state = rememberLazyListState(),
-            contentPadding = PaddingValues(top = layout.safeVertical, bottom = IrisSpace.s7),
+            contentPadding = PaddingValues(bottom = IrisSpace.s7),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
         ) {
-            item(key = "header", contentType = "header") {
-                Column(
+            item(key = "title", contentType = "title") {
+                Row(
                     Modifier.padding(horizontal = layout.safeHorizontal),
-                    verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
+                    horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+                    verticalAlignment = Alignment.Bottom,
                 ) {
-                    TvHeader(
-                        current = TopTab.Discover,
-                        onSelect = onSelectTab,
-                        accountName = state.account,
-                        onAccount = onAccount,
-                        modifier = Modifier
-                            .focusRequester(header)
-                            .onFocusChanged { headerFocused = it.hasFocus },
+                    Text("Discover", style = IrisType.page, color = IrisColor.ink)
+                    Text(
+                        "Tonight's moods and what is trending, checked against your trackers.",
+                        style = IrisType.meta,
+                        color = IrisColor.inkMuted,
+                        modifier = Modifier.padding(bottom = 3.dp),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5), verticalAlignment = Alignment.Bottom) {
-                        Text("Discover", style = IrisType.page, color = IrisColor.ink)
-                        Text(
-                            "Tonight's moods and what is trending, checked against your trackers.",
-                            style = IrisType.meta,
-                            color = IrisColor.inkMuted,
-                            modifier = Modifier.padding(bottom = 3.dp),
-                        )
-                    }
                 }
             }
             moodsHead(state.kind, onKind, kindFocus)
@@ -187,33 +177,10 @@ fun DiscoverContent(
             }
             forYouShelves(state.forYou, focus, onCardAction, onRetry)
         }
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = IrisSpace.s2, bottom = 15.dp),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            state.notice?.let {
-                StatusLine(it.text, tone = it.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            }
-            KeyHints(
-                listOf(
-                    KeyHint(Keys.OK, if (mood == null) "Open, find releases" else "Find releases"),
-                    KeyHint(Keys.HOLD_OK, "Not interested"),
-                    KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
-                ),
-            )
-        }
     }
     CardMenuHost(
         focus = focus,
         busy = state.busy,
-        present = { key -> state.hasCard(key) },
-        fallback = kindFocus,
         onCardAction = onCardAction,
     )
 }
-
-private fun DiscoverUiState.hasCard(key: String): Boolean =
-    mood?.cards?.valueOrNull?.any { it.key == key } == true ||
-        forYou.valueOrNull?.any { shelf -> shelf.cards.any { it.key == key } } == true

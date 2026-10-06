@@ -18,6 +18,7 @@ enum class SearchViewMode { TITLES, GRID, LIST }
 private val Context.prefsDataStore by preferencesDataStore("iris_prefs")
 
 private val KEY_SEARCH_VIEW_MODE = stringPreferencesKey("search_view_mode")
+private val KEY_LIBRARY_VIEW = stringPreferencesKey("library_view")
 
 /**
  * Small client-side UI preferences — NOT session / auth state (that's
@@ -34,5 +35,15 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setSearchViewMode(mode: SearchViewMode) {
         context.prefsDataStore.edit { it[KEY_SEARCH_VIEW_MODE] = mode.name }
+    }
+
+    /**
+     * The library's view last chosen on this device (web `LIBRARY_VIEW_KEY`), by name; null
+     * until one is chosen. The library reads an unknown name as its first view.
+     */
+    val libraryView: Flow<String?> = context.prefsDataStore.data.map { it[KEY_LIBRARY_VIEW] }
+
+    suspend fun setLibraryView(name: String) {
+        context.prefsDataStore.edit { it[KEY_LIBRARY_VIEW] = name }
     }
 }

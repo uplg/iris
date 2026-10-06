@@ -66,7 +66,7 @@ object ForcedTextTracks {
  * here, TV-side. What the flag meant for playback is not lost: our track
  * selection never leans on Media3's forced auto-show (text is either
  * disabled outright or pinned by [SubtitlePick]), and the "Forced" label
- * in [IrisTrackNameProvider] reads [ForcedTextTracks] instead.
+ * in the player's own track menu reads [ForcedTextTracks] instead.
  *
  * Stripping at the extractor keeps `Format`/`TrackGroup` identity
  * consistent everywhere (menu labels, `TrackSelectionOverride` keying,

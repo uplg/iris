@@ -33,8 +33,10 @@ import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
+import studio.kahn.iris.tv.ui.state.pollWhile
 import studio.kahn.iris.tv.ui.state.pollWhileStarted
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.episodeCode
 
 /** What the player starts from, read once per file before the player is built. */
 @Immutable
@@ -264,10 +266,9 @@ class WatchViewModel(
      */
     suspend fun pollPlayStatus(keepGoing: () -> Boolean, onStatus: (PlayStatus) -> Unit) {
         val api = api()
-        while (keepGoing()) {
+        pollWhile({ PLAY_STATUS_POLL_MS }, keepGoing) {
             val st = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
             if (st != null) onStatus(st)
-            delay(PLAY_STATUS_POLL_MS)
         }
     }
 

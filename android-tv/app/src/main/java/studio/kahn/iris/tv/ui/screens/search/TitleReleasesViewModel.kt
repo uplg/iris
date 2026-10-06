@@ -10,12 +10,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.TitleCard
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.kindWord
 
 /** What the title's aside shows: the card picked, else what its first release knows. */
 @Immutable

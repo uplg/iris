@@ -51,16 +51,17 @@ import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.FramedBlock
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PanelOptions
+import studio.kahn.iris.tv.ui.components.PanelParagraphs
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.focusRing
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.ui.formatSize
 import studio.kahn.iris.tv.ui.screens.search.FollowState
 import studio.kahn.iris.tv.ui.screens.search.GrabAsk
 import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
@@ -77,6 +78,7 @@ import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.formatSize
 
 /** What the release page can ask for; the defaults do nothing (screenshots). */
 @Immutable
@@ -149,15 +151,24 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
         runCatching { primary.requestFocus() }
     }
 
-    Box(
-        Modifier
+    FooterLayout(
+        footer = {
+            ScreenFooter(
+                listOf(
+                    KeyHint(Keys.OK, if (sheet.owned != null) "Play from disk" else "Download and play"),
+                    KeyHint(Keys.DOWN, "Read the details"),
+                    KeyHint(Keys.BACK, "To the releases"),
+                ),
+            )
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         Row(
             Modifier
                 .fillMaxSize()
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = HINTS_BAND),
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = footer),
             horizontalArrangement = Arrangement.spacedBy(if (narrow) IrisSpace.s8 else IrisSpace.s9),
         ) {
             Column(Modifier.width(if (narrow) 110.dp else IrisSize.posterAside), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
@@ -187,25 +198,15 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                 Details(state, sheet, narrow) { panel = it }
             }
         }
-        KeyHints(
-            hints = listOf(
-                KeyHint(Keys.OK, if (sheet.owned != null) "Play from disk" else "Download and play"),
-                KeyHint(Keys.DOWN, "Read the details"),
-                KeyHint(Keys.BACK, "To the releases"),
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp),
-        )
         when (panel) {
             ReleasePanel.Notes -> state.notes?.let { notes ->
                 SidePanel("Release notes from ${state.providerId}", onDismiss = { panel = null }, footer = "Written by the uploader") {
-                    Paragraphs(paragraphsOf(notes), IrisType.reading)
+                    PanelParagraphs(paragraphsOf(notes), IrisType.reading)
                 }
             }
             ReleasePanel.Nfo -> state.details?.nfo?.let { nfo ->
                 SidePanel("Technical sheet (NFO)", onDismiss = { panel = null }) {
-                    Paragraphs(nfoChunks(nfo), IrisType.mono)
+                    PanelParagraphs(nfoChunks(nfo), IrisType.mono)
                 }
             }
             ReleasePanel.Files -> SidePanel("File to play", onDismiss = { panel = null }) {
@@ -217,6 +218,7 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                         panel = null
                     },
                     label = { "${it.path.substringAfterLast('/')} · ${formatSize(it.sizeBytes)}" },
+                    focusOnOpen = true,
                 )
             }
             null -> Unit
@@ -376,30 +378,6 @@ private fun Notes(state: ReleaseUiState, modifier: Modifier, onPanel: (ReleasePa
     }
 }
 
-/** Long text in a side panel, one focusable block at a time so the D-pad scrolls it. */
-@Composable
-private fun Paragraphs(blocks: List<AnnotatedString>, style: androidx.compose.ui.text.TextStyle) {
-    val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    blocks.forEachIndexed { i, block ->
-        var focused by remember { mutableStateOf(false) }
-        Text(
-            block,
-            style = style,
-            color = IrisColor.ink,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(IrisFocus.ringWidth + IrisFocus.ringOffset)
-                .then(if (i == 0) Modifier.focusRequester(first) else Modifier)
-                .onFocusChanged { focused = it.isFocused }
-                .focusRing(focused, IrisShape.key)
-                .focusable()
-                .padding(horizontal = 10.dp, vertical = IrisSpace.s1),
-        )
-        Spacer(Modifier.height(IrisSpace.s1))
-    }
-}
-
 /** A text's paragraphs (blank-line separated), styles kept. */
 fun paragraphsOf(text: AnnotatedString): List<AnnotatedString> {
     val out = mutableListOf<AnnotatedString>()
@@ -420,4 +398,3 @@ fun nfoChunks(nfo: String): List<AnnotatedString> =
 private const val NFO_LINES = 12
 
 /** The room the key hints take at the bottom (board: content ends 110 px above the edge). */
-private val HINTS_BAND = 55.dp

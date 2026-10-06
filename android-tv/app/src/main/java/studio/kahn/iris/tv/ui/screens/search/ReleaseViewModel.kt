@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CreateFollowRequest
 import studio.kahn.iris.tv.data.GrabTarget
 import studio.kahn.iris.tv.data.ReleaseFile
@@ -25,11 +26,16 @@ import studio.kahn.iris.tv.data.playableFiles
 import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.sceneMark
 import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.formatSize
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.UiError
 import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.formatRelative
+import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.languageLabel
+import studio.kahn.iris.tv.ui.format.kindWord
+import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.prettySceneName
 
 /** Following the series this release belongs to. */
 @Immutable
@@ -214,7 +220,7 @@ class ReleaseViewModel(
 
     fun follow() {
         val s = mutable.value
-        if (s.follow !is FollowState.Can || (s.follow as FollowState.Can).busy) return
+        if (s.follow !is FollowState.Can || s.follow.busy) return
         val sheet = s.sheet
         mutable.update { it.copy(follow = FollowState.Can(busy = true)) }
         viewModelScope.launch {

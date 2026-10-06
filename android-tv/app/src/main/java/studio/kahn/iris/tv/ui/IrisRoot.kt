@@ -150,7 +150,7 @@ fun IrisRoot(
                     onUseCode = { navController.popBackStack() },
                 )
             }
-            section<Routes.Home>(TopTab.Home, shellHost) {
+            section<Routes.Home>(TopTab.Home, shellHost, headerOverContent = true) {
                 HomeScreen(
                     container = container,
                     onPlay = { infohash, fileIdx ->
@@ -167,12 +167,6 @@ fun IrisRoot(
                     },
                     onOpenDiscover = {
                         navController.navigate(Routes.Discover)
-                    },
-                    onOpenLiveTv = {
-                        navController.navigate(Routes.LiveTv)
-                    },
-                    onOpenSettings = {
-                        navController.navigate(Routes.Settings)
                     },
                 )
             }
@@ -196,19 +190,14 @@ fun IrisRoot(
             section<Routes.Discover>(TopTab.Discover, shellHost) {
                 DiscoverScreen(
                     container = container,
-                    onSelectTab = { },
                     onOpenSearch = { query ->
                         navController.navigate(Routes.Search(query))
-                    },
-                    onOpenSettings = {
-                        navController.navigate(Routes.Settings)
                     },
                 )
             }
             section<Routes.Library>(TopTab.Library, shellHost) {
                 LibraryScreen(
                     container = container,
-                    initialView = LibraryView.Titles,
                     onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
                     onOpenTorrent = { infohash -> navController.navigate(Routes.Detail(infohash)) },
                     onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },

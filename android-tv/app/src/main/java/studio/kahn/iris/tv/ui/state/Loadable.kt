@@ -38,9 +38,6 @@ sealed interface Loadable<out T> {
         }
 }
 
-/** A successful read replaces whatever was there. */
-fun <T> T.toLoadable(): Loadable<T> = Loadable.Ready(this)
-
 /**
  * A failed (re)read: a value already shown becomes [Loadable.Stale], an
  * empty state becomes [Loadable.Failed].

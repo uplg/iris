@@ -17,7 +17,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Downloading
 import androidx.compose.material.icons.rounded.Error
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
@@ -89,7 +92,7 @@ fun SectionTitle(
 /**
  * A share bar, 0..1 (watched part, downloaded part). Decorative: hidden from
  * accessibility, so always put the value in words beside it ("23 min left",
- * "64 %").
+ * "64%").
  */
 @Composable
 fun Meter(
@@ -118,10 +121,17 @@ fun Meter(
 
 /** The tone of a [StatusLine]. Each but [Muted] brings an icon, so the words never stand on color alone. */
 enum class StatusTone(val color: Color, val icon: ImageVector?) {
+    /** Done, on disk, saved. */
     Ok(IrisColor.accent, Icons.Rounded.CheckCircle),
     Muted(IrisColor.inkMuted, null),
     Warn(IrisColor.warn, Icons.Rounded.Error),
     Down(IrisColor.down, Icons.Rounded.Block),
+    /** Moving: downloading, getting ready. */
+    Busy(IrisColor.accent, Icons.Rounded.Downloading),
+    /** Not here yet, one press away (a release to grab). */
+    Available(IrisColor.accent, Icons.Rounded.Download),
+    /** A fact, not a state (in progress, watched earlier). */
+    Info(IrisColor.inkMuted, Icons.Rounded.Info),
 }
 
 /** A card's or row's state in words: "In your library", "9 of 18 on disk", "No release found". */

@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,8 +79,9 @@ import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FocusColors
 import studio.kahn.iris.tv.ui.components.FocusSurface
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PillChoice
 import studio.kahn.iris.tv.ui.components.PosterCard
@@ -96,11 +98,11 @@ import studio.kahn.iris.tv.ui.screens.search.GrabAsk
 import studio.kahn.iris.tv.ui.screens.search.GrabRefusal
 import studio.kahn.iris.tv.ui.screens.search.GrabUi
 import studio.kahn.iris.tv.ui.screens.search.LibraryMatchRow
-import studio.kahn.iris.tv.ui.screens.search.LoadMoreAtEnd
+import studio.kahn.iris.tv.ui.components.LoadMoreAtEnd
 import studio.kahn.iris.tv.ui.screens.search.MatchTarget
 import studio.kahn.iris.tv.ui.screens.search.MoreFooter
 import studio.kahn.iris.tv.ui.screens.search.ReleaseCard
-import studio.kahn.iris.tv.ui.screens.search.ReleaseList
+import studio.kahn.iris.tv.ui.components.RowList
 import studio.kahn.iris.tv.ui.screens.search.SearchKeyboard
 import studio.kahn.iris.tv.ui.screens.search.KEYBOARD_WIDTH
 import studio.kahn.iris.tv.ui.screens.search.SearchKind
@@ -110,14 +112,15 @@ import studio.kahn.iris.tv.ui.screens.search.SearchViewModel
 import studio.kahn.iris.tv.ui.screens.search.SummaryLine
 import studio.kahn.iris.tv.ui.screens.search.failedTrackers
 import studio.kahn.iris.tv.ui.screens.search.label
-import studio.kahn.iris.tv.ui.screens.search.languageLabel
+import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.screens.search.pageWords
 import studio.kahn.iris.tv.ui.screens.search.parsedWords
-import studio.kahn.iris.tv.ui.screens.search.plural
 import studio.kahn.iris.tv.ui.screens.search.recentWhen
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
 import studio.kahn.iris.tv.ui.screens.search.releaseRows
-import studio.kahn.iris.tv.ui.screens.search.rememberedFocus
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.focusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.screens.search.titleMeta
 import studio.kahn.iris.tv.ui.screens.search.titleStatus
 import studio.kahn.iris.tv.ui.state.Loadable
@@ -128,6 +131,7 @@ import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.format.plural
 
 /** What the search screen can ask for; the defaults do nothing (screenshots). */
 @Immutable
@@ -255,20 +259,17 @@ fun SearchContent(
 ) {
     val layout = IrisLayout.current
     val field = remember { FocusRequester() }
-    val restore = remember { FocusRequester() }
-    var restoreKey by rememberSaveable { mutableStateOf(initialFocus) }
+    val remembered = rememberFocusReturn(initial = initialFocus)
     var fieldFocused by remember { mutableStateOf(false) }
     val results = state.showsResults
 
     // Coming back from a release lands on the result left; else the field.
     LaunchedEffect(results) {
         withFrameNanos { }
-        val restored = restoreKey != null && runCatching { restore.requestFocus() }.isSuccess
-        if (!restored) runCatching { field.requestFocus() }
+        if (!remembered.focusLast()) runCatching { field.requestFocus() }
     }
     // Back comes to the field first; from the field the shell takes it (to the header).
     BackHandler(enabled = !fieldFocused) { runCatching { field.requestFocus() } }
-    val onFocused: (String) -> Unit = { restoreKey = it }
 
     Box(
         Modifier
@@ -284,26 +285,29 @@ fun SearchContent(
                 }
             },
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(horizontal = layout.safeHorizontal),
-        ) {
-            val fieldFocus = FieldFocus(field) { fieldFocused = it }
-            if (results) {
-                ResultsLayout(state, grab, actions, fieldFocus, restoreKey, restore, onFocused, Modifier.weight(1f))
-            } else {
-                ComposeLayout(state, onScreenKeyboard, actions, fieldFocus, restoreKey, restore, onFocused, now, Modifier.weight(1f))
+        FooterLayout(
+            footer = {
+                ScreenFooter(
+                    hints = hints(state, results),
+                    trailing = if (results) resultsTrailing(state) else null,
+                    framed = results,
+                )
+            },
+            modifier = Modifier.fillMaxSize(),
+        ) { footer ->
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = footer),
+            ) {
+                val fieldFocus = FieldFocus(field) { fieldFocused = it }
+                if (results) {
+                    ResultsLayout(state, grab, actions, fieldFocus, remembered, Modifier.weight(1f))
+                } else {
+                    ComposeLayout(state, onScreenKeyboard, actions, fieldFocus, remembered, now, Modifier.weight(1f))
+                }
             }
         }
-        KeyHints(
-            hints = hints(state, results),
-            trailing = if (results) resultsTrailing(state) else null,
-            framed = results,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .then(if (results) Modifier else Modifier.padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp)),
-        )
         GrabAsk(grab, onConfirm = actions.onConfirmGrab, onCancel = actions.onDismissGrab)
     }
 }
@@ -373,18 +377,12 @@ private fun ComposeLayout(
     onScreenKeyboard: Boolean,
     actions: SearchActions,
     fieldFocus: FieldFocus,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
     now: ZonedDateTime,
     modifier: Modifier,
 ) {
     val layout = IrisLayout.current
-    Row(
-        modifier
-            .fillMaxWidth()
-            .padding(bottom = 46.dp),
-    ) {
+    Row(modifier.fillMaxWidth()) {
         Column(
             Modifier.width(if (onScreenKeyboard) KEYBOARD_WIDTH + 12.dp else minOf(300.dp, layout.contentWidth * 0.36f)),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
@@ -418,7 +416,7 @@ private fun ComposeLayout(
             if (state.typed.isBlank()) {
                 RecentSearches(state, actions, now)
             } else {
-                TitlesPanel(state, actions, restoreKey, restore, onFocused)
+                TitlesPanel(state, actions, remembered)
             }
         }
     }
@@ -511,9 +509,7 @@ private fun KindPills(state: SearchUiState, actions: SearchActions) {
 private fun TitlesPanel(
     state: SearchUiState,
     actions: SearchActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
     Row(
         Modifier.horizontalScroll(rememberScrollState()),
@@ -550,7 +546,7 @@ private fun TitlesPanel(
             )
             else -> {
                 titles.errorOrNull?.let { StaleNotice(it) }
-                TitleRow(state.titleCards, state.counts, actions, restoreKey, restore, onFocused)
+                TitleRow(state.titleCards, state.counts, actions, remembered)
             }
         }
         val unmatched = if (ownResults) state.shown.count { it.titleMatch == null } else 0
@@ -590,9 +586,7 @@ private fun TitleRow(
     titles: List<TitleCard>,
     counts: Map<Long, Int>,
     actions: SearchActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
     CardRow(
         items = titles,
@@ -609,7 +603,7 @@ private fun TitleRow(
             meta = if (status == null) titleMeta(t).ifEmpty { null } else null,
             status = status,
             statusTone = if (t.collectionId != null) StatusTone.Ok else StatusTone.Muted,
-            modifier = Modifier.rememberedFocus(titleKey(t), restoreKey, restore, onFocused),
+            modifier = Modifier.focusReturn(remembered, titleKey(t)),
         )
     }
 }
@@ -622,9 +616,7 @@ private fun ResultsLayout(
     grab: GrabUi,
     actions: SearchActions,
     fieldFocus: FieldFocus,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
     modifier: Modifier,
 ) {
     // A landscape phone has no height for two rows of filters: they share one, scrolled.
@@ -670,7 +662,7 @@ private fun ResultsLayout(
         val line = listOfNotNull(parsedWords(state.results?.valueOrNull?.parsed), state.summaryLine).joinToString(" ")
         SummaryLine(line, failedTrackers(state.results?.valueOrNull?.providers.orEmpty()), actions.onRetry, Modifier.padding(horizontal = 4.dp))
         GrabRefusal(grab, actions.onDismissGrab)
-        ResultsBody(state, grab, actions, restoreKey, restore, onFocused)
+        ResultsBody(state, grab, actions, remembered)
     }
 }
 
@@ -713,11 +705,9 @@ private fun ResultsBody(
     state: SearchUiState,
     grab: GrabUi,
     actions: SearchActions,
-    restoreKey: String?,
-    restore: FocusRequester,
-    onFocused: (String) -> Unit,
+    remembered: FocusReturn,
 ) {
-    val bottom = 46.dp + IrisSpace.s3
+    val bottom = IrisSpace.s3
     when (val results = state.results) {
         null, Loadable.Loading -> LoadingState(Modifier.padding(bottom = bottom), "Asking the trackers…")
         is Loadable.Failed -> ErrorState(results.error.message, actions.onRetry, Modifier.padding(bottom = bottom), title = "The search failed")
@@ -769,7 +759,7 @@ private fun ResultsBody(
                             onClick = { actions.onRelease(r) },
                             onLongClick = { actions.onGrab(r) },
                             busy = busyKey == key,
-                            modifier = Modifier.rememberedFocus(key, restoreKey, restore, onFocused),
+                            modifier = Modifier.focusReturn(remembered, key),
                         )
                     }
                     if (state.loadingMore || state.moreError != null) {
@@ -780,7 +770,6 @@ private fun ResultsBody(
                             actions.onRetryMore,
                             Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 46.dp)
                                 .background(IrisColor.ground),
                         )
                     }
@@ -788,9 +777,9 @@ private fun ResultsBody(
             } else {
                 val list = rememberLazyListState()
                 LoadMoreAtEnd(list, enabled = hasNext && !state.loadingMore && state.moreError == null, onLoadMore = actions.onLoadMore)
-                ReleaseList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
+                RowList(list, contentPadding = PaddingValues(start = 4.dp, end = 4.dp, top = 4.dp, bottom = bottom)) {
                     items(state.matches, key = { "match-${it.collectionId}" }) { m: LibraryMatch -> LibraryMatchRow(m, actions.onMatch) }
-                    releaseRows(shown, grab, restoreKey, restore, onFocused, actions.onRelease, actions.onGrab)
+                    releaseRows(shown, grab, remembered, actions.onRelease, actions.onGrab)
                     item(key = "more") { MoreFooter(state.loadingMore, state.moreError, hasNext, actions.onRetryMore) }
                 }
             }

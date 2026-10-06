@@ -81,6 +81,7 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.state.pollWhile
 
 /** Now/next refresh cadence while watching (drives the overlay). */
 private const val EPG_REFRESH_MS = 30_000L
@@ -199,13 +200,12 @@ fun LiveTvWatchScreen(
     }
     LaunchedEffect(serverUrl) {
         val url = serverUrl ?: return@LaunchedEffect
-        while (true) {
+        pollWhile({ EPG_REFRESH_MS }) {
             runCatching { container.apiFor(url).liveTvEpgNow(country) }
                 .onSuccess { res ->
                     epg = res.propertyEntries.associateBy { it.channelId }
                     epgReadAtMs = System.currentTimeMillis()
                 }
-            delay(EPG_REFRESH_MS)
         }
     }
 
