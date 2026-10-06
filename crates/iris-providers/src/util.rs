@@ -1,6 +1,6 @@
 use iris_config::ProviderEntry;
 use iris_core::Error;
-use iris_core::search::SearchQuery;
+use iris_core::search::{MediaKind, SearchQuery};
 
 /// Browser user agent sent by the scraping/JSON providers (some trackers
 /// sit behind a WAF that refuses non-browser agents).
@@ -71,6 +71,33 @@ pub(crate) fn scene_query(q: &SearchQuery) -> String {
         (Some(t), Some(s), Some(e)) if !t.is_empty() && e > 0 => format!("{t} S{s:02}E{e:02}"),
         (Some(t), Some(s), _) if !t.is_empty() => format!("{t} S{s:02}"),
         _ => q.q.clone(),
+    }
+}
+
+/// A scraped tracker's movie / TV category ids.
+pub(crate) struct KindCategories {
+    pub movie: &'static [u32],
+    pub tv: &'static [u32],
+}
+
+impl KindCategories {
+    pub(crate) fn kind_of(&self, id: u32) -> Option<MediaKind> {
+        if self.movie.contains(&id) {
+            Some(MediaKind::Movie)
+        } else if self.tv.contains(&id) {
+            Some(MediaKind::Tv)
+        } else {
+            None
+        }
+    }
+
+    /// The ids a search sends: the kind's own, both lists without one.
+    pub(crate) fn for_kind(&self, kind: Option<MediaKind>) -> Vec<u32> {
+        match kind {
+            Some(MediaKind::Movie) => self.movie.to_vec(),
+            Some(MediaKind::Tv) => self.tv.to_vec(),
+            None => [self.movie, self.tv].concat(),
+        }
     }
 }
 

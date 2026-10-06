@@ -54,7 +54,7 @@ use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    DescriptionFormat, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
     TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
@@ -68,7 +68,7 @@ use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, extract_year, field_or_env, field_str,
     optional_field_or_env, parse_size, scene_query,
 };
 
@@ -76,18 +76,17 @@ use crate::util::{
 /// logged-in page) carries the logout link.
 const LOGIN_OK_MARKER: &str = "/user/account/logout";
 
-/// Movie category ids: Cam, TS/TC, `DVDRip`/`DVDScreener`, `WEBRip`,
-/// `HDRip`, `BlurayRip`, DVD-R, Bluray, 4K, Boxsets, Documentaries,
-/// Foreign.
-const MOVIE_CATS: [u32; 12] = [8, 9, 11, 37, 43, 14, 12, 13, 47, 15, 29, 36];
-/// TV category ids: Episodes, Episodes HD, Boxsets, Anime, Cartoons,
-/// Foreign. Deliberately excludes 16 "Music videos" — video format but
-/// not a movie/series the catalogue can classify.
-const TV_CATS: [u32; 6] = [26, 32, 27, 34, 35, 44];
-/// `MOVIE_CATS` ++ `TV_CATS`, for un-filtered searches.
-const ALL_CATS: [u32; 18] = [
-    8, 9, 11, 37, 43, 14, 12, 13, 47, 15, 29, 36, 26, 32, 27, 34, 35, 44,
-];
+/// Category ids per kind; a search without a kind sends both lists.
+const CATEGORIES: KindCategories = KindCategories {
+    // Movie category ids: Cam, TS/TC, `DVDRip`/`DVDScreener`, `WEBRip`,
+    // `HDRip`, `BlurayRip`, DVD-R, Bluray, 4K, Boxsets, Documentaries,
+    // Foreign.
+    movie: &[8, 9, 11, 37, 43, 14, 12, 13, 47, 15, 29, 36],
+    // TV category ids: Episodes, Episodes HD, Boxsets, Anime, Cartoons,
+    // Foreign. Deliberately excludes 16 "Music videos" — video format but
+    // not a movie/series the catalogue can classify.
+    tv: &[26, 32, 27, 34, 35, 44],
+};
 
 fn category_label(id: u32) -> Option<&'static str> {
     Some(match id {
@@ -111,16 +110,6 @@ fn category_label(id: u32) -> Option<&'static str> {
         44 => "TV/Foreign",
         _ => return None,
     })
-}
-
-fn category_kind(id: u32) -> Option<MediaKind> {
-    if MOVIE_CATS.contains(&id) {
-        Some(MediaKind::Movie)
-    } else if TV_CATS.contains(&id) {
-        Some(MediaKind::Tv)
-    } else {
-        None
-    }
 }
 
 pub struct TorrentLeech {
@@ -375,11 +364,7 @@ impl TorrentLeech {
     }
 
     fn search_url(&self, q: &SearchQuery) -> Result<Url> {
-        let cats: &[u32] = match q.kind {
-            Some(MediaKind::Movie) => &MOVIE_CATS,
-            Some(MediaKind::Tv) => &TV_CATS,
-            None => &ALL_CATS,
-        };
+        let cats = CATEGORIES.for_kind(q.kind);
         let term = build_search_term(q);
         let mut url = self.base_url.clone();
         {
@@ -951,7 +936,7 @@ impl TorrentRow {
             uploader: None,
             uploaded_at: self.added_timestamp.as_deref().and_then(parse_added),
             tmdb_id: None,
-            kind: self.category_id.and_then(category_kind),
+            kind: self.category_id.and_then(|id| CATEGORIES.kind_of(id)),
             poster_url: None,
             title_match: None,
             already_in_library: false,
@@ -1009,7 +994,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use iris_core::search::{SortField, SortOrder};
+    use iris_core::search::{MediaKind, SortField, SortOrder};
 
     fn provider() -> Arc<TorrentLeech> {
         let mut fields = HashMap::new();
@@ -1096,12 +1081,12 @@ mod tests {
 
     #[test]
     fn category_mapping() {
-        assert_eq!(category_kind(47), Some(MediaKind::Movie));
-        assert_eq!(category_kind(34), Some(MediaKind::Tv));
-        assert_eq!(category_kind(44), Some(MediaKind::Tv));
+        assert_eq!(CATEGORIES.kind_of(47), Some(MediaKind::Movie));
+        assert_eq!(CATEGORIES.kind_of(34), Some(MediaKind::Tv));
+        assert_eq!(CATEGORIES.kind_of(44), Some(MediaKind::Tv));
         // Games / music / unknown ids are unclassified.
-        assert_eq!(category_kind(17), None);
-        assert_eq!(category_kind(31), None);
+        assert_eq!(CATEGORIES.kind_of(17), None);
+        assert_eq!(CATEGORIES.kind_of(31), None);
         assert_eq!(category_label(32), Some("TV/Episodes HD"));
         assert_eq!(category_label(999), None);
     }

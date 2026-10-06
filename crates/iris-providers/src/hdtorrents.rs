@@ -39,7 +39,7 @@ use iris_config::ProviderEntry;
 use iris_core::Error;
 use iris_core::Result;
 use iris_core::search::{
-    DescriptionFormat, MediaKind, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
+    DescriptionFormat, ProviderCapabilities, ProviderPage, SearchQuery, SearchResult,
     TorrentDetails, TorrentSource,
 };
 use reqwest::Client;
@@ -52,8 +52,8 @@ use crate::SearchProvider;
 use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, parse_size,
-    scene_query,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, KindCategories, extract_year, field_or_env, field_str,
+    parse_size, scene_query,
 };
 
 /// Body marker of an expired/absent session — the site answers 200 with
@@ -64,13 +64,14 @@ const NOT_AUTHORIZED_MARKER: &str = "Error:You're not authorized";
 /// refresh page). Its absence means we're still on the login form.
 const LOGIN_OK_MARKER: &str = "if your browser doesn't have javascript enabled";
 
-/// Movie category ids (UHD Blu-ray, Blu-ray, UHD Remux, Remux, 1080p/i,
-/// 720p, 2160p). Deliberately excludes 63 "Movie/Audio Track".
-const MOVIE_CATS: [u32; 7] = [70, 1, 71, 2, 5, 3, 64];
-/// TV category ids (same quality ladder as movies).
-const TV_CATS: [u32; 7] = [72, 59, 73, 60, 30, 38, 65];
-/// `MOVIE_CATS` ++ `TV_CATS`, for un-filtered searches.
-const ALL_CATS: [u32; 14] = [70, 1, 71, 2, 5, 3, 64, 72, 59, 73, 60, 30, 38, 65];
+/// Category ids per kind; a search without a kind sends both lists.
+const CATEGORIES: KindCategories = KindCategories {
+    // Movie category ids (UHD Blu-ray, Blu-ray, UHD Remux, Remux, 1080p/i,
+    // 720p, 2160p). Deliberately excludes 63 "Movie/Audio Track".
+    movie: &[70, 1, 71, 2, 5, 3, 64],
+    // TV category ids (same quality ladder as movies).
+    tv: &[72, 59, 73, 60, 30, 38, 65],
+};
 
 fn category_label(id: u32) -> Option<&'static str> {
     Some(match id {
@@ -102,16 +103,6 @@ fn category_label(id: u32) -> Option<&'static str> {
         67 => "XXX/2160p",
         _ => return None,
     })
-}
-
-fn category_kind(id: u32) -> Option<MediaKind> {
-    if MOVIE_CATS.contains(&id) {
-        Some(MediaKind::Movie)
-    } else if TV_CATS.contains(&id) {
-        Some(MediaKind::Tv)
-    } else {
-        None
-    }
 }
 
 pub struct HdTorrents {
@@ -328,11 +319,7 @@ impl HdTorrents {
             .base_url
             .join("torrents.php")
             .map_err(|e| Error::Provider(format!("hdtorrents join search url: {e}")))?;
-        let cats: &[u32] = match q.kind {
-            Some(MediaKind::Movie) => &MOVIE_CATS,
-            Some(MediaKind::Tv) => &TV_CATS,
-            None => &ALL_CATS,
-        };
+        let cats = CATEGORIES.for_kind(q.kind);
         {
             let mut qp = url.query_pairs_mut();
             for c in cats {
@@ -838,7 +825,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
             uploader: None,
             uploaded_at,
             tmdb_id: None,
-            kind: category_id.and_then(category_kind),
+            kind: category_id.and_then(|id| CATEGORIES.kind_of(id)),
             poster_url: None,
             title_match: None,
             already_in_library: false,
@@ -858,6 +845,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iris_core::search::MediaKind;
 
     /// One well-formed member-view row + the header row, shaped after the
     /// markup Prowlarr's selectors expect (12 columns: category, icon,
