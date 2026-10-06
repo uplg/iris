@@ -38,8 +38,11 @@
 </li>
 
 <style>
+	/* one column no wider than the card: a title that is one long word (a release name)
+	   would otherwise widen it to the word, the art with it */
 	.card {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: var(--s-2);
 		align-content: start;
 		min-width: 0;
@@ -71,6 +74,7 @@
 		font-weight: 600;
 		color: var(--ink);
 		text-decoration: none;
+		overflow-wrap: anywhere;
 	}
 	.name:hover {
 		text-decoration: underline;

@@ -39,6 +39,7 @@
 <style>
 	.card {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: var(--s-2);
 		align-content: start;
 		min-width: 0;
@@ -64,6 +65,7 @@
 		font-weight: 600;
 		color: var(--ink);
 		text-decoration: none;
+		overflow-wrap: anywhere;
 	}
 	.name:hover {
 		text-decoration: underline;
