@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.data
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -246,36 +247,41 @@ object AppUpdater {
     /**
      * Open the system Settings page where the user can grant
      * "Install unknown apps" for our package. Required once before
-     * [requestInstall] succeeds on Android 8+.
+     * [requestInstall] succeeds on Android 8+. Many TV builds have no per-app page: the app's
+     * own page, then the security page, are tried; false when none opened.
      */
-    fun openInstallPermissionSettings(context: Context) {
-        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Intent(
-                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                "package:${context.packageName}".toUri(),
-            )
-        } else {
-            Intent(Settings.ACTION_SECURITY_SETTINGS)
+    fun openInstallPermissionSettings(context: Context): Boolean {
+        val pkg = "package:${context.packageName}".toUri()
+        val pages = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) add(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg))
+            add(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg))
+            add(Intent(Settings.ACTION_SECURITY_SETTINGS))
         }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        return pages.any { start(context, it) }
     }
+
+    private fun start(context: Context, intent: Intent): Boolean =
+        try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        }
 
     /**
      * Hand the downloaded APK to the system package installer. The
      * URI is exported via `FileProvider` (see AndroidManifest +
      * `res/xml/file_provider_paths.xml`); the temporary read grant in
      * the intent flags is what lets the installer process actually
-     * read the file across the package boundary.
+     * read the file across the package boundary. False when the TV has no installer to open.
      */
-    fun requestInstall(context: Context, apk: File) {
+    fun requestInstall(context: Context, apk: File): Boolean {
         val authority = "${context.packageName}.fileprovider"
         val uri: Uri = FileProvider.getUriForFile(context, authority, apk)
         val install = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(install)
+        return start(context, install)
     }
 }
