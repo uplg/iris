@@ -71,6 +71,10 @@ impl StoppedAnnounce {
     }
 }
 
+fn is_http(tracker: &Url) -> bool {
+    matches!(tracker.scheme(), "http" | "https")
+}
+
 /// Tell every tracker of a torrent we're leaving the swarm. Never fails the
 /// caller: a tracker that refuses, hangs or 404s is logged and skipped.
 pub(crate) async fn announce_stopped(
@@ -79,7 +83,10 @@ pub(crate) async fn announce_stopped(
     announce: &StoppedAnnounce,
 ) {
     let infohash = hex::encode(announce.info_hash);
-    let calls = trackers.into_iter().map(|tracker| {
+    // reqwest can't speak UDP trackers (every one used to log a failed
+    // announce); those still rely on the tracker's own stale-peer sweep.
+    let http_trackers = trackers.into_iter().filter(is_http);
+    let calls = http_trackers.map(|tracker| {
         let url = announce.url_for(&tracker);
         let infohash = &infohash;
         async move {
@@ -94,7 +101,8 @@ pub(crate) async fn announce_stopped(
                 Ok(Err(e)) => tracing::warn!(
                     infohash = %infohash,
                     host = tracker.host_str().unwrap_or("?"),
-                    error = %e,
+                    // The announce URL carries the private tracker's passkey.
+                    error = %e.without_url(),
                     "stopped announce failed — the tracker may keep us listed as an active peer",
                 ),
                 Err(_) => tracing::warn!(
@@ -124,6 +132,17 @@ mod tests {
             downloaded: 34,
             left: 56,
         }
+    }
+
+    #[test]
+    fn only_http_trackers_get_a_stopped_announce() {
+        assert!(is_http(
+            &Url::parse("https://t.example/a/KEY/announce").unwrap()
+        ));
+        assert!(is_http(
+            &Url::parse("http://t.example:80/announce").unwrap()
+        ));
+        assert!(!is_http(&Url::parse("udp://open.example:1337").unwrap()));
     }
 
     #[test]
