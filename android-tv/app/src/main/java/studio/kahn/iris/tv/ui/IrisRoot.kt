@@ -45,7 +45,10 @@ import studio.kahn.iris.tv.ui.screens.SearchScreen
 import studio.kahn.iris.tv.ui.screens.SeriesScreen
 import studio.kahn.iris.tv.ui.screens.SettingsScreen
 import studio.kahn.iris.tv.ui.screens.SetupScreen
+import studio.kahn.iris.tv.ui.screens.TitleReleasesScreen
 import studio.kahn.iris.tv.ui.screens.WatchScreen
+import studio.kahn.iris.tv.ui.screens.search.SearchKind
+import studio.kahn.iris.tv.ui.screens.search.SearchSort
 import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
 import studio.kahn.iris.tv.ui.state.irisViewModel
 import studio.kahn.iris.tv.ui.theme.IrisColor
@@ -284,22 +287,29 @@ fun IrisRoot(
                 SearchScreen(
                     container = container,
                     initialQuery = route.q?.takeIf { it.isNotBlank() },
-                    autoPickTop = route.autoPlay,
-                    onPickResult = { providerId, externalId, tmdbId, kind ->
-                        navController.navigate(
-                            Routes.SearchDetail(providerId, externalId, tmdbId, kind),
-                        )
+                    autoPlay = route.autoPlay,
+                    onOpenRelease = { providerId, externalId, tmdbId, kind ->
+                        navController.navigate(Routes.SearchDetail(providerId, externalId, tmdbId, kind))
                     },
-                    onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.Watch(infohash, fileIdx))
+                    onOpenTitle = { query, tmdbId, kind, sort ->
+                        navController.navigate(Routes.SearchTitle(tmdbId, query, kind.name, sort.name))
                     },
-                    onPickTorrent = { infohash ->
-                        navController.navigate(Routes.Detail(infohash))
+                    onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
+                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
+                )
+            }
+            composable<Routes.SearchTitle> { backStackEntry ->
+                val route = backStackEntry.toRoute<Routes.SearchTitle>()
+                TitleReleasesScreen(
+                    container = container,
+                    query = route.q,
+                    tmdbId = route.tmdbId,
+                    kind = SearchKind.entries.firstOrNull { it.name == route.kind } ?: SearchKind.All,
+                    sort = SearchSort.of(route.sort),
+                    onOpenRelease = { providerId, externalId, tmdbId, kind ->
+                        navController.navigate(Routes.SearchDetail(providerId, externalId, tmdbId, kind))
                     },
-                    onPickCollection = { collectionId ->
-                        navController.navigate(Routes.Collection(collectionId))
-                    },
-                    onBack = { navController.popBackStack() },
+                    onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
                 )
             }
             composable<Routes.SearchDetail> { backStackEntry ->
@@ -310,25 +320,10 @@ fun IrisRoot(
                     externalId = route.externalId,
                     tmdbId = route.tmdbId,
                     kind = route.kind,
-                    onPickFile = { infohash, fileIdx ->
-                        navController.navigate(Routes.Watch(infohash, fileIdx)) {
-                            // Don't leave the detail screen on the back
-                            // stack — user lands at /watch and Back from
-                            // there should go to search.
-                            popUpTo<Routes.SearchDetail> { inclusive = true }
-                        }
+                    onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
+                    onOtherReleases = { title, id ->
+                        navController.navigate(Routes.SearchTitle(id, title))
                     },
-                    onOpenSeries = { followId ->
-                        navController.navigate(Routes.Series(followId)) {
-                            popUpTo<Routes.SearchDetail> { inclusive = true }
-                        }
-                    },
-                    onPickTorrent = { infohash ->
-                        navController.navigate(Routes.Detail(infohash)) {
-                            popUpTo<Routes.SearchDetail> { inclusive = true }
-                        }
-                    },
-                    onBack = { navController.popBackStack() },
                 )
             }
             composable<Routes.Series> { backStackEntry ->

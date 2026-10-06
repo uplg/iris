@@ -30,6 +30,10 @@ object Routes {
         val kind: String? = null,
     )
 
+    /** A title picked in search's Titles view: its releases for [q]. [kind] and [sort] are the search's, by name. */
+    @Serializable
+    data class SearchTitle(val tmdbId: Long, val q: String, val kind: String? = null, val sort: String? = null)
+
     @Serializable data class Series(val followId: String)
     @Serializable data class Collection(val collectionId: String)
     @Serializable data class Watch(val infohash: String, val fileIdx: Int)

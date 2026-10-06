@@ -9,16 +9,15 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
- * How the search results are laid out. [GRID] is the poster wall;
- * [LIST] is a dense row layout that shows the full release title at a
- * glance. Persisted so the user picks it once instead of every visit.
+ * How the search results are laid out (web `search/view.ts`): [TITLES] the
+ * TMDB titles the words could mean (the default), [GRID] a poster per
+ * release, [LIST] a row per release with its full name. Kept per device.
  */
-enum class SearchViewMode { GRID, LIST }
+enum class SearchViewMode { TITLES, GRID, LIST }
 
 private val Context.prefsDataStore by preferencesDataStore("iris_prefs")
 
 private val KEY_SEARCH_VIEW_MODE = stringPreferencesKey("search_view_mode")
-
 
 /**
  * Small client-side UI preferences — NOT session / auth state (that's
@@ -28,13 +27,9 @@ private val KEY_SEARCH_VIEW_MODE = stringPreferencesKey("search_view_mode")
 class PrefsStore(private val context: Context) {
     val searchViewMode: Flow<SearchViewMode> = context.prefsDataStore.data
         .map { prefs: Preferences ->
-            // Unknown / missing → GRID (the original behaviour), so a
-            // future enum value written by a newer build degrades
-            // gracefully on an older APK instead of crashing.
-            when (prefs[KEY_SEARCH_VIEW_MODE]) {
-                SearchViewMode.LIST.name -> SearchViewMode.LIST
-                else -> SearchViewMode.GRID
-            }
+            // Unknown or missing reads as TITLES: a value written by a newer
+            // build degrades instead of crashing.
+            SearchViewMode.entries.firstOrNull { it.name == prefs[KEY_SEARCH_VIEW_MODE] } ?: SearchViewMode.TITLES
         }
 
     suspend fun setSearchViewMode(mode: SearchViewMode) {
