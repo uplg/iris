@@ -279,11 +279,11 @@
 						{/if}
 					</div>
 				{:else if effective === 'grid'}
-					<ul class="poster-grid">
+					<ul class="poster-grid releases">
 						{#each shown as r (releaseKey(r))}<ReleaseCard {r} />{/each}
 					</ul>
 				{:else}
-					<ul class="plain-list">
+					<ul class="plain-list releases">
 						{#each shown as r (releaseKey(r))}<ReleaseRow {r} />{/each}
 					</ul>
 				{/if}
@@ -334,5 +334,21 @@
 	.more {
 		justify-self: center;
 		min-height: var(--control-h);
+	}
+	/* pages of results add up: cards and rows out of view are neither laid out nor painted,
+	   their place kept (as in the library). The containment clips paint to the item, so its
+	   padding holds the art's outline and the margin gives the room back */
+	.releases > :global(li) {
+		content-visibility: auto;
+	}
+	.poster-grid.releases > :global(li) {
+		contain-intrinsic-size: auto 22rem;
+		padding: var(--s-2);
+		margin: calc(var(--s-2) * -1);
+	}
+	.plain-list.releases > :global(li) {
+		contain-intrinsic-size: auto 8rem;
+		padding-inline: var(--s-2);
+		margin-inline: calc(var(--s-2) * -1);
 	}
 </style>
