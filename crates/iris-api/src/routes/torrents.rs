@@ -214,10 +214,7 @@ pub(crate) async fn put_progress(
     headers: HeaderMap,
     Json(body): Json<ProgressUpdate>,
 ) -> ApiResult<StatusCode> {
-    let infohash = infohash.to_ascii_lowercase();
-    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ApiError::BadRequest("invalid infohash".into()));
-    }
+    let infohash = hex_infohash(&infohash)?;
     let file_idx = file_idx_to_i64(idx);
     let position_seconds = body.position_seconds.max(0.0);
 
@@ -464,9 +461,7 @@ pub(crate) async fn regrab(
     user: AuthUser,
     Path(infohash): Path<String>,
 ) -> ApiResult<Json<IngestResponse>> {
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(&state, &infohash.to_ascii_lowercase()).await?;
     let (Some(provider_id), Some(external_id)) = (row.source_provider, row.source_external_id)
     else {
         return Err(ApiError::BadRequest(
@@ -754,27 +749,7 @@ async fn prewarm_default_remux(state: &AppState, infohash: &str) {
             let largest_video = snap
                 .files
                 .iter()
-                .filter(|f| {
-                    let p = std::path::Path::new(&f.path);
-                    matches!(
-                        p.extension()
-                            .and_then(|e| e.to_str())
-                            .map(str::to_ascii_lowercase)
-                            .as_deref(),
-                        Some(
-                            "mkv"
-                                | "mp4"
-                                | "webm"
-                                | "m4v"
-                                | "avi"
-                                | "mov"
-                                | "ts"
-                                | "mts"
-                                | "m2ts"
-                                | "wmv"
-                        )
-                    )
-                })
+                .filter(|f| iris_torrent::is_video_path(&f.path))
                 .max_by_key(|f| f.size_bytes)
                 .map(|f| f.index);
             if let Some(idx) = largest_video {
@@ -1121,9 +1096,7 @@ pub(crate) async fn get_one(
     user: AuthUser,
     Path(infohash): Path<String>,
 ) -> ApiResult<Json<TorrentView>> {
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(&state, &infohash.to_ascii_lowercase()).await?;
     TorrentView::live(&state, &user, row)
         .map(Json)
         .ok_or(ApiError::NotFound)
@@ -1196,9 +1169,7 @@ async fn owned_row(
     user: &AuthUser,
     infohash: &str,
 ) -> ApiResult<iris_db::torrents::TorrentRow> {
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(state, &infohash.to_ascii_lowercase()).await?;
     if !may_delete(user, row.added_by) {
         return Err(ApiError::Forbidden);
     }
@@ -1282,9 +1253,7 @@ pub(crate) async fn probe_file(
     Path((infohash, idx)): Path<(String, usize)>,
 ) -> ApiResult<Json<iris_media::MediaProbe>> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(&state, &infohash).await?;
     let path = state
         .engine()
         .file_path(&infohash, idx)
@@ -1309,51 +1278,10 @@ pub(crate) async fn probe_file(
         && !torrent_finished
         && let Some(file) = snap.files.iter().find(|f| f.index == idx)
     {
-        let header_count: u64 = 1 << 16; // 64 KiB
-        let tail_count: u64 = 1 << 20; // 1 MiB
-        let tail_start = file.size_bytes.saturating_sub(tail_count);
-        let engine = state.engine().clone();
-        let ih = infohash.clone();
-        let header = engine.prefetch_range(&ih, idx, 0, header_count, Duration::from_secs(30));
-        let tail = engine.prefetch_range(&ih, idx, tail_start, tail_count, Duration::from_secs(30));
-        let (h, t) = tokio::join!(header, tail);
-        match h {
-            Ok(n) => header_bytes = n,
-            Err(e) => tracing::debug!(error = %e, "probe: header prefetch errored"),
-        }
-        if let Err(e) = t {
-            tracing::debug!(error = %e, "probe: tail prefetch errored");
-        }
+        header_bytes =
+            prefetch_probe_ranges(&state, &infohash, idx, file.size_bytes, "probe").await;
     }
-
-    // Stalled-swarm guard. If after the prefetch window we still couldn't
-    // pull a single header byte AND the torrent isn't finished AND the
-    // swarm is dead (no peers, no throughput), there's nothing to read and
-    // won't be until a seeder reappears. Returning the retryable
-    // "file not yet on disk" here spins the client on
-    // "Reading media metadata…" until its retry budget runs out — with no
-    // hint *why*. Surface a distinct, non-retryable error that does NOT
-    // carry the poll tokens, so the UI can say "no seeders" and stop.
-    if !torrent_finished
-        && header_bytes == 0
-        && let Some(s) = state.engine().get_by_infohash(&infohash)
-        && !s.finished
-        && s.peers == 0
-        && s.download_speed_bps == 0
-    {
-        return Err(ApiError::Conflict(format!(
-            "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
-                     nothing to read yet",
-            s.progress_pct
-        )));
-    }
-
-    if !path.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "file not yet on disk: {}",
-            path.display()
-        )));
-    }
+    ensure_probe_readable(&state, &infohash, &path, torrent_finished, header_bytes)?;
     let probe = state
         .probes()
         .get_or_probe(&infohash, idx, &path, torrent_finished)
@@ -1383,13 +1311,8 @@ pub(crate) async fn manifest_json(
     _user: AuthUser,
     Path((infohash, idx)): Path<(String, usize)>,
 ) -> ApiResult<Json<iris_media::Manifest>> {
-    let infohash = infohash.to_ascii_lowercase();
-    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ApiError::BadRequest("invalid infohash".into()));
-    }
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let infohash = hex_infohash(&infohash)?;
+    let row = torrent_or_404(&state, &infohash).await?;
 
     let snapshot = state
         .engine()
@@ -1411,66 +1334,12 @@ pub(crate) async fn manifest_json(
     // wrongly answered "stalled: no seeders" and probed as incomplete.
     let torrent_finished = row.finished_at.is_some() || snapshot.finished;
 
-    // Phase 1: probe partial downloads by pre-fetching the byte ranges
-    // ffprobe needs (first 8 KiB for any container header, last 1 MiB for
-    // MKV Cues / MP4 trailing `moov` / AVI `idx1`). librqbit downloads
-    // those pieces to the sparse file on disk, then ffprobe reads real
-    // bytes instead of zero-pad. 30s timeout covers the common slow-
-    // tracker case; if we time out we still try the probe (it might
-    // succeed on the pieces we got, or fail with a useful error).
-    let mut header_bytes: u64 = 0;
-    if !torrent_finished {
-        let header_count: u64 = 1 << 16; // 64 KiB — generous for any container header
-        let tail_count: u64 = 1 << 20; // 1 MiB
-        let tail_start = file.size_bytes.saturating_sub(tail_count);
-        let engine = state.engine().clone();
-        let infohash_for_prefetch = infohash.clone();
-        let header = engine.prefetch_range(
-            &infohash_for_prefetch,
-            idx,
-            0,
-            header_count,
-            Duration::from_secs(30),
-        );
-        let tail = engine.prefetch_range(
-            &infohash_for_prefetch,
-            idx,
-            tail_start,
-            tail_count,
-            Duration::from_secs(30),
-        );
-        let (h, t) = tokio::join!(header, tail);
-        match h {
-            Ok(n) => header_bytes = n,
-            Err(e) => tracing::debug!(error = %e, "manifest: header prefetch errored"),
-        }
-        if let Err(e) = t {
-            tracing::debug!(error = %e, "manifest: tail prefetch errored");
-        }
-    }
-
-    // Stalled-swarm guard — same rationale as `probe_file`: a dead torrent
-    // (no peers, no throughput, head still unreadable) must surface a
-    // distinct non-retryable error instead of an endless not-ready poll.
-    if !torrent_finished
-        && header_bytes == 0
-        && let Some(s) = state.engine().get_by_infohash(&infohash)
-        && !s.finished
-        && s.peers == 0
-        && s.download_speed_bps == 0
-    {
-        return Err(ApiError::Conflict(format!(
-            "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
-                     nothing to read yet",
-            s.progress_pct
-        )));
-    }
-    if !path.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "file not yet on disk: {}",
-            path.display()
-        )));
-    }
+    let header_bytes = if torrent_finished {
+        0
+    } else {
+        prefetch_probe_ranges(&state, &infohash, idx, file.size_bytes, "manifest").await
+    };
+    ensure_probe_readable(&state, &infohash, &path, torrent_finished, header_bytes)?;
 
     let probe = state
         .probes()
@@ -1578,10 +1447,7 @@ pub(crate) async fn seek_hint(
     Path((infohash, idx)): Path<(String, usize)>,
     Json(body): Json<SeekHint>,
 ) -> ApiResult<StatusCode> {
-    let infohash = infohash.to_ascii_lowercase();
-    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ApiError::BadRequest("invalid infohash".into()));
-    }
+    let infohash = hex_infohash(&infohash)?;
     tracing::debug!(
         infohash,
         file_idx = idx,
@@ -1699,10 +1565,7 @@ pub(crate) async fn playback_error(
     Path((infohash, idx)): Path<(String, usize)>,
     Json(body): Json<PlaybackErrorBody>,
 ) -> ApiResult<Json<PlaybackErrorResponse>> {
-    let infohash = infohash.to_ascii_lowercase();
-    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ApiError::BadRequest("invalid infohash".into()));
-    }
+    let infohash = hex_infohash(&infohash)?;
     tracing::warn!(
         infohash,
         file_idx = idx,
@@ -1826,15 +1689,9 @@ pub(crate) async fn play_status(
     // request extension") on every header-less request — i.e. it breaks the
     // web client. Pull it defensively and fall back to default caps (no
     // transcode), exactly like `play_asset` does. We never break a client.
-    let caps = req
-        .extensions()
-        .get::<crate::middleware::IrisCaps>()
-        .map(|c| c.0.clone())
-        .unwrap_or_default();
+    let caps = crate::middleware::IrisCaps::of(&req);
     let infohash = infohash.to_ascii_lowercase();
-    iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    torrent_or_404(&state, &infohash).await?;
     let path = state
         .engine()
         .file_path(&infohash, idx)
@@ -2071,9 +1928,7 @@ async fn serve_subtitle(
     format: iris_media::SubtitleFormat,
 ) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(state, &infohash).await?;
     let path = state
         .engine()
         .file_path(&infohash, idx)
@@ -2085,11 +1940,7 @@ async fn serve_subtitle(
     // DB stamp first — the snapshot can't answer "finished" during the
     // post-deploy re-check, and `torrent_finished` gates whether the
     // extracted subtitle may be promoted to the permanent cache.
-    let torrent_finished = row.finished_at.is_some()
-        || state
-            .engine()
-            .get_by_infohash(&infohash)
-            .is_some_and(|s| s.finished);
+    let torrent_finished = torrent_finished(state, &row);
 
     let cache_dir = state.cfg().storage.data_dir.join("subs");
     let cache_path =
@@ -2144,9 +1995,7 @@ pub(crate) async fn stream_file(
     req: Request<Body>,
 ) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(&state, &infohash).await?;
 
     // Fully-downloaded torrents stream straight from disk. The bytes are
     // final, so playback must not depend on librqbit's session state:
@@ -2155,11 +2004,7 @@ pub(crate) async fn stream_file(
     // "invalid state: initializing" for minutes — even though the file
     // is perfectly readable. The FileStream path below is only needed
     // while pieces may still be missing (its reads wait for them).
-    let finished = row.finished_at.is_some()
-        || state
-            .engine()
-            .get_by_infohash(&infohash)
-            .is_some_and(|s| s.finished);
+    let finished = torrent_finished(&state, &row);
     if finished
         && let Ok(path) = state.engine().file_path(&infohash, idx)
         && tokio::fs::try_exists(&path).await.unwrap_or(false)
@@ -2175,13 +2020,7 @@ pub(crate) async fn stream_file(
         .engine()
         .open_stream(&infohash, idx)
         .await
-        .map_err(|e| match e {
-            iris_torrent::EngineError::NotFound => ApiError::NotFound,
-            iris_torrent::EngineError::FileOutOfRange => {
-                ApiError::BadRequest("file index out of range".into())
-            }
-            iris_torrent::EngineError::Librqbit(e) => ApiError::Internal(e),
-        })?;
+        .map_err(map_engine_err)?;
 
     // Best-effort: bump the played timestamp.
     let _ = iris_db::torrents::touch_played(state.db(), &infohash).await;
@@ -2219,13 +2058,7 @@ pub(crate) async fn stream_file(
             .body(body)
             .unwrap());
         }
-        let mut resp = Response::new(Body::from("invalid range"));
-        *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
-        resp.headers_mut().insert(
-            header::CONTENT_RANGE,
-            HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
-        );
-        return Ok(resp);
+        return Ok(range_not_satisfiable("invalid range", total));
     }
 
     if head_only {
@@ -2271,9 +2104,7 @@ pub(crate) async fn play_asset(
     req: Request<Body>,
 ) -> ApiResult<Response> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = torrent_or_404(&state, &infohash).await?;
 
     let path = state
         .engine()
@@ -2287,12 +2118,7 @@ pub(crate) async fn play_asset(
     // `finished_at` is the opposite case (grab so fresh the engine
     // hasn't registered it yet) and must count as still downloading,
     // not fall through to probing a zero-filled preallocation.
-    if row.finished_at.is_none()
-        && state
-            .engine()
-            .get_by_infohash(&infohash)
-            .is_none_or(|s| !s.finished)
-    {
+    if !torrent_finished(&state, &row) {
         return Err(ApiError::BadRequest(
             "torrent still downloading — wait until it's complete to play".into(),
         ));
@@ -2309,11 +2135,7 @@ pub(crate) async fn play_asset(
     // computed for EVERY asset request, not just the master, so the segment
     // requests that follow resolve the SAME suffixed cache dir. The probe is
     // cached, so this stays cheap after the first hit.
-    let caps = req
-        .extensions()
-        .get::<crate::middleware::IrisCaps>()
-        .map(|c| c.0.clone())
-        .unwrap_or_default();
+    let caps = crate::middleware::IrisCaps::of(&req);
     // `play_asset` already rejected unfinished torrents above, so the remux
     // always probes a complete file.
     let probe = state
@@ -2447,13 +2269,7 @@ async fn serve_file_with_range(
                     .unwrap_or(actual);
             }
             if start >= actual {
-                let mut resp = Response::new(Body::from("range past current EOF"));
-                *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
-                resp.headers_mut().insert(
-                    header::CONTENT_RANGE,
-                    HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
-                );
-                return Ok(resp);
+                return Ok(range_not_satisfiable("range past current EOF", total));
             }
             // Clip the response to what's actually written. The player
             // will issue a follow-up range for the remaining bytes once
@@ -2486,13 +2302,7 @@ async fn serve_file_with_range(
             .body(body)
             .unwrap());
         }
-        let mut resp = Response::new(Body::from("invalid range"));
-        *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
-        resp.headers_mut().insert(
-            header::CONTENT_RANGE,
-            HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
-        );
-        return Ok(resp);
+        return Ok(range_not_satisfiable("invalid range", total));
     }
 
     if head_only {
@@ -2646,6 +2456,116 @@ fn map_provider_err(e: iris_core::Error) -> ApiError {
         iris_core::Error::InvalidInput(m) => ApiError::BadRequest(m),
         other => ApiError::Internal(anyhow::anyhow!(other)),
     }
+}
+
+/// Probe a partial download by pre-fetching the byte ranges ffprobe needs:
+/// the first 64 KiB (any container header) and the last 1 MiB (MKV Cues,
+/// MP4 trailing `moov`, AVI `idx1`). librqbit writes those pieces to the
+/// sparse file, so ffprobe reads real bytes instead of zero-pad.
+/// `prefetch_range`'s sequential priority is per-stream and transient, so
+/// this never slows the other torrents. A 30 s timeout covers a slow swarm;
+/// on timeout the probe still runs on what arrived. Returns the header
+/// bytes fetched (the stalled-swarm signal).
+async fn prefetch_probe_ranges(
+    state: &AppState,
+    infohash: &str,
+    idx: usize,
+    size_bytes: u64,
+    route: &'static str,
+) -> u64 {
+    const HEADER_BYTES: u64 = 1 << 16;
+    const TAIL_BYTES: u64 = 1 << 20;
+    const TIMEOUT: Duration = Duration::from_secs(30);
+    let engine = state.engine();
+    let tail_start = size_bytes.saturating_sub(TAIL_BYTES);
+    let (h, t) = tokio::join!(
+        engine.prefetch_range(infohash, idx, 0, HEADER_BYTES, TIMEOUT),
+        engine.prefetch_range(infohash, idx, tail_start, TAIL_BYTES, TIMEOUT),
+    );
+    if let Err(e) = t {
+        tracing::debug!(error = %e, route, "tail prefetch errored");
+    }
+    h.unwrap_or_else(|e| {
+        tracing::debug!(error = %e, route, "header prefetch errored");
+        0
+    })
+}
+
+/// Refuse to probe what can't be read yet. Stalled swarm first: when the
+/// prefetch couldn't pull a single header byte of an unfinished torrent
+/// whose swarm is dead (no peers, no throughput), the retryable "not yet on
+/// disk" would spin the client on "Reading media metadata…" with no hint
+/// why — so a distinct, non-retryable `409` without the poll tokens lets
+/// the UI say "no seeders" and stop.
+fn ensure_probe_readable(
+    state: &AppState,
+    infohash: &str,
+    path: &std::path::Path,
+    torrent_finished: bool,
+    header_bytes: u64,
+) -> ApiResult<()> {
+    if !torrent_finished
+        && header_bytes == 0
+        && let Some(s) = state.engine().get_by_infohash(infohash)
+        && !s.finished
+        && s.peers == 0
+        && s.download_speed_bps == 0
+    {
+        return Err(ApiError::Conflict(format!(
+            "stalled: no seeders for this file ({:.0}% downloaded, 0 peers, 0 B/s) — \
+                     nothing to read yet",
+            s.progress_pct
+        )));
+    }
+    if !path.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "file not yet on disk: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// `416` with the `bytes */{total}` the RFC asks for.
+fn range_not_satisfiable(msg: &'static str, total: u64) -> Response {
+    let mut resp = Response::new(Body::from(msg));
+    *resp.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+    resp.headers_mut().insert(
+        header::CONTENT_RANGE,
+        HeaderValue::from_str(&format!("bytes */{total}")).unwrap(),
+    );
+    resp
+}
+
+/// Bytes on disk are final: the DB stamp first, since during the post-deploy
+/// `initializing` re-check the snapshot reports `finished = false` for
+/// fully-downloaded torrents; a missing snapshot without the stamp (a grab
+/// the engine hasn't registered yet) is still downloading.
+fn torrent_finished(state: &AppState, row: &iris_db::torrents::TorrentRow) -> bool {
+    row.finished_at.is_some()
+        || state
+            .engine()
+            .get_by_infohash(&row.infohash)
+            .is_some_and(|s| s.finished)
+}
+
+/// The torrent row for an (already lowercased) infohash, or 404.
+pub(crate) async fn torrent_or_404(
+    state: &AppState,
+    infohash: &str,
+) -> ApiResult<iris_db::torrents::TorrentRow> {
+    iris_db::torrents::find_by_infohash(state.db(), infohash)
+        .await?
+        .ok_or(ApiError::NotFound)
+}
+
+/// A path infohash lowercased, refused unless it is hex.
+fn hex_infohash(infohash: &str) -> ApiResult<String> {
+    let infohash = infohash.to_ascii_lowercase();
+    if !infohash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::BadRequest("invalid infohash".into()));
+    }
+    Ok(infohash)
 }
 
 #[cfg(test)]

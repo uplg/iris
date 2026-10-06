@@ -817,9 +817,7 @@ pub(crate) async fn diagnose_tmdb(
     Path(infohash): Path<String>,
 ) -> ApiResult<Json<TmdbDiagnose>> {
     let infohash = infohash.to_ascii_lowercase();
-    let row = iris_db::torrents::find_by_infohash(state.db(), &infohash)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+    let row = crate::routes::torrents::torrent_or_404(&state, &infohash).await?;
 
     let collection_tmdb_id = match row.collection_id {
         Some(cid) => iris_db::collections::get(state.db(), cid)
