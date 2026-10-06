@@ -49,6 +49,30 @@ pub async fn get(
     .await
 }
 
+/// The `(infohash, file_idx)` pairs among `infohashes` the user has
+/// finished, in one query — the episode lists' "watched" ticks.
+pub async fn completed_files(
+    pool: &SqlitePool,
+    user_id: UserId,
+    infohashes: &[&str],
+) -> Result<std::collections::HashSet<(String, i64)>, sqlx::Error> {
+    if infohashes.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let user: Uuid = user_id.into();
+    let list = serde_json::to_string(infohashes).map_err(|e| sqlx::Error::Encode(e.into()))?;
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT infohash, file_idx FROM playback_progress \
+         WHERE user_id = ?1 AND completed = 1 \
+           AND infohash IN (SELECT value FROM json_each(?2))",
+    )
+    .bind(user)
+    .bind(list)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 pub async fn list_for_torrent(
     pool: &SqlitePool,
     user_id: UserId,
@@ -846,6 +870,34 @@ mod tests {
             subtitle_track_idx: None,
             completed,
         }
+    }
+
+    #[tokio::test]
+    async fn completed_files_lists_only_the_users_finished_files() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let other = crate::test_support::make_named_user(&pool, "Other").await;
+        let done = make_torrent(&pool, user, "Done").await;
+        let halfway = make_torrent(&pool, user, "Halfway").await;
+        let elsewhere = make_torrent(&pool, user, "Elsewhere").await;
+        upsert(&pool, progress(user, done.infohash.clone(), true))
+            .await
+            .unwrap();
+        upsert(&pool, progress(user, halfway.infohash.clone(), false))
+            .await
+            .unwrap();
+        upsert(&pool, progress(user, elsewhere.infohash.clone(), true))
+            .await
+            .unwrap();
+        upsert(&pool, progress(other, halfway.infohash.clone(), true))
+            .await
+            .unwrap();
+
+        let got = completed_files(&pool, user, &[&done.infohash, &halfway.infohash])
+            .await
+            .unwrap();
+        assert_eq!(got, [(done.infohash.clone(), 0)].into_iter().collect());
+        assert!(completed_files(&pool, user, &[]).await.unwrap().is_empty());
     }
 
     /// Watch-order shapes at the SQL level: only `(s, e+1)` and `(s+1, 1)`

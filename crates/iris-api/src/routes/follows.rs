@@ -312,16 +312,19 @@ pub(crate) async fn episodes(
     // status is the higher-signal answer.
     let mut by_key: BTreeMap<(i64, i64), EpisodeItem> = BTreeMap::new();
 
+    let mut infohashes: Vec<&str> = downloaded.iter().map(|d| d.infohash.as_str()).collect();
+    infohashes.sort_unstable();
+    infohashes.dedup();
+    let completed = iris_db::playback::completed_files(state.db(), user.id, &infohashes)
+        .await
+        .unwrap_or_default();
     for d in &downloaded {
         if let Some(s) = q.season
             && d.season != i64::from(s)
         {
             continue;
         }
-        let watched = iris_db::playback::get(state.db(), user.id, &d.infohash, d.file_idx)
-            .await
-            .unwrap_or(None)
-            .is_some_and(|p| p.completed);
+        let watched = completed.contains(&(d.infohash.clone(), d.file_idx));
         by_key.insert(
             (d.season, d.episode),
             EpisodeItem {
@@ -510,18 +513,18 @@ pub(crate) async fn episode_context(
     // 3. Finally, fall back to file_idx+1 in the same torrent so
     //    season packs with no follow / collection-context still
     //    surface a "next" button.
-    let next_collection = if let Some(n) = normalized {
-        let same_season = (current_row.season, current_row.episode + 1);
-        let by_same_season = lookup_next_episode(state.db(), follow.as_ref(), n, same_season).await;
-        if by_same_season.is_some() {
-            by_same_season
-        } else {
-            let next_season = (current_row.season + 1, 1);
-            lookup_next_episode(state.db(), follow.as_ref(), n, next_season).await
-        }
-    } else {
-        None
+    let series = match normalized {
+        Some(n) => Some(SeriesEpisodes::load(state.db(), n, follow.is_some()).await),
+        None => None,
     };
+    let next_collection = series.as_ref().and_then(|s| {
+        lookup_next_episode(
+            s,
+            follow.as_ref(),
+            (current_row.season, current_row.episode + 1),
+        )
+        .or_else(|| lookup_next_episode(s, follow.as_ref(), (current_row.season + 1, 1)))
+    });
     let next = match next_collection {
         Some(ep) => Some(ep),
         None => same_torrent_next(state.db(), &p.infohash, p.file_idx + 1).await?,
@@ -529,33 +532,28 @@ pub(crate) async fn episode_context(
 
     // Symmetric previous-episode lookup. (S, E-1), then the last
     // episode of S-1, then same-torrent file_idx-1.
-    let prev_collection = if let Some(n) = normalized {
+    let prev_collection = series.as_ref().and_then(|s| {
         if current_row.episode > 1 {
-            let same_season = (current_row.season, current_row.episode - 1);
-            lookup_next_episode(state.db(), follow.as_ref(), n, same_season).await
+            lookup_next_episode(
+                s,
+                follow.as_ref(),
+                (current_row.season, current_row.episode - 1),
+            )
         } else if current_row.season > 1 {
             // Find the highest-numbered episode of the previous
             // season so the chip can land the user there.
             let prev_season = current_row.season - 1;
-            let last_ep = iris_db::episode_files::list_for_normalized(state.db(), n)
-                .await
-                .unwrap_or_default()
-                .into_iter()
+            let last_ep = s
+                .on_disk
+                .iter()
                 .filter(|r| r.season == prev_season)
                 .map(|r| r.episode)
-                .max();
-            match last_ep {
-                Some(ep) => {
-                    lookup_next_episode(state.db(), follow.as_ref(), n, (prev_season, ep)).await
-                }
-                None => None,
-            }
+                .max()?;
+            lookup_next_episode(s, follow.as_ref(), (prev_season, last_ep))
         } else {
             None
         }
-    } else {
-        None
-    };
+    });
     let prev = match prev_collection {
         Some(ep) => Some(ep),
         None if p.file_idx > 0 => {
@@ -601,16 +599,37 @@ async fn name_episodes(
 /// `None` when neither layer knows about it. `available` is only
 /// surfaced when the user actually follows the series — without a
 /// follow they have no `/grab` endpoint to call anyway.
-async fn lookup_next_episode(
-    pool: &iris_db::SqlitePool,
+/// A series' episodes on disk and, when followed, its cached offers: read
+/// once per [`episode_context`] call, then looked up per neighbour.
+struct SeriesEpisodes {
+    on_disk: Vec<iris_db::episode_files::EpisodeFileRow>,
+    available: Vec<iris_db::available_episodes::AvailableEpisodeRow>,
+}
+
+impl SeriesEpisodes {
+    async fn load(pool: &iris_db::SqlitePool, normalized_name: &str, followed: bool) -> Self {
+        let on_disk = iris_db::episode_files::list_for_normalized(pool, normalized_name)
+            .await
+            .unwrap_or_default();
+        let available = if followed {
+            iris_db::available_episodes::list_best_for_series(pool, normalized_name)
+                .await
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Self { on_disk, available }
+    }
+}
+
+fn lookup_next_episode(
+    series: &SeriesEpisodes,
     follow: Option<&iris_db::follows::FollowRow>,
-    normalized_name: &str,
     (season, episode): (i64, i64),
 ) -> Option<EpisodePoint> {
-    let on_disk = iris_db::episode_files::list_for_normalized(pool, normalized_name)
-        .await
-        .unwrap_or_default()
-        .into_iter()
+    let on_disk = series
+        .on_disk
+        .iter()
         .find(|r| r.season == season && r.episode == episode);
     if let Some(row) = on_disk {
         return Some(EpisodePoint {
@@ -618,16 +637,14 @@ async fn lookup_next_episode(
             season,
             episode,
             status: EpisodeStatus::Downloaded,
-            infohash: Some(row.infohash),
+            infohash: Some(row.infohash.clone()),
             file_idx: Some(row.file_idx),
             name: None,
         });
     }
     let follow = follow?;
-    let avail = iris_db::available_episodes::list_best_for_series(pool, normalized_name)
-        .await
-        .unwrap_or_default();
-    if avail
+    if series
+        .available
         .iter()
         .any(|a| a.season == season && a.episode == episode)
     {
@@ -913,11 +930,19 @@ pub(crate) async fn dominant_owned_language(state: &AppState, normalized_name: &
         .await
         .unwrap_or_default();
     let mut counts = (0u32, 0u32, 0u32);
+    // Each file counts (a pack weighs its episodes), but each torrent is
+    // looked up once.
+    let mut by_torrent: std::collections::HashMap<&str, Language> =
+        std::collections::HashMap::new();
     for f in &files {
-        tally(
-            &mut counts,
-            resolve_owned_language(state, &f.infohash).await,
-        );
+        let lang = if let Some(lang) = by_torrent.get(f.infohash.as_str()) {
+            *lang
+        } else {
+            let lang = resolve_owned_language(state, &f.infohash).await;
+            by_torrent.insert(&f.infohash, lang);
+            lang
+        };
+        tally(&mut counts, lang);
     }
     if counts == (0, 0, 0) {
         // Nothing on disk (typically a garbage-collected series) — fall
