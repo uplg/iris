@@ -3,24 +3,22 @@
 // subtitle picks ride along, restored from the saved progress first so the first heartbeat
 // never clobbers them with nothing.
 
-import { progress as progressApi, type ProgressView } from '@iris/api/client';
+import { progress as progressApi, type ProgressBody as Body, type ProgressView } from '@iris/api/client';
 import { heartbeatDue, isWatched } from './tier.ts';
-
-type Body = Parameters<typeof progressApi.put>[2];
 
 export interface ProgressDeps {
 	put: (infohash: string, fileIdx: number, body: Body) => Promise<unknown>;
-	/** The unload path: `navigator.sendBeacon`, else a keepalive fetch. */
-	beacon: (url: string, body: string) => void;
+	/** The unload path: `navigator.sendBeacon`, else the client's keepalive save. */
+	beacon: (infohash: string, fileIdx: number, body: Body) => void;
 }
 
 const browserDeps: ProgressDeps = {
 	put: (h, i, b) => progressApi.put(h, i, b),
-	beacon: (url, body) => {
+	beacon: (h, i, b) => {
 		if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-			navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
+			navigator.sendBeacon(progressApi.beaconUrl(h, i), new Blob([JSON.stringify(b)], { type: 'application/json' }));
 		} else {
-			void fetch(url, { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+			void progressApi.putOnLeave(h, i, b).catch(() => undefined);
 		}
 	}
 };
@@ -108,16 +106,13 @@ export class ProgressSaver {
 		const t = this.lastTime;
 		if (t <= 0 || t === this.lastSaved) return;
 		this.lastSaved = t;
-		this.deps.beacon(
-			`/api/torrents/${this.infohash}/files/${this.fileIdx}/progress`,
-			JSON.stringify({
-				position_seconds: t,
-				duration_seconds: this.duration,
-				audio_track_idx: this.audioIdx,
-				subtitle_track_idx: this.subtitleIdx,
-				completed: isWatched(t, this.duration),
-				seek: this.seekPending
-			})
-		);
+		this.deps.beacon(this.infohash, this.fileIdx, {
+			position_seconds: t,
+			duration_seconds: this.duration,
+			audio_track_idx: this.audioIdx,
+			subtitle_track_idx: this.subtitleIdx,
+			completed: isWatched(t, this.duration),
+			seek: this.seekPending
+		});
 	}
 }

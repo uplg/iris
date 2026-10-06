@@ -6,7 +6,7 @@
 	import { me, type PlaybackPrefs } from '@iris/api/client';
 	import { normalizeLang } from '@iris/core/subs/pick-subtitle';
 	import { loadable, queryClient } from '#lib/query.ts';
-	import { KEYS, read } from '#lib/queries.ts';
+	import { playbackPrefsSaved, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture } from '#lib/gesture.svelte.ts';
 	import Group from '#lib/components/Group.svelte';
@@ -50,7 +50,7 @@
 		return g.run(
 			() => me.savePlaybackPreferences(body),
 			async () => {
-				await prefs.refetch();
+				await playbackPrefsSaved(null);
 				ui.say(field === 'audio_language' ? 'Audio language saved.' : 'Subtitle language saved.');
 			},
 			field

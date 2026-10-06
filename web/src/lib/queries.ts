@@ -9,6 +9,7 @@ import {
 	library,
 	me,
 	metadata,
+	torrents,
 	type CollectionListItem,
 	type LibraryResponse,
 	type MediaKind,
@@ -22,6 +23,8 @@ export const KEYS = {
 	torrents: ['library', 'torrents'],
 	collection: (id: string) => ['collection', id] as const,
 	progress: (infohash: string) => ['torrent-progress', infohash] as const,
+	torrent: (infohash: string) => ['torrent', infohash] as const,
+	episodeContext: (infohash: string, fileIdx: number) => ['episode-context', infohash, fileIdx] as const,
 	summary: ['me', 'summary'],
 	continueWatching: ['continue-watching'],
 	watchlist: ['watchlist'],
@@ -37,6 +40,7 @@ export const KEYS = {
 	preferences: ['preferences'],
 	genres: ['genres'],
 	languages: ['languages'],
+	playbackPrefsAll: ['playback-prefs'],
 	playbackPrefs: (collectionId: string | null) => ['playback-prefs', collectionId] as const,
 	tmdb: (id: number | null, kind: MediaKind | null) => ['tmdb', id, kind] as const
 } as const;
@@ -72,6 +76,18 @@ export const read = {
 		queryFn: me.summary,
 		refetchInterval: (q: { state: { data?: { downloading: number } } }) => ((q.state.data?.downloading ?? 0) > 0 ? FAST : SLOW)
 	}),
+	/** One release, live: quick while it fetches data, slow once it only shares. */
+	torrent: (infohash: string) => ({
+		queryKey: KEYS.torrent(infohash),
+		queryFn: () => torrents.get(infohash),
+		refetchInterval: (q: { state: { data?: TorrentView } }) => (q.state.data && !moving(q.state.data) ? SLOW : FAST)
+	}),
+	/** Where a file sits in its series, and the next episode's state (re-read when it may have changed). */
+	episodeContext: (infohash: string, fileIdx: number) => ({
+		queryKey: KEYS.episodeContext(infohash, fileIdx),
+		queryFn: () => follows.episodeContext(infohash, fileIdx),
+		staleTime: 5 * 60_000
+	}),
 	continueWatching: () => ({ queryKey: KEYS.continueWatching, queryFn: me.continueWatching }),
 	watchlist: () => ({ queryKey: KEYS.watchlist, queryFn: me.watchlist, staleTime: 60_000 }),
 	follows: () => ({ queryKey: KEYS.follows, queryFn: () => follows.list(), staleTime: 60_000 }),
@@ -104,3 +120,8 @@ export const refreshLibrary = () =>
 			queryClient.invalidateQueries({ queryKey })
 		)
 	);
+
+/** A playback language saved: a series' own choice is read again; the account-wide one is
+ * every series' fallback, so all of them are. */
+export const playbackPrefsSaved = (collectionId: string | null) =>
+	queryClient.invalidateQueries({ queryKey: collectionId ? KEYS.playbackPrefs(collectionId) : KEYS.playbackPrefsAll });

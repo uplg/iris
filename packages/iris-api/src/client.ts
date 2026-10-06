@@ -115,6 +115,8 @@ type RequestOpts = {
 	 *  connection down, which cancels the handler — and its upstream tracker
 	 *  fan-out — server-side too. */
 	signal?: AbortSignal;
+	/** Outlives the page (a report or a last save sent as it goes away). */
+	keepalive?: boolean;
 };
 
 function requestSignal(opts?: RequestOpts): AbortSignal | undefined {
@@ -130,7 +132,8 @@ async function request<T>(method: string, path: string, body?: unknown, opts?: R
 			credentials: 'include',
 			headers: clientHeaders(body ? { 'Content-Type': 'application/json' } : undefined),
 			body: body ? JSON.stringify(body) : undefined,
-			signal: requestSignal(opts)
+			signal: requestSignal(opts),
+			keepalive: opts?.keepalive
 		});
 	let res = await fire();
 	// Transparent re-auth on expired access cookie. Without this any in-
@@ -384,28 +387,31 @@ export type UserHistoryItem = components['schemas']['UserHistoryView'];
 
 export type FileProgressEntry = components['schemas']['FileProgressEntry'];
 
+export type ProgressBody = {
+	position_seconds: number;
+	duration_seconds?: number | null;
+	audio_track_idx?: number | null;
+	subtitle_track_idx?: number | null;
+	completed?: boolean;
+	/** Whether the player is actively playing (vs paused) at this
+	 *  heartbeat. Feeds the admin "Now watching" presence state. */
+	playing?: boolean;
+	/** True when this save follows a deliberate user seek. Required for
+	 *  a near-zero position to overwrite substantial stored progress —
+	 *  without it the server's reset guard treats the save as an
+	 *  error-recovery artifact and keeps the old position. */
+	seek?: boolean;
+};
+
 export const progress = {
 	get: (infohash: string, idx: number) => api.get<ProgressView | null>(`/torrents/${infohash}/files/${idx}/progress`),
 	forTorrent: (infohash: string) => api.get<FileProgressEntry[]>(`/torrents/${infohash}/progress`),
-	put: (
-		infohash: string,
-		idx: number,
-		body: {
-			position_seconds: number;
-			duration_seconds?: number | null;
-			audio_track_idx?: number | null;
-			subtitle_track_idx?: number | null;
-			completed?: boolean;
-			/** Whether the player is actively playing (vs paused) at this
-			 *  heartbeat. Feeds the admin "Now watching" presence state. */
-			playing?: boolean;
-			/** True when this save follows a deliberate user seek. Required for
-			 *  a near-zero position to overwrite substantial stored progress —
-			 *  without it the server's reset guard treats the save as an
-			 *  error-recovery artifact and keeps the old position. */
-			seek?: boolean;
-		}
-	) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
+	put: (infohash: string, idx: number, body: ProgressBody) => api.put<void>(`/torrents/${infohash}/files/${idx}/progress`, body),
+	/** The same save, sent as the page goes away (where `sendBeacon` is missing). */
+	putOnLeave: (infohash: string, idx: number, body: ProgressBody) =>
+		request<void>('PUT', `/torrents/${infohash}/files/${idx}/progress`, body, { keepalive: true }),
+	/** Where the page-leave beacon goes (`navigator.sendBeacon` POSTs this). */
+	beaconUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/progress`,
 	/** Remove this file from the caller's Continue Watching + history. */
 	remove: (infohash: string, idx: number) => api.delete<void>(`/torrents/${infohash}/files/${idx}/progress`),
 	/** Mark this file watched for the caller (also skips a "next up" tile). */
@@ -520,6 +526,9 @@ export const torrents = {
 	/** Re-ingest a GC-reclaimed release from its recorded provenance —
 	 *  same release, same infohash, saved positions apply again. */
 	regrab: (infohash: string) => api.post<IngestResponse>(`/torrents/${infohash}/regrab`),
+	/** An engine failed on this file: the server logs it (and counts the demotion). */
+	reportPlaybackError: (infohash: string, idx: number, body: PlaybackErrorBody) =>
+		request<PlaybackErrorResponse>('POST', `/torrents/${infohash}/files/${idx}/playback-error`, body, { keepalive: true }),
 	remove: (infohash: string) => api.delete<void>(`/torrents/${infohash}`),
 	/** Raw source download (range-supported). Browser saves to disk. */
 	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${infohash}/files/${idx}/stream`,
@@ -541,6 +550,8 @@ export const torrents = {
 };
 
 export type MediaProbe = components['schemas']['MediaProbe'];
+export type PlaybackErrorBody = components['schemas']['PlaybackErrorBody'];
+export type PlaybackErrorResponse = components['schemas']['PlaybackErrorResponse'];
 export type VideoStream = components['schemas']['VideoStream'];
 export type AudioStream = components['schemas']['AudioStream'];
 export type PlayStatus = components['schemas']['PlayStatus'];
