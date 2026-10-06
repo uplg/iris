@@ -4,6 +4,7 @@
 	// (also in the header's panel). Each section is labelled by its title; what cannot be
 	// undone asks first.
 	import { session } from '#lib/session.svelte.ts';
+	import { pending } from '#lib/gesture.svelte.ts';
 	import { ui, type Theme } from '#lib/ui.svelte.ts';
 	import Group from '#lib/components/Group.svelte';
 	import Icon from '#lib/components/Icon.svelte';
@@ -26,7 +27,9 @@
 <PageHead title="Account">
 	{#snippet sub()}{session.user?.display_name}{/snippet}
 	{#snippet end()}
-		<button class="btn" onclick={() => session.logout()}><Icon name="log-out" />Sign out</button>
+		<button class="btn" {...pending(session.out.is('logout'))} onclick={session.logout}>
+			<Icon name="log-out" busy={session.out.is('logout')} />Sign out
+		</button>
 	{/snippet}
 </PageHead>
 
