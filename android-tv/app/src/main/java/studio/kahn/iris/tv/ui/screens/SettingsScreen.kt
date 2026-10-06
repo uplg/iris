@@ -70,7 +70,6 @@ import studio.kahn.iris.tv.ui.screens.settings.FormDialog
 import studio.kahn.iris.tv.ui.screens.settings.PASSWORD_MIN
 import studio.kahn.iris.tv.ui.screens.settings.RailItem
 import studio.kahn.iris.tv.ui.screens.settings.SUBTITLES_OFF
-import studio.kahn.iris.tv.ui.screens.settings.SecretInput
 import studio.kahn.iris.tv.ui.screens.settings.SettingsActions
 import studio.kahn.iris.tv.ui.screens.settings.SettingsDialog
 import studio.kahn.iris.tv.ui.screens.settings.SettingsSection
@@ -372,21 +371,24 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
                 busy = state.busy == Busy.PASSWORD,
                 busyText = "Changing…",
             ) {
-                SecretInput(
+                TextInput(
                     current,
                     { current = it },
                     label = "Current password",
-                    imeAction = ImeAction.Next,
+                    masked = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }),
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(first),
                 )
                 if (error != null && error.field == DialogField.First) StatusLine(error.text, tone = StatusTone.Down)
-                SecretInput(
+                TextInput(
                     next,
                     { next = it },
                     label = "New password, $PASSWORD_MIN characters or more",
+                    masked = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { actions.onChangePassword(current, next) }),
                     modifier = Modifier.fillMaxWidth(),
                 )

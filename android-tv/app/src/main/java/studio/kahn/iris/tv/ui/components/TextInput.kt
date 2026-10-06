@@ -23,6 +23,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Icon
@@ -37,7 +40,8 @@ import studio.kahn.iris.tv.ui.theme.IrisType
  * A one-line text field (the search field, the server URL). Foundation
  * [BasicTextField], so it takes the D-pad on a TV and the soft keyboard on
  * a phone alike. [label] names it for accessibility and shows as the
- * placeholder while empty. Focused: the accent ring.
+ * placeholder while empty. Focused: the accent ring. [masked]: a password, its characters
+ * hidden and the keyboard a password one.
  */
 @Composable
 fun TextInput(
@@ -50,6 +54,7 @@ fun TextInput(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     enabled: Boolean = true,
+    masked: Boolean = false,
 ) {
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
@@ -61,7 +66,8 @@ fun TextInput(
         singleLine = true,
         textStyle = textStyle.copy(color = IrisColor.ink),
         cursorBrush = SolidColor(IrisColor.accent),
-        keyboardOptions = keyboardOptions,
+        visualTransformation = if (masked) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = if (masked) keyboardOptions.copy(keyboardType = KeyboardType.Password) else keyboardOptions,
         keyboardActions = keyboardActions,
         interactionSource = source,
         decorationBox = { inner ->
