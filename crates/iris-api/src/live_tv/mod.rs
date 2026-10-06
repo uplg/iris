@@ -484,11 +484,28 @@ pub struct CountrySnapshot {
     active_source: Vec<AtomicUsize>,
     /// Parallel to `channels[i].sources`: shared per-URL health records.
     health: Vec<Vec<Arc<SourceHealth>>>,
+    /// Channel id → index into `channels`, for the per-segment lookups.
+    by_id: HashMap<String, usize>,
 }
 
 impl CountrySnapshot {
     fn channel_index(&self, id: &str) -> Option<usize> {
-        self.channels.iter().position(|c| c.id == id)
+        self.by_id.get(id).copied()
+    }
+
+    /// The elected source of channel `i`.
+    fn active(&self, i: usize) -> usize {
+        self.active_source[i].load(Ordering::Relaxed) % self.channels[i].sources.len().max(1)
+    }
+
+    /// Elect the best-ranked electable source of channel `i`; `None` (the
+    /// election left alone) when every feed cools down or is DRM-locked.
+    fn reelect(&self, i: usize, now_ms: u64) -> Option<usize> {
+        let next = self.health[i].iter().position(|h| h.electable(now_ms));
+        if let Some(si) = next {
+            self.active_source[i].store(si, Ordering::Relaxed);
+        }
+        next
     }
 
     /// Every feed of channel `i` failed its last check (the probe, a zap) and
@@ -975,11 +992,16 @@ impl LiveTvService {
             .iter()
             .map(|sources| AtomicUsize::new(elect_seed(sources, now_ms)))
             .collect();
+        let mut by_id = HashMap::with_capacity(built.len());
+        for (i, c) in built.iter().enumerate() {
+            by_id.entry(c.id.clone()).or_insert(i);
+        }
         CountrySnapshot {
             channels: Arc::new(built),
             fetched_at: Instant::now(),
             active_source,
             health,
+            by_id,
         }
     }
 
@@ -1646,7 +1668,7 @@ impl LiveTvService {
         let snap = self.channels(&country).await?;
         let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
         let channel = &snap.channels[idx];
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
+        let active = snap.active(idx);
         // ffmpeg reads the upstream directly, which dlive sources defeat
         // (image-wrapped segments, 5-minute tokens baked into every URI):
         // transcode the best other source instead.
@@ -1808,16 +1830,11 @@ impl LiveTvService {
         let country = validate_country(country)?;
         let snap = self.channels(&country).await?;
         let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
-        let channel = &snap.channels[idx];
         let now_ms = epoch_ms();
 
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % channel.sources.len();
+        let active = snap.active(idx);
         snap.health[idx][active].mark_playback_failure(now_ms);
-        // Re-elect: first source not cooling down, if any.
-        let next = (0..channel.sources.len()).find(|&si| snap.health[idx][si].electable(now_ms));
-        if let Some(si) = next {
-            snap.active_source[idx].store(si, Ordering::Relaxed);
-        }
+        let next = snap.reelect(idx, now_ms);
         tracing::info!(
             channel = %format!("{country}:{id}"),
             demoted = active,
@@ -1882,11 +1899,8 @@ impl LiveTvService {
             // Election: first non-cooldown source in quality order.
             let now_ms = epoch_ms();
             let mut alive = 0usize;
-            for (ci, channel) in snap.channels.iter().enumerate() {
-                let elected =
-                    (0..channel.sources.len()).find(|&si| snap.health[ci][si].electable(now_ms));
-                if let Some(si) = elected {
-                    snap.active_source[ci].store(si, Ordering::Relaxed);
+            for ci in 0..snap.channels.len() {
+                if snap.reelect(ci, now_ms).is_some() {
                     alive += 1;
                 }
             }
@@ -2135,17 +2149,10 @@ impl LiveTvService {
     /// client's next master reload lands on a working feed — the automatic
     /// "sanity check → fallback" the household expects.
     pub async fn note_segment_result(&self, channel_key: &str, ok: bool) {
-        let Some((country, id)) = channel_key.split_once(':') else {
+        let Some((snap, idx)) = self.locate(channel_key).await else {
             return;
         };
-        let Ok(snap) = self.channels(country).await else {
-            return;
-        };
-        let Some(idx) = snap.channel_index(id) else {
-            return;
-        };
-        let active = snap.active_source[idx].load(Ordering::Relaxed)
-            % snap.channels[idx].sources.len().max(1);
+        let active = snap.active(idx);
         let health = &snap.health[idx][active];
         if ok {
             health.segment_failures.store(0, Ordering::Relaxed);
@@ -2171,12 +2178,7 @@ impl LiveTvService {
         if is_dlive {
             self.inner.dlive.note_outage();
         }
-        let now_ms = epoch_ms();
-        let next = (0..snap.channels[idx].sources.len())
-            .find(|&si| si != active && snap.health[idx][si].electable(now_ms));
-        if let Some(si) = next {
-            snap.active_source[idx].store(si, Ordering::Relaxed);
-        }
+        let next = snap.reelect(idx, epoch_ms());
         tracing::info!(
             channel = channel_key,
             demoted = active,
@@ -2196,17 +2198,10 @@ impl LiveTvService {
         scheme: &'static str,
     ) -> Option<LiveTvError> {
         let locked = || Some(LiveTvError::Upstream(format!("encrypted with {scheme}")));
-        let Some((country, id)) = channel_key.split_once(':') else {
+        let Some((snap, idx)) = self.locate(channel_key).await else {
             return locked();
         };
-        let Ok(snap) = self.channels(country).await else {
-            return locked();
-        };
-        let Some(idx) = snap.channel_index(id) else {
-            return locked();
-        };
-        let n = snap.channels[idx].sources.len().max(1);
-        let active = snap.active_source[idx].load(Ordering::Relaxed) % n;
+        let active = snap.active(idx);
         if snap.channels[idx]
             .sources
             .get(active)
@@ -2218,11 +2213,7 @@ impl LiveTvService {
         if let Some(health) = snap.health[idx].get(active) {
             health.mark_encrypted(now_ms);
         }
-        let next = (0..snap.channels[idx].sources.len())
-            .find(|&si| snap.health[idx][si].electable(now_ms));
-        if let Some(si) = next {
-            snap.active_source[idx].store(si, Ordering::Relaxed);
-        }
+        let next = snap.reelect(idx, now_ms);
         tracing::info!(
             channel = channel_key,
             demoted = active,
@@ -2237,24 +2228,22 @@ impl LiveTvService {
         }
     }
 
+    /// The snapshot and index of the channel a proxy `channel_key`
+    /// (`country:id`) names.
+    async fn locate(&self, channel_key: &str) -> Option<(Arc<CountrySnapshot>, usize)> {
+        let (country, id) = channel_key.split_once(':')?;
+        let snap = self.channels(country).await.ok()?;
+        let idx = snap.channel_index(id)?;
+        Some((snap, idx))
+    }
+
     /// Headers (and dlive identity) of the channel's active source, for its
     /// proxied requests. A dlive source's headers come from its resolution.
     async fn active_upstream(&self, channel_key: &str) -> ActiveUpstream {
-        let Some((country, id)) = channel_key.split_once(':') else {
+        let Some((snap, idx)) = self.locate(channel_key).await else {
             return ActiveUpstream::default();
         };
-        let Ok(snap) = self.channels(country).await else {
-            return ActiveUpstream::default();
-        };
-        let Some(idx) = snap.channel_index(id) else {
-            return ActiveUpstream::default();
-        };
-        let active = snap.active_source[idx].load(Ordering::Relaxed);
-        let Some(source) = snap.channels[idx]
-            .sources
-            .get(active)
-            .or_else(|| snap.channels[idx].sources.first())
-        else {
+        let Some(source) = snap.channels[idx].sources.get(snap.active(idx)) else {
             return ActiveUpstream::default();
         };
         if let Some((id, player)) = dlive::parse_sentinel(&source.url) {
@@ -3236,6 +3225,26 @@ https://a/x.m3u8
         );
         assert!(names.contains_key("televisionfrancaise1"), "alt names too");
         assert!(!names.contains_key("gone"), "no logo, no entry");
+    }
+
+    #[test]
+    fn a_snapshot_finds_its_channels_and_reelects_past_dead_feeds() {
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let mut second = channel_with(&["http://r/1", "http://r/2", "http://r/3"]);
+        second.id = "d".into();
+        let snap = svc.build_snapshot(vec![channel_with(&["http://r/0"]), second]);
+        assert_eq!(snap.channel_index("c"), Some(0));
+        assert_eq!(snap.channel_index("d"), Some(1));
+        assert_eq!(snap.channel_index("nope"), None);
+
+        let now = epoch_ms();
+        snap.health[1][0].mark_failure(now);
+        assert_eq!(snap.reelect(1, now), Some(1));
+        assert_eq!(snap.active(1), 1);
+        snap.health[1][1].mark_encrypted(now);
+        snap.health[1][2].mark_failure(now);
+        assert_eq!(snap.reelect(1, now), None, "nothing electable");
+        assert_eq!(snap.active(1), 1, "the election is left alone");
     }
 
     #[test]
