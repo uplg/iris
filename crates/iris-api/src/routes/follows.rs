@@ -11,8 +11,7 @@
 //!
 //! Identity is the SCENE-normalised name. The Watchlist shelf and
 //! Series page run entirely off this — TMDB is consulted only to
-//! resolve a poster URL when the joined collection has been
-//! `tmdb_verified` (probe runtime match).
+//! resolve a poster URL from the joined TV collection's resolved id.
 //!
 //! Episode listings come from two sources, keyed on the same
 //! normalised name:
@@ -55,8 +54,8 @@ pub(crate) struct CreateFollowRequest {
     /// for identity; the original is kept for indexer queries and
     /// UI display.
     name: String,
-    /// Optional TMDB id — stored as decoration. Surfaces a poster
-    /// only after the corresponding collection gets `tmdb_verified`.
+    /// Optional TMDB id — stored as decoration; the poster comes from the
+    /// joined collection's id, not from this one.
     tmdb_id: Option<i64>,
 }
 
@@ -175,8 +174,8 @@ pub(crate) struct FollowSummary {
     /// SCENE-normalised name — clients route by this, not `tmdb_id`.
     normalized_name: String,
     name: String,
-    /// Decoration TMDB id (may be null). Even when present, only
-    /// rendered as a poster after the joined collection is verified.
+    /// Decoration TMDB id (may be null). The poster comes from the joined
+    /// TV collection's id, not from this one.
     tmdb_id: Option<i64>,
     poster_path: Option<String>,
     backdrop_path: Option<String>,
@@ -185,10 +184,9 @@ pub(crate) struct FollowSummary {
     created_at: DateTime<Utc>,
 }
 
-/// Build the client-facing summary. Poster lookup is gated on the
-/// matching collection being `tmdb_verified` — without that signal
-/// we refuse to fetch TMDB metadata to avoid surfacing the wrong
-/// show's poster.
+/// Build the client-facing summary. The poster comes from the joined TV
+/// collection's resolved id only (never the follow's own decoration id);
+/// no runtime-verification gate applies here.
 async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> FollowSummary {
     let trusted_tmdb = trusted_tmdb_id(state.db(), &row.normalized_name).await;
     // `series_follows` is TV-only — hint the namespace so a numerical
@@ -215,11 +213,9 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
     }
 }
 
-/// Returns a TMDB id we trust enough to use for poster lookup —
-/// i.e., one stored on a collection whose `tmdb_id` was written by
-/// the post-verify enrichment path (which only fires when the
-/// runtime probe matched). Returns None when no verified
-/// collection joins to this normalised name.
+/// The TMDB id of the TV collection joining this normalised name, as
+/// resolved from its SCENE identity. Not gated on `tmdb_verified`.
+/// None when no such collection has an id.
 async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> Option<i64> {
     iris_db::collections::first_tv_tmdb_id(pool, normalized_name)
         .await

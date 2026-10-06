@@ -308,13 +308,25 @@ pub async fn set_display_title(
 /// stamped with that same wrong value and the standard "first writer
 /// wins" rule would block the correction. Live ingestion flows must
 /// keep using [`set_tmdb_id_if_missing`].
+///
+/// A changed id un-verifies the member torrents in the same transaction:
+/// their runtime check vouched for the old id, not this one.
 pub async fn set_tmdb_id(pool: &SqlitePool, id: Uuid, tmdb_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2")
-        .bind(tmdb_id)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
+    let mut tx = pool.begin().await?;
+    let changed =
+        sqlx::query("UPDATE collections SET tmdb_id = ?1 WHERE id = ?2 AND tmdb_id IS NOT ?1")
+            .bind(tmdb_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if changed > 0 {
+        sqlx::query("UPDATE torrents SET tmdb_verified = FALSE WHERE collection_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
 }
 
 /// Hard-delete a collection row. Member torrents are `ON DELETE SET NULL`
@@ -786,6 +798,47 @@ mod tests {
             1,
             "newer watch activity resurfaces the dismissed ghost",
         );
+    }
+
+    #[tokio::test]
+    async fn replacing_the_tmdb_id_unverifies_member_torrents() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let film = find_or_create(&pool, "heat 1995", "Heat", Kind::Movie, false)
+            .await
+            .unwrap();
+        set_tmdb_id(&pool, film.id, 949).await.unwrap();
+        let t = crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: "ab".repeat(20),
+                name: "Heat.1995.1080p".into(),
+                total_size_bytes: 1,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        crate::torrents::set_collection(&pool, &t.infohash, Some(film.id))
+            .await
+            .unwrap();
+        crate::torrents::set_tmdb_verified(&pool, &t.infohash, true)
+            .await
+            .unwrap();
+        let verified = |pool: SqlitePool, ih: String| async move {
+            crate::torrents::find_by_infohash(&pool, &ih)
+                .await
+                .unwrap()
+                .unwrap()
+                .tmdb_verified
+        };
+
+        set_tmdb_id(&pool, film.id, 949).await.unwrap();
+        assert!(verified(pool.clone(), t.infohash.clone()).await, "same id");
+        set_tmdb_id(&pool, film.id, 11).await.unwrap();
+        assert!(!verified(pool.clone(), t.infohash.clone()).await, "new id");
     }
 
     #[tokio::test]

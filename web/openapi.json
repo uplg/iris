@@ -4751,7 +4751,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Optional TMDB id — stored as decoration. Surfaces a poster\nonly after the corresponding collection gets `tmdb_verified`."
+            "description": "Optional TMDB id — stored as decoration; the poster comes from the\njoined collection's id, not from this one."
           }
         }
       },
@@ -5394,7 +5394,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Decoration TMDB id (may be null). Even when present, only\nrendered as a poster after the joined collection is verified."
+            "description": "Decoration TMDB id (may be null). The poster comes from the joined\nTV collection's id, not from this one."
           }
         }
       },

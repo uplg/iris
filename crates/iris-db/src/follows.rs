@@ -4,8 +4,7 @@
 //! anchors a `collections` row's `parsed_title_normalized`. This
 //! gives us one source of truth for "what show is this": the
 //! filename. TMDB id is stored when known but treated as pure
-//! decoration (poster lookup conditional on a verified collection
-//! match).
+//! decoration (the poster comes from the joined collection's id).
 
 use chrono::{DateTime, Utc};
 use iris_core::ids::UserId;
@@ -36,8 +35,8 @@ pub struct FollowRow {
     /// in Discovery / Search). Also used as the indexer search
     /// query inside the notify scheduler.
     pub name: String,
-    /// Decoration-only TMDB id; surfaces a poster when the
-    /// collection joining via normalised name is `tmdb_verified`.
+    /// Decoration-only TMDB id; posters come from the collection joining
+    /// via normalised name, not from this one.
     pub tmdb_id: Option<i64>,
     pub last_checked_at: Option<DateTime<Utc>>,
     pub last_visited_at: Option<DateTime<Utc>>,
