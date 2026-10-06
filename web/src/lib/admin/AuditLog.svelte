@@ -2,13 +2,12 @@
 	// Who changed or deleted what (an admin's), kept by the server, the latest 50, read again
 	// every 30 s: who, what in words (an action not listed here keeps its own name), when.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { plural } from '@iris/api/format';
+	import { onDay, plural } from '@iris/api/format';
 	import type { AuditLogEntry } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import Group from '#lib/components/Group.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { onDay } from '#lib/history/words.ts';
 	import { auditQuery } from './queries.ts';
 
 	const ACTIONS: Record<string, string> = {

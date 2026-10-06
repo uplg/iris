@@ -12,7 +12,7 @@
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { ApiError, follows, library, me, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
-	import { duration as lengthWords, episodeCode, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
+	import { duration as lengthWords, episodeCode, fileName, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
 	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
 	import { fetchManifest, ManifestNotReadyError, pickTier, postSeekHint, rawStreamUrl, type DecodeTier } from '@iris/core/manifest-client';
 	import Icon from '#lib/components/Icon.svelte';
@@ -78,7 +78,7 @@
 	const data = $derived(torrentQ.data);
 	const file = $derived(data?.files.find((f) => f.index === fileIdx));
 	const videoFiles = $derived((data?.files ?? []).filter((f) => isVideo(f.path)));
-	const fileName = $derived(file?.path.split('/').pop() ?? data?.name ?? 'Iris');
+	const name = $derived(fileName(file?.path) ?? data?.name ?? 'Iris');
 	const collectionId = $derived(data?.collection_id ?? null);
 	const isTv = $derived(!!collectionId && data?.kind === 'tv');
 
@@ -328,15 +328,15 @@
 		);
 	}
 
-	const heading = $derived(collectionQ.data?.display_title ?? prettySceneName(fileName));
+	const heading = $derived(collectionQ.data?.display_title ?? prettySceneName(name));
 	const episodeTitle = $derived(episodeContextQ.data?.current?.name ?? null);
 	const subheading = $derived(
 		currentEpisode
 			? [episodeCode(currentEpisode.season, currentEpisode.episode), episodeTitle].filter(Boolean).join(' · ')
 			: isTv
 				? null
-				: fileName !== heading
-					? fileName
+				: name !== heading
+					? name
 					: null
 	);
 	const back = $derived(
@@ -485,7 +485,7 @@
 					<button class="btn theater-btn" type="button" aria-pressed={theater} aria-keyshortcuts="t" onclick={toggleTheater}
 						>Theater mode <kbd>T</kbd></button
 					>
-					<a class="btn" href={torrents.downloadUrl(infohash, fileIdx)} download={fileName}><Icon name="download" />Download</a>
+					<a class="btn" href={torrents.downloadUrl(infohash, fileIdx)} download={name}><Icon name="download" />Download</a>
 					<a class="btn ghost" href="/library"><Icon name="library" />Library</a>
 				</div>
 

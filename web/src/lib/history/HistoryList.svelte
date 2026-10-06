@@ -9,7 +9,8 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import TitlePoster from './TitlePoster.svelte';
 	import { canRestore, itemKey, type Group, type Item } from './groups.ts';
-	import { onDay, progressWords, watchedShare, whatWatched } from './words.ts';
+	import { onDay } from '@iris/api/format';
+	import { progressWords, watchedShare, whatWatched } from './words.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	interface Props {

@@ -39,6 +39,9 @@ export function formatSize(bytes: number | null | undefined): string {
 const SCENE_STOP =
 	/^(19\d{2}|20\d{2}|s\d{1,2}(e\d{1,3})?|e\d{1,3}|\d{3,4}p|web|web-?dl|webrip|bluray|blu-?ray|brrip|bdrip|hdtv|dvdrip|dvd|remux|x264|x265|h264|h265|hevc|avc|xvid|divx|aac\d?|ac3|eac3|dts(-?hd)?(-?ma)?|ddp?\d?|truehd|atmos|flac|multi|vff|vfi|vof|vfq|vostfr|vost|vo|vf|french|truefrench|english|hdr|hdr10\+?|dovi|dv|10bit|8bit|repack|proper|internal|limited|uncut|unrated|extended|imax|complete|integrale)$/i;
 
+/** The extensions a video file has, said once (`VIDEO_RE`, `prettySceneName`). */
+const VIDEO_EXTENSIONS = 'mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv';
+
 /**
  * Roughly clean a raw SCENE release name for display when we have no
  * *verified* TMDB title. Cuts at the first release token and joins the
@@ -48,7 +51,7 @@ const SCENE_STOP =
  * "Mercato.2025.FRENCH.1080p.WEB.H265-BOUBA.mkv".
  */
 export function prettySceneName(raw: string): string {
-	const noExt = raw.replace(/\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv|srt|nfo)$/i, '');
+	const noExt = raw.replace(new RegExp(`\\.(${VIDEO_EXTENSIONS}|srt|nfo)$`, 'i'), '');
 	// Split on dots/underscores/spaces only — NOT hyphens, so titles like
 	// "Spider-Man" survive (and the trailing "-GROUP" is never reached
 	// because we stop at an earlier release token anyway).
@@ -113,7 +116,7 @@ export function episodeCode(season: number | null | undefined, episode: number |
 }
 
 /** The file extensions a player can open. */
-export const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
+export const VIDEO_RE = new RegExp(`\\.(${VIDEO_EXTENSIONS})$`, 'i');
 
 export const isVideo = (path: string): boolean => VIDEO_RE.test(path);
 
@@ -159,4 +162,48 @@ export function languageLabel(tag: string | null | undefined, form: 'short' | 'l
 /** A transfer speed: `6.1 MB/s`. */
 export function speed(bytesPerSecond: number): string {
 	return `${formatSize(bytesPerSecond)}/s`;
+}
+
+const DAY_MS = 86_400_000;
+const midnight = (ms: number) => new Date(ms).setHours(0, 0, 0, 0);
+
+/** A clock time, `21:05` (en-GB, as every time the app says); '' for a bad date. */
+export function clockTime(at: string | number | Date): string {
+	const d = new Date(at);
+	return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** A time as people say it: a clock time today, a weekday this week, else a date. */
+export function when(ms: number, now = Date.now()): string {
+	const d = new Date(ms);
+	const days = Math.floor((now - ms) / DAY_MS);
+	if (days < 1 && new Date(now).getDate() === d.getDate()) return clockTime(d);
+	if (days < 6) return d.toLocaleDateString('en-GB', { weekday: 'long' });
+	return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+/** A moment as people say it, past or future: « today at 21:04 », « yesterday at 09:12 »,
+ * « tomorrow at 08:00 », « on Monday », « on 2 Oct », « on 2 Oct 2025 ». */
+export function onDay(iso: string | number, now = Date.now()): string {
+	const d = new Date(iso);
+	const days = Math.round((midnight(d.getTime()) - midnight(now)) / DAY_MS);
+	if (days === 0) return `today at ${clockTime(d)}`;
+	if (days === -1) return `yesterday at ${clockTime(d)}`;
+	if (days === 1) return `tomorrow at ${clockTime(d)}`;
+	if (Math.abs(days) < 7) return `on ${d.toLocaleDateString('en-GB', { weekday: 'long' })}`;
+	const sameYear = d.getFullYear() === new Date(now).getFullYear();
+	return `on ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })}`;
+}
+
+/** How long since `iso`: « for 12 min », « for 1 h 5 min », « for under a minute ». */
+export function since(iso: string, now = Date.now()): string {
+	const secs = Math.max(0, (now - new Date(iso).getTime()) / 1000);
+	return secs < 60 ? 'for under a minute' : `for ${duration(secs)}`;
+}
+
+/** A file's own name, without its folders. */
+export function fileName(path: string): string;
+export function fileName(path: string | null | undefined): string | null;
+export function fileName(path: string | null | undefined): string | null {
+	return path === null || path === undefined ? null : (path.split('/').pop() ?? path);
 }

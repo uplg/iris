@@ -3,6 +3,7 @@
 // retried, rotated or given up.
 
 import type { LiveProgramme } from '@iris/api/client';
+import { clockTime } from '@iris/api/format';
 import type { DecodeTier, Manifest } from '@iris/core/manifest-client';
 
 /** 0–100 position of `now` inside a programme, null outside its window. */
@@ -13,12 +14,6 @@ export function programmeProgress(startIso: string, stopIso: string, now = Date.
 	const pos = ((now - start) / (stop - start)) * 100;
 	if (pos < 0 || pos > 100) return null;
 	return Math.round(pos);
-}
-
-/** A clock time the viewer's way (`21:05`); '' for a bad date. */
-export function clockTime(iso: string): string {
-	const d = new Date(iso);
-	return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 /** « Now: News, until 21:00 » / « Next at 21:00: Film », for a tile and the watch page. */

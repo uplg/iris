@@ -5,14 +5,14 @@
 	import Meter from '#lib/components/Meter.svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { livetv } from '@iris/api/client';
-	import { timeLeft } from '@iris/api/format';
+	import { clockTime, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import { pageTitle } from '#lib/title.ts';
 	import { read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
 	import LivePlayer from './LivePlayer.svelte';
-	import { clockTime, nextWords, nowWords, programmeProgress } from './live.ts';
+	import { nextWords, nowWords, programmeProgress } from './live.ts';
 
 	let { country, channelId }: { country: string; channelId: string } = $props();
 

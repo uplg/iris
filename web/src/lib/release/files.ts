@@ -44,5 +44,3 @@ export function playWords(files: readonly FilePreview[], idx: number | null): st
 	if (ep && videos > 1) return `Download and play episode ${ep.episode}`;
 	return 'Download and play';
 }
-
-export const fileName = (path: string) => path.split('/').pop() ?? path;

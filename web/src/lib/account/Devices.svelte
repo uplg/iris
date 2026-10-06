@@ -5,7 +5,7 @@
 	// refetchInterval, no timer of our own) until the new device appears, or until the code's
 	// life is over (10 min on the server), when the wait ends and says so.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { plural } from '@iris/api/format';
+	import { onDay, plural } from '@iris/api/format';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -19,7 +19,6 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { onDay } from '#lib/history/words.ts';
 
 	/** A pairing code's life on the server (routes/devices.rs DEVICE_CODE_TTL_SECS). */
 	const CODE_LIFE_MS = 10 * 60_000;
