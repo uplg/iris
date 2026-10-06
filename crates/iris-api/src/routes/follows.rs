@@ -221,17 +221,10 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
 /// runtime probe matched). Returns None when no verified
 /// collection joins to this normalised name.
 async fn trusted_tmdb_id(pool: &iris_db::SqlitePool, normalized_name: &str) -> Option<i64> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT tmdb_id FROM collections \
-         WHERE parsed_title_normalized = ?1 AND kind = 'tv' AND tmdb_id IS NOT NULL \
-         ORDER BY created_at LIMIT 1",
-    )
-    .bind(normalized_name)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    row.map(|(t,)| t)
+    iris_db::collections::first_tv_tmdb_id(pool, normalized_name)
+        .await
+        .ok()
+        .flatten()
 }
 
 // DELETE /api/me/follows/:id
@@ -1584,7 +1577,7 @@ async fn ingest_picked(
     //      evaporates on restart and caused real 500s when c411 /
     //      UNIT3D dropped older releases off the search top page.
     //   3. provider.resolve() — last resort: per-id round-trip to
-    //      the indexer. Works for torr9-style providers that don't
+    //      the indexer. Works for providers that don't
     //      ship a URL in the search payload, and as a fallback when
     //      the persisted URL has expired.
     // Same slot guard as the manual grab (`torrents::check_leech_slots`):

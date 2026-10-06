@@ -4787,7 +4787,7 @@
       },
       "DescriptionFormat": {
         "type": "string",
-        "description": "Rich detail view for a single torrent — the kind of payload a tracker's\ntorrent-detail page would normally show. Powers the search-result\npreview dialog. Optional everywhere because shapes vary wildly across\nindexers; the typed fields are the lowest common denominator we feel\ncomfortable surfacing in a unified UI.\nWhat `TorrentDetails::description` is encoded in — indexers don't\nagree on a format. The frontend dispatches the right renderer\n(`BBCode` parser, sanitised HTML, raw text) off this. Defaults to\n[`DescriptionFormat::Bbcode`] when absent so older provider payloads\n(torr9 was the only source originally) keep working unchanged.",
+        "description": "Rich detail view for a single torrent — the kind of payload a tracker's\ntorrent-detail page would normally show. Powers the search-result\npreview dialog. Optional everywhere because shapes vary wildly across\nindexers; the typed fields are the lowest common denominator we feel\ncomfortable surfacing in a unified UI.\nWhat `TorrentDetails::description` is encoded in — indexers don't\nagree on a format. The frontend dispatches the right renderer\n(`BBCode` parser, sanitised HTML, raw text) off this. Defaults to\n[`DescriptionFormat::Bbcode`] when absent so older provider payloads\n(written before the field existed) keep working unchanged.",
         "enum": [
           "bbcode",
           "html",

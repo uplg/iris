@@ -3,7 +3,7 @@
 //! This is the tracker-first inversion of the old metadata-only seeding: the
 //! candidate universe is **what the trackers actually have right now**, not
 //! TMDB's trending list. Every tick polls one provider's latest-releases feed
-//! for one kind (`provider.latest()` — torr9 RSS, UNIT3D `created_at`, Torznab
+//! for one kind (`provider.latest()` — UNIT3D `created_at`, Torznab
 //! query-less). One (provider × kind) slice per tick keeps the load spread out
 //! ("au fil de l'eau"), never bursting all trackers at once.
 //!
@@ -223,9 +223,9 @@ pub(crate) async fn upsert_window_rows(
         Utc::now().year() - i32::try_from(max_content_age_years.max(0)).unwrap_or(0);
     let mut upserted = 0usize;
     for (tmdb_id, (release, lang)) in best {
-        // Never store a known-dead release (0 seeders). torr9 RSS carries no
-        // seeders (None) → stored as unknown; the grab-time re-check is the
-        // authoritative gate.
+        // Never store a known-dead release (0 seeders). A feed that carries
+        // no seeders (None) → stored as unknown; the grab-time re-check is
+        // the authoritative gate.
         if release.seeders == Some(0) {
             continue;
         }

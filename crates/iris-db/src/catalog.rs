@@ -31,7 +31,7 @@ pub struct NewCatalogItem {
     pub popularity: Option<f64>,
     pub vote_average: Option<f64>,
     pub release_date: Option<String>,
-    /// Which slice produced this row (e.g. `freshness:torr9:movie`,
+    /// Which slice produced this row (e.g. `freshness:c411:movie`,
     /// `reco:similar`) — diagnostic only.
     pub source: Option<String>,
     /// Always `'available'` today (a tracker-confirmed row); the column
@@ -488,7 +488,7 @@ mod tests {
         NewCatalogItem {
             availability: "available".to_string(),
             seeders: Some(seeders),
-            provider_id: Some("torr9".to_string()),
+            provider_id: Some("c411".to_string()),
             external_id: Some(format!("ext-{tmdb_id}")),
             download_url: Some(format!("https://t/{tmdb_id}.torrent")),
             infohash: Some(format!("{tmdb_id:040x}")),
@@ -571,7 +571,7 @@ mod tests {
         assert_eq!(rows[0].title, "Fresh Drop");
         assert_eq!(rows[0].availability, "available");
         assert_eq!(rows[0].seeders, Some(12));
-        assert_eq!(rows[0].provider_id.as_deref(), Some("torr9"));
+        assert_eq!(rows[0].provider_id.as_deref(), Some("c411"));
         assert_eq!(rows[0].external_id.as_deref(), Some("ext-2"));
         assert!(rows[0].released_at.is_some());
 

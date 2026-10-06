@@ -120,7 +120,7 @@ pub(crate) async fn search(
     // SCENE-style parse of the raw query. `"Classroom of the Elite S04E11"`
     // → `(parsed_title=classroom of the elite, season=4, episode=11)`. We
     // pass these as hints to providers (Torznab can dispatch
-    // `t=tvsearch&season=&ep=`; UNIT3D/Torr9 append `SxxExx` to the name
+    // `t=tvsearch&season=&ep=`; UNIT3D appends `SxxExx` to the name
     // filter) and use them again post-aggregation for relevance ranking.
     let parsed = iris_media::filename::parse(&params.q);
     let parsed_title = parsed

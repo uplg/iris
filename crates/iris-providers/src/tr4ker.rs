@@ -154,6 +154,12 @@ impl SearchProvider for Tr4ker {
         &self.id
     }
 
+    /// The Torznab download links are signed for the inner indexer's
+    /// client (api-key header, referer), so downloads share it.
+    fn http(&self) -> &reqwest::Client {
+        self.torznab.http()
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         self.torznab.capabilities()
     }

@@ -253,9 +253,7 @@ pub(crate) async fn list_library(
         id: s.id,
         tmdb_id: s.tmdb_id,
         display_title: s.display_title,
-        // `collections.kind` is `NOT NULL CHECK (kind IN ('tv','movie'))`,
-        // so `from_wire` only ever returns `None` on a corrupt row.
-        kind: MediaKind::from_wire(&s.kind).unwrap_or(MediaKind::Tv),
+        kind: MediaKind::from_stored(&s.kind),
         is_anime: s.is_anime,
         torrent_count: s.torrent_count,
         total_size_bytes: s.total_size_bytes,
@@ -673,7 +671,7 @@ pub(crate) async fn collection_detail(
         tmdb_id: collection.tmdb_id,
         display_title: collection.display_title,
         // `collections.kind` is CHECK-constrained to 'tv'/'movie'.
-        kind: MediaKind::from_wire(&collection.kind).unwrap_or(MediaKind::Tv),
+        kind: MediaKind::from_stored(&collection.kind),
         is_anime: collection.is_anime,
         numbering,
         poster_path,

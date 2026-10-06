@@ -250,6 +250,11 @@ impl Default for LiveTvConfig {
     }
 }
 
+/// The transcode `-preset` when `config.toml` sets none — also the remuxer's
+/// own default. `superfast` keeps a 2011-era CPU-only Xeon ahead of 1080p
+/// real-time playback.
+pub const DEFAULT_TRANSCODE_PRESET: &str = "superfast";
+
 /// Server-side encode settings for the "catch-up" transcode path — used when
 /// a client only software-decodes the source video codec (e.g. AV1 on a TV
 /// box with no AV1 silicon) and the content is heavy (10-bit). The server
@@ -261,7 +266,7 @@ pub struct TranscodeConfig {
     /// keeps 10-bit, ~2× smaller) or `"h264"` (8-bit, encodes much faster).
     #[serde(default = "default_transcode_codec")]
     pub codec: String,
-    /// `libx264` / `libx265` `-preset`. Default `"superfast"`.
+    /// `libx264` / `libx265` `-preset`. Default [`DEFAULT_TRANSCODE_PRESET`].
     #[serde(default = "default_transcode_preset")]
     pub preset: String,
     /// `-crf` (0..=51). Lower = better quality / larger. Default `26`.
@@ -294,7 +299,7 @@ fn default_transcode_codec() -> String {
     "h264".to_string()
 }
 fn default_transcode_preset() -> String {
-    "veryfast".to_string()
+    DEFAULT_TRANSCODE_PRESET.to_string()
 }
 fn default_transcode_crf() -> u8 {
     26

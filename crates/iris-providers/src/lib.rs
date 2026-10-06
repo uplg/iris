@@ -16,7 +16,6 @@ pub mod hdtorrents;
 pub mod nyaa;
 pub mod registry;
 pub mod tls;
-pub mod torr9;
 pub mod torrentleech;
 pub mod torznab;
 pub mod tr4ker;
@@ -40,6 +39,10 @@ pub mod nfo;
 pub trait SearchProvider: Send + Sync {
     fn id(&self) -> &str;
     fn capabilities(&self) -> ProviderCapabilities;
+    /// The provider's configured client (pinned TLS roots, timeouts,
+    /// user-agent). Every request — `.torrent` downloads included — goes
+    /// through it.
+    fn http(&self) -> &reqwest::Client;
     async fn search(&self, q: &SearchQuery) -> Result<ProviderPage>;
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource>;
 
@@ -51,7 +54,7 @@ pub trait SearchProvider: Send + Sync {
     /// Default: a query-less `search()`, which trackers whose search returns
     /// the newest items on an empty query (UNIT3D's empty `name=` sorted
     /// `created_at desc`, generic Torznab) satisfy directly. Providers with a
-    /// dedicated RSS/latest endpoint (torr9) or that need the query omitted
+    /// dedicated latest endpoint (nyaa's RSS) or that need the query omitted
     /// entirely (Torznab) override this.
     async fn latest(&self, kind: Option<MediaKind>, page: u32) -> Result<ProviderPage> {
         self.search(&SearchQuery {
@@ -92,12 +95,15 @@ pub trait SearchProvider: Send + Sync {
     /// which evaporates on restart, while a URL persisted on
     /// `available_episodes.download_url` survives forever.
     ///
-    /// Default implementation: plain GET via a fresh `reqwest`
-    /// client. Sufficient for Torznab + UNIT3D layouts where the
-    /// URL is signed with an `api_token=` query parameter. Providers
-    /// with cookie / header auth needs override this.
+    /// Default implementation: plain GET through [`Self::http`].
+    /// Sufficient for Torznab + UNIT3D layouts where the URL is signed
+    /// with an `api_token=` query parameter. Providers with cookie /
+    /// header auth needs override this.
     async fn fetch_bytes(&self, url: &str) -> Result<bytes::Bytes> {
-        let resp = reqwest::get(url)
+        let resp = self
+            .http()
+            .get(url)
+            .send()
             .await
             .map_err(|e| Error::Provider(format!("fetch_bytes get: {e}")))?;
         let status = resp.status();

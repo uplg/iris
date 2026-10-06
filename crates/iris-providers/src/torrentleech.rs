@@ -406,6 +406,10 @@ impl SearchProvider for TorrentLeech {
         &self.id
     }
 
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             returns_magnet: false,

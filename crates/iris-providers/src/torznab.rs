@@ -374,6 +374,10 @@ impl SearchProvider for TorznabProvider {
         &self.id
     }
 
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             returns_magnet: false,
@@ -785,8 +789,10 @@ enum TagKind {
 }
 
 fn parse_torznab_xml(body: &str) -> Result<ParsedTorznab> {
+    // Deliberately NOT `trim_text(true)`: it trims each fragment between
+    // entity references, so `Fate &amp; Zero` came back as `Fate&Zero`.
+    // The joined text is trimmed once, at the element's End.
     let mut reader = Reader::from_str(body);
-    reader.config_mut().trim_text(true);
 
     let mut out = ParsedTorznab::default();
     let mut current: Option<RawItem> = None;
@@ -1249,6 +1255,30 @@ mod tests {
     /// parsed but with an EMPTY title — the "results show but every row is
     /// blank" bug. The rest of Nexum's feed is standard: plain-text
     /// guid/link, `torznab:attr` metadata, enclosure download URL.
+    #[test]
+    fn entities_keep_the_surrounding_spaces() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>  Fate &amp; Zero &#8211; Tom &#x26; Jerry &lt;3  </title>
+      <guid>https://indexer/details/1</guid>
+      <description>
+        Kids &quot;love&quot; it &amp; so do we
+      </description>
+    </item>
+  </channel>
+</rss>"#;
+        let p = parse_torznab_xml(xml).expect("parse");
+        let item = &p.items[0];
+        assert_eq!(item.title, "Fate & Zero \u{2013} Tom & Jerry <3");
+        assert_eq!(
+            item.description.as_deref(),
+            Some("Kids \"love\" it & so do we")
+        );
+        assert_eq!(item.external_id, "1");
+    }
+
     #[test]
     fn parses_cdata_wrapped_title_nexum() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>

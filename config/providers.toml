@@ -1,15 +1,6 @@
-[[providers]]
-id = "torr9"
-kind = "torr9"
-enabled = false
-base_url = "https://api.torr9.net"
-username_env = "TORR9_USERNAME"
-password_env = "TORR9_PASSWORD"
 # Francophone tracker: in the search language filter an untagged release
 # reads as VO (no French track), since French audio/subs are always tagged.
 # Anglophone trackers get `origin = "en"` implied by `default_language`.
-origin = "fr"
-
 [[providers]]
 id = "c411"
 kind = "c411"

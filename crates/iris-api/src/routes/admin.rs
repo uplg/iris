@@ -11,7 +11,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::AdminUser;
+use crate::routes::extract::{AdminUser, Infohash};
 use crate::routes::library::verified_poster;
 use crate::routes::me::{HistoryItem, history_items};
 use crate::routes::{PageQuery, page_limit};
@@ -552,10 +552,9 @@ pub(crate) async fn storage_stats(
     let used = iris_torrent::gc::dir_size(&cfg.download_dir)
         .await
         .unwrap_or(0);
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM torrents WHERE deleted_at IS NULL")
-        .fetch_one(state.db())
+    let count = iris_db::torrents::count_active(state.db())
         .await
-        .unwrap_or((0,));
+        .unwrap_or(0);
     let (total_uploaded_bytes, total_downloaded_bytes) =
         iris_db::torrents::lifetime_bytes(state.db())
             .await
@@ -567,7 +566,7 @@ pub(crate) async fn storage_stats(
         target_bytes: max * u64::from(cfg.cleanup_target_pct) / 100,
         threshold_pct: cfg.cleanup_threshold_pct,
         target_pct: cfg.cleanup_target_pct,
-        torrent_count: count.0,
+        torrent_count: count,
         total_uploaded_bytes,
         total_downloaded_bytes,
     }))
@@ -824,9 +823,9 @@ impl From<crate::tmdb::TmdbSuggestion> for TmdbDiagnoseSuggestion {
 pub(crate) async fn diagnose_tmdb(
     State(state): State<AppState>,
     _admin: AdminUser,
-    Path(infohash): Path<String>,
+    Path(infohash): Path<Infohash>,
 ) -> ApiResult<Json<TmdbDiagnose>> {
-    let infohash = infohash.to_ascii_lowercase();
+    let infohash = infohash.into_inner();
     let row = crate::routes::torrents::torrent_or_404(&state, &infohash).await?;
 
     let collection_tmdb_id = match row.collection_id {

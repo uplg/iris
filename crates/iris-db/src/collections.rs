@@ -109,6 +109,23 @@ pub async fn find_by_parsed_title(
     .await
 }
 
+/// The TMDB id of the oldest TV collection under a normalised SCENE title,
+/// when one carries an id.
+pub async fn first_tv_tmdb_id(
+    pool: &SqlitePool,
+    normalized: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT tmdb_id FROM collections \
+         WHERE parsed_title_normalized = ?1 AND kind = 'tv' AND tmdb_id IS NOT NULL \
+         ORDER BY created_at LIMIT 1",
+    )
+    .bind(normalized)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(t,)| t))
+}
+
 /// Every collection currently in the library. Used by the TMDB
 /// backfill to walk the canonical SCENE-grouped entities directly,
 /// rather than re-deriving the title from individual member torrents
@@ -583,6 +600,26 @@ mod tests {
             .fetch_one(pool)
             .await
             .expect("count episode_files")
+    }
+
+    #[tokio::test]
+    async fn first_tv_tmdb_id_skips_movies_and_unresolved() {
+        let pool = migrated_pool().await;
+        assert_eq!(first_tv_tmdb_id(&pool, "dune").await.unwrap(), None);
+        let film = find_or_create(&pool, "dune", "Dune", Kind::Movie, false)
+            .await
+            .unwrap();
+        set_tmdb_id(&pool, film.id, 438_631).await.unwrap();
+        find_or_create(&pool, "dune", "Dune", Kind::Tv, false)
+            .await
+            .unwrap();
+        assert_eq!(first_tv_tmdb_id(&pool, "dune").await.unwrap(), None);
+        let show = find_by_parsed_title(&pool, "dune", Kind::Tv)
+            .await
+            .unwrap()
+            .unwrap();
+        set_tmdb_id(&pool, show.id, 90_228).await.unwrap();
+        assert_eq!(first_tv_tmdb_id(&pool, "dune").await.unwrap(), Some(90_228));
     }
 
     /// The anime noise-split merge re-homes children BEFORE deleting the loser,

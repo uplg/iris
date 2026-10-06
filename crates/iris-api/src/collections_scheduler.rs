@@ -327,8 +327,9 @@ async fn record_availability(
         language: Some(language.as_str().to_string()),
         // Persist the Torznab / UNIT3D `.torrent` URL so the grab
         // path survives the next restart even if the provider's
-        // in-memory link cache evaporated. torr9 will be None
-        // here — its resolve() fetches per-id anyway.
+        // in-memory link cache evaporated. A provider that ships no URL
+        // in its search payload leaves None — its resolve() fetches
+        // per-id anyway.
         download_url: best.download_url.clone(),
         absolute_episode,
         codec: Some(filename::detect_codec(&best.title).as_str().to_string()),

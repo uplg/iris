@@ -286,6 +286,10 @@ impl SearchProvider for Unit3dProvider {
         &self.id
     }
 
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             returns_magnet: false,
@@ -501,8 +505,7 @@ struct TorrentAttributes {
     created_at: Option<String>,
     /// Free-text description supplied by the uploader. `UNIT3D`
     /// renders it as `BBCode` (`[b]…[/b]`, `[center]…[/center]`,
-    /// `[img]…[/img]`, …), the same dialect torr9 uses — so we keep
-    /// the default `DescriptionFormat::Bbcode` rather than declaring
+    /// `[img]…[/img]`, …) — so we keep the default `DescriptionFormat::Bbcode` rather than declaring
     /// it explicitly.
     #[serde(default)]
     description: Option<String>,
@@ -773,8 +776,8 @@ impl TorrentEnvelope {
             .as_deref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
-        // Category for the detail card: `Category / Type` matches
-        // what torr9 surfaces ("Films / Encode", "Series / Remux").
+        // Category for the detail card: `Category / Type`
+        // ("Films / Encode", "Series / Remux").
         let category = match (attrs.category, attrs.release_type) {
             (Some(c), Some(t)) if !t.is_empty() => Some(format!("{c} / {t}")),
             (Some(c), _) => Some(c),
@@ -801,8 +804,7 @@ impl TorrentEnvelope {
             provider_id: provider_id.to_string(),
             external_id: external_id.to_string(),
             title: attrs.name,
-            // `UNIT3D` description is BBCode — same dialect torr9
-            // uses. Default `DescriptionFormat::Bbcode` is what the
+            // `UNIT3D` description is BBCode. Default `DescriptionFormat::Bbcode` is what the
             // BBCode renderer in `PreviewDialog.tsx` expects, so we
             // declare it explicitly here for clarity (and to survive
             // a future change in the `Default` impl).
@@ -1133,8 +1135,6 @@ mod tests {
         let envelope: TorrentEnvelope = serde_json::from_str(json).unwrap();
         let d = envelope.into_torrent_details("tos", "412772");
         assert_eq!(d.title, "Dutton.Ranch.S01E01.MULTi.1080p.WEB.H264-SUPPLY");
-        // BBCode is the format `PreviewDialog` already knows how to
-        // render — same path as torr9.
         assert_eq!(d.description_format, DescriptionFormat::Bbcode);
         assert!(d.description.as_deref().unwrap().contains("[b]Synopsis"));
         // `media_info` text surfaces both as raw NFO and as a parsed

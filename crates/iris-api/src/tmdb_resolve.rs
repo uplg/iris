@@ -1,6 +1,6 @@
 //! SCENE-name → TMDB resolution with persistent cache.
 //!
-//! The indexer-supplied `tmdb_id`s on torr9 results are unreliable —
+//! Indexer-supplied `tmdb_id`s are unreliable —
 //! Silicon Valley releases come back tagged with The Burning Bed's id,
 //! etc. This module derives the canonical TMDB id from the *release
 //! name itself*, which is the authoritative identifier on every

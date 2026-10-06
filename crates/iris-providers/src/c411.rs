@@ -294,6 +294,12 @@ impl SearchProvider for C411 {
         &self.id
     }
 
+    /// The Torznab download links are signed for the inner indexer's
+    /// client (api-key header, referer), so downloads share it.
+    fn http(&self) -> &reqwest::Client {
+        self.torznab.http()
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         // Featured items expose infohashes → resolve() can return a
         // magnet without an HTTP round-trip. Torznab search results
