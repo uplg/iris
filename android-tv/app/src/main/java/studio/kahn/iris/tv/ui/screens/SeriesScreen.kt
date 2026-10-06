@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.background
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,8 +53,8 @@ import studio.kahn.iris.tv.data.EpisodesResponse
 import studio.kahn.iris.tv.data.FollowSummary
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
@@ -332,13 +333,13 @@ private fun Hero(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IrisButton(
+                ActionButton(
                     "Unfollow",
                     onUnfollow,
-                    variant = IrisButtonVariant.Ghost,
+                    style = ActionStyle.Secondary,
                     enabled = !unfollowBusy && follow != null,
                 )
-                IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
+                ActionButton("Back", onBack, style = ActionStyle.Secondary)
             }
         }
     }
@@ -449,9 +450,9 @@ private fun EpisodeRow(
 @Composable
 private fun StatusBadge(ep: EpisodeItem) {
     val (label, color) = when {
-        ep.watched -> "watched" to androidx.compose.ui.graphics.Color(0xFF6B7280)
-        ep.status == EpisodeStatus.downloaded -> "downloaded" to androidx.compose.ui.graphics.Color(0xFF6B7280)
-        else -> "available" to androidx.compose.ui.graphics.Color(0xFF10B981)
+        ep.watched -> "watched" to IrisColor.inkMuted
+        ep.status == EpisodeStatus.downloaded -> "downloaded" to IrisColor.inkMuted
+        else -> "available" to IrisColor.accent
     }
     Surface(
         shape = RoundedCornerShape(4.dp),
@@ -474,15 +475,14 @@ private fun EpisodeAction(
     onGrab: (EpisodeItem, Boolean) -> Unit,
 ) {
     if (ep.status == EpisodeStatus.downloaded && ep.infohash != null && ep.fileIdx != null) {
-        IrisButton(
+        ActionButton(
             if (ep.watched) "Watch again" else "Play",
             { onPlay(ep.infohash, ep.fileIdx.toInt()) },
-            focusedScale = 1f,
         )
         return
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        IrisButton("Prepare", { onGrab(ep, false) }, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
-        IrisButton("Play", { onGrab(ep, true) }, focusedScale = 1f)
+        ActionButton("Prepare", { onGrab(ep, false) }, style = ActionStyle.Secondary)
+        ActionButton("Play", { onGrab(ep, true) })
     }
 }

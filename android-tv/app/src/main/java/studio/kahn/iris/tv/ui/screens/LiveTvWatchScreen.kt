@@ -49,7 +49,7 @@ import studio.kahn.iris.tv.data.LiveNowNext
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.humanizePlaybackError
-import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.OnOutputLost
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Radius
@@ -554,7 +554,7 @@ fun LiveTvWatchScreen(
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                        IrisButton(
+                        ActionButton(
                             "Retry",
                             onClick = {
                                 autoRetryCount = 0
@@ -563,10 +563,10 @@ fun LiveTvWatchScreen(
                             },
                             modifier = Modifier.focusRequester(retryFocus),
                         )
-                        IrisButton(
+                        ActionButton(
                             "Back to channels",
                             onClick = onBack,
-                            variant = studio.kahn.iris.tv.ui.components.IrisButtonVariant.Ghost,
+                            style = studio.kahn.iris.tv.ui.components.ActionStyle.Secondary,
                         )
                     }
                 }

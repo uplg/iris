@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -78,9 +79,9 @@ import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
-import studio.kahn.iris.tv.ui.components.LanguageBadge
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.LanguageChip
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
@@ -612,16 +613,16 @@ private fun GoneReleaseRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        IrisButton(
+        ActionButton(
             if (busy) "Restoring…" else "Download again",
             onDownloadAgain,
-            variant = IrisButtonVariant.Ghost,
+            style = ActionStyle.Secondary,
             enabled = enabled && !busy,
         )
-        IrisButton(
+        ActionButton(
             "Hide",
             onHide,
-            variant = IrisButtonVariant.Ghost,
+            style = ActionStyle.Secondary,
             enabled = enabled && !busy,
         )
     }
@@ -1009,7 +1010,7 @@ private fun CollectionHero(
                     }
                 }
             }
-            IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost)
+            ActionButton("← Back", onBack, style = ActionStyle.Secondary)
         }
     }
 }
@@ -1123,7 +1124,7 @@ private fun EpisodeRow(
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         colors = SurfaceDefaults.colors(
-                            containerColor = Color(0xFF6B7280).copy(alpha = 0.85f),
+                            containerColor = IrisColor.inkMuted.copy(alpha = 0.85f),
                         ),
                     ) {
                         Text(
@@ -1188,7 +1189,7 @@ private fun VariantChip(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    LanguageBadge(language = variant.language)
+                    LanguageChip(language = variant.language)
                     Text(
                         if (variant.watched) "Replay" else "Play",
                         style = MaterialTheme.typography.labelMedium,
@@ -1231,7 +1232,7 @@ private fun VariantChip(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    LanguageBadge(language = variant.language)
+                    LanguageChip(language = variant.language)
                     Text(
                         if (focused && meta.isNotEmpty()) "Grab · $meta" else "Grab",
                         style = MaterialTheme.typography.labelMedium,
@@ -1271,7 +1272,7 @@ private fun VariantChip(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    LanguageBadge(language = variant.language)
+                    LanguageChip(language = variant.language)
                     Text(
                         if (focused && meta.isNotEmpty()) "Re-grab · $meta" else "Re-grab",
                         style = MaterialTheme.typography.labelMedium,
@@ -1303,7 +1304,7 @@ private fun SeasonPackBanner(
             .focusGroup(),
         shape = RoundedCornerShape(12.dp),
         colors = SurfaceDefaults.colors(
-            containerColor = Color(0xFF10B981).copy(alpha = 0.18f),
+            containerColor = IrisColor.accent.copy(alpha = 0.18f),
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
@@ -1320,7 +1321,7 @@ private fun SeasonPackBanner(
                     Surface(
                         shape = RoundedCornerShape(4.dp),
                         colors = SurfaceDefaults.colors(
-                            containerColor = Color(0xFF10B981).copy(alpha = 0.85f),
+                            containerColor = IrisColor.accent.copy(alpha = 0.85f),
                         ),
                     ) {
                         Text(
@@ -1335,7 +1336,7 @@ private fun SeasonPackBanner(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    LanguageBadge(language = pack.language)
+                    LanguageChip(language = pack.language)
                 }
                 val meta = listOfNotNull(
                     pack.quality?.takeIf { it.isNotBlank() },
@@ -1352,8 +1353,8 @@ private fun SeasonPackBanner(
                 }
             }
             Row(buttonsModifier, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                IrisButton("Prepare", onPrepare, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
-                IrisButton("Grab & play", onGrab, focusedScale = 1f)
+                ActionButton("Prepare", onPrepare, style = ActionStyle.Secondary)
+                ActionButton("Grab & play", onGrab)
             }
         }
     }
@@ -1475,7 +1476,7 @@ private fun LoadingOrError(error: String?, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
                 Text(error, color = MaterialTheme.colorScheme.error)
-                IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
+                ActionButton("Back", onBack, style = ActionStyle.Secondary)
             }
         } else {
             Text("Loading collection…", color = MaterialTheme.colorScheme.onSurfaceVariant)

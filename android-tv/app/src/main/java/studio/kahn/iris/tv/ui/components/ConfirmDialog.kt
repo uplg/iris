@@ -1,7 +1,6 @@
 package studio.kahn.iris.tv.ui.components
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,7 +20,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -30,19 +27,17 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.Radius
-import studio.kahn.iris.tv.ui.theme.Spacing
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
- /**
-  * Scrim + centered card confirmation (same shape as the Continue
-  * Watching manage sheet). Back or the scrim cancels; focus lands on
-  * the CONFIRM button.
-  */
-@OptIn(ExperimentalTvMaterial3Api::class)
+/**
+ * A centered confirmation on the dialog scrim: [eyebrow], [title], an
+ * optional [body], then the confirm action (focused on open) and Cancel.
+ * Back, a tap on the scrim or Cancel call [onCancel]. Safe to open from a
+ * hold-OK: the still-held OK cannot confirm it.
+ */
 @Composable
 fun ConfirmDialog(
     eyebrow: String,
@@ -63,7 +58,7 @@ fun ConfirmDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
+            .dialogScrim()
             .onPreviewKeyEvent { event ->
                 // Back cancels, handled at the key level — the dispatcher route
                 // proved unreliable with focus inside the dialog (first press
@@ -93,41 +88,41 @@ fun ConfirmDialog(
         Column(
             Modifier
                 .widthIn(max = 460.dp)
-                .background(IrisColors.Elev2, RoundedCornerShape(Radius.lg))
+                .dialogCard()
                 // Swallow touch taps on the card body — without this they
                 // bubble to the scrim's clickable and dismiss the dialog.
                 .touchClick {}
-                .padding(Spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+                .padding(IrisSpace.s8),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
         ) {
             Eyebrow(eyebrow)
             Text(
                 title,
-                style = MaterialTheme.typography.titleMedium,
-                color = IrisColors.Foreground,
+                style = IrisType.group,
+                color = IrisColor.ink,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             if (body != null) {
                 Text(
                     body,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = IrisColors.MutedForeground,
+                    style = IrisType.meta,
+                    color = IrisColor.inkMuted,
                 )
             }
             // Intrinsic-width buttons side by side — a fillMaxWidth
             // button wears a card-wide focus ring, which reads as a
             // giant highlight instead of a button.
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                IrisButton(
+            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                ActionButton(
                     confirmLabel,
                     onConfirm,
                     modifier = Modifier.focusRequester(confirmFocus),
                 )
-                IrisButton(
+                ActionButton(
                     "Cancel",
                     onCancel,
-                    variant = IrisButtonVariant.Ghost,
+                    style = ActionStyle.Secondary,
                 )
             }
         }

@@ -19,6 +19,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.openapi.generator)
+    alias(libs.plugins.baselineprofile)
+    alias(libs.plugins.roborazzi)
 }
 
 android {
@@ -97,6 +99,14 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric screenshot tests need the merged resources (fonts,
+            // drawables) to render the components as the device does.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 // AGP 9.0+ owns the Kotlin compilation; configure the JVM toolchain here.
@@ -104,7 +114,24 @@ kotlin {
     jvmToolchain(17)
 }
 
-// ---------------------------------------------------------------------------
+composeCompiler {
+    // The generated DTOs are immutable decoded values: declaring them stable
+    // lets a refreshed-but-equal payload skip recomposition.
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose_stability.conf"))
+}
+
+// Screenshots live in the source tree so `verifyRoborazziDebug` compares
+// against committed references. Record: `./gradlew :app:recordRoborazziDebug`.
+roborazzi {
+    outputDir.set(layout.projectDirectory.dir("src/test/screenshots"))
+}
+
+// The baseline profile is generated on a real box (see baselineprofile/),
+// then committed under src/release/generated/baselineProfiles.
+baselineProfile {
+    automaticGenerationDuringBuild = false
+}
+
 // OpenAPI → Kotlin DTOs. The backend's committed spec (../web/openapi.json,
 // utoipa-derived) is the single source of truth for the request/response
 // contract; this regenerates the `@Serializable` model layer on every build
@@ -158,9 +185,24 @@ dependencies {
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
+
+    // Installs the committed baseline profile on first launch (sideloaded
+    // APKs get no Play cloud profile).
+    implementation(libs.profileinstaller)
+    baselineProfile(project(":baselineprofile"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
 
@@ -175,7 +217,6 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     // Compose for TV
-    implementation(libs.tv.foundation)
     implementation(libs.tv.material)
 
     // Navigation

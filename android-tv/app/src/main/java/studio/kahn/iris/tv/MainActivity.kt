@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv
 
+import android.annotation.SuppressLint
 import android.app.SearchManager
 import android.content.Intent
 import android.net.Uri
@@ -15,10 +16,13 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.ui.IrisRoot
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
-import studio.kahn.iris.tv.ui.theme.IrisTvTheme
+import studio.kahn.iris.tv.ui.theme.IrisTheme
 
 class MainActivity : ComponentActivity() {
 
+    // Activity.dispatchKeyEvent is public framework API; lint trips on the
+    // @RestrictTo that core's ComponentActivity puts on its own override.
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (PlayerKeyRouter.handler?.invoke(event) == true) return true
         return super.dispatchKeyEvent(event)
@@ -48,7 +52,7 @@ class MainActivity : ComponentActivity() {
             runCatching { container.channels.sync(container) }
         }
         setContent {
-            IrisTvTheme {
+            IrisTheme {
                 val session by container.sessionStore.session.collectAsState(initial = null)
                 // We pre-seed an empty `IrisSession` while pairing/login are
                 // in flight so the [SessionCookieJar] has somewhere to write

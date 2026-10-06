@@ -4,76 +4,143 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.Typography as TvTypography
 import studio.kahn.iris.tv.R
 
-/**
- * Three families, lifted straight from the web design system so Web and TV
- * read as the same product (see the design doc / `web` Tailwind tokens):
- *
- *   * **Cal Sans** — the display face. Tight, characterful, used only for
- *     hero / section / poster titles. Ships a single drawn weight, so every
- *     [FontWeight] maps to the one file; we never fake-bold it.
- *   * **Inter** — the workhorse sans for body copy, buttons, metadata.
- *     Four real weights (400/500/600/700) bundled as static instances so it
- *     renders identically on an AOSP box with no Play Services (no reliance
- *     on Downloadable Fonts).
- *   * **JetBrains Mono** — the mono accent for technical metadata: file
- *     names, sizes, timecodes, "4K · HDR" pills, keyboard hints.
- *
- * All bundled in `res/font` (≈2.5 MB total) rather than fetched at runtime
- * so the typography is guaranteed present on every TV, online or not.
- */
+/** Fraunces: display and titles (web `--font-display`). */
+val Fraunces = FontFamily(
+    Font(R.font.fraunces_regular, FontWeight.Normal),
+    Font(R.font.fraunces_medium, FontWeight.Medium),
+    Font(R.font.fraunces_semibold, FontWeight.SemiBold),
+)
+
+/** Cal Sans 2: every text that is not a title (web `--font-text`). */
 val CalSans = FontFamily(
     Font(R.font.cal_sans_regular, FontWeight.Normal),
-    Font(R.font.cal_sans_regular, FontWeight.Medium),
-    Font(R.font.cal_sans_regular, FontWeight.SemiBold),
-    Font(R.font.cal_sans_regular, FontWeight.Bold),
+    Font(R.font.cal_sans_medium, FontWeight.Medium),
+    Font(R.font.cal_sans_semibold, FontWeight.SemiBold),
+    Font(R.font.cal_sans_bold, FontWeight.Bold),
 )
 
-val Inter = FontFamily(
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-    Font(R.font.inter_bold, FontWeight.Bold),
+/** Borel: the "Iris" wordmark only (web `--font-brand`). */
+val Borel = FontFamily(Font(R.font.borel_display_regular, FontWeight.Normal))
+
+val FontDisplay: FontFamily = Fraunces
+val FontText: FontFamily = CalSans
+val FontBrand: FontFamily = Borel
+/** Release names and file names (web `--font-mono`: the system monospace). */
+val FontMono: FontFamily = FontFamily.Monospace
+
+private const val TABULAR = "tnum"
+
+private val tight = LineHeightStyle(
+    alignment = LineHeightStyle.Alignment.Center,
+    trim = LineHeightStyle.Trim.None,
 )
 
-val JetBrainsMono = FontFamily(
-    Font(R.font.jetbrains_mono_regular, FontWeight.Normal),
-    Font(R.font.jetbrains_mono_medium, FontWeight.Medium),
-    Font(R.font.jetbrains_mono_semibold, FontWeight.SemiBold),
+private fun display(size: TextUnit, line: TextUnit) = TextStyle(
+    fontFamily = Fraunces,
+    fontWeight = FontWeight.Medium,
+    fontSize = size,
+    lineHeight = line,
+    letterSpacing = (-0.01).em,
+    lineHeightStyle = tight,
 )
 
-/** Convenience aliases mirroring the web `--font-*` custom properties. */
-val FontDisplay = CalSans
-val FontSans = Inter
-val FontMono = JetBrainsMono
+private fun text(
+    size: TextUnit,
+    line: TextUnit,
+    weight: FontWeight = FontWeight.Normal,
+    tabular: Boolean = false,
+) = TextStyle(
+    fontFamily = CalSans,
+    fontWeight = weight,
+    fontSize = size,
+    lineHeight = line,
+    fontFeatureSettings = if (tabular) TABULAR else null,
+    lineHeightStyle = tight,
+)
 
-// 10-foot typography. Display roles use Cal Sans with the tight tracking the
-// web hero carries (`letter-spacing: -0.03em`); everything else is Inter.
-// Sizes stay restrained vs. the 1920px web mock — Compose text renders at the
-// panel's real dp, and a Mi Box at 1280×720 must not wrap a hero onto three
-// lines. The body/title scale matches the previous TV tuning so existing
-// screens keep their rhythm; only the family + display tracking change.
-@OptIn(ExperimentalTvMaterial3Api::class)
+/**
+ * The type scale of the TV boards. Boards are 1920x1080 px = 960x540 dp, so
+ * every size here is the board's px / 2 (named after where the board uses it).
+ * Times, sizes and counts use [meta] / [metaLarge] / [figure], which carry
+ * tabular figures so columns of numbers line up and a ticking clock does
+ * not jitter.
+ */
+object IrisType {
+    /** 84 px: the home hero title. */
+    val hero = display(42.sp, 43.sp)
+    /** 56 px: the getting-ready title. */
+    val headline = display(28.sp, 30.sp)
+    /** 52 px: a title or release page heading. */
+    val title = display(26.sp, 28.sp)
+    /** 48 px: a top-level page name (Library). */
+    val page = display(24.sp, 28.sp)
+    /** 40 px: the title in the player's top bar. */
+    val stageTitle = display(20.sp, 22.sp)
+    /** 36 px: a side panel's or a section's large heading. */
+    val panel = display(18.sp, 22.sp)
+    /** 32 px: a row or section heading. */
+    val section = display(16.sp, 20.sp)
+    /** 28 px: a heading inside a framed group. */
+    val group = display(14.sp, 17.sp)
+
+    /** 24/32 px: body text, a fact's value. */
+    val body = text(12.sp, 16.sp)
+    /** 24 px semibold: a card's title line. */
+    val bodyStrong = text(12.sp, 16.sp, FontWeight.SemiBold)
+    /** 21/30 px: long text in a framed panel (release notes). */
+    val reading = text(10.5.sp, 15.sp)
+    /** 26 px medium: a large action's label. */
+    val action = text(13.sp, 13.sp, FontWeight.Medium)
+    /** 24 px medium: a tab, a regular action, a side-panel option. */
+    val control = text(12.sp, 12.sp, FontWeight.Medium)
+    /** 22 px medium: a pill, a small action. */
+    val controlSmall = text(11.sp, 11.sp, FontWeight.Medium)
+    /** 22/28 px medium, tabular: the muted meta line everywhere (`.tm`). */
+    val meta = text(11.sp, 14.sp, FontWeight.Medium, tabular = true)
+    /** 26/34 px medium, tabular: the larger meta line under a hero title. */
+    val metaLarge = text(13.sp, 17.sp, FontWeight.Medium, tabular = true)
+    /** 18/24 px medium, tabular: the smallest meta (grid card facts). */
+    val metaSmall = text(9.sp, 12.sp, FontWeight.Medium, tabular = true)
+    /** 26 px medium, tabular: the player's clock figures. */
+    val figure = text(13.sp, 13.sp, FontWeight.Medium, tabular = true)
+    /** 20 px medium, uppercase at call site via [Eyebrow]: a kicker above a title. */
+    val eyebrow = text(10.sp, 12.sp, FontWeight.Medium).copy(letterSpacing = 0.06.em)
+    /** 20 px medium: a chip's words. */
+    val chip = text(10.sp, 10.sp, FontWeight.Medium)
+    /** 18 px semibold: a key cap. */
+    val key = text(9.sp, 9.sp, FontWeight.SemiBold)
+    /** 20 px: a release or file name. */
+    val mono = TextStyle(fontFamily = FontMono, fontSize = 10.sp, lineHeight = 13.sp)
+    /** 34 px Borel: the "Iris" wordmark. */
+    val brand = TextStyle(fontFamily = Borel, fontSize = 17.sp, lineHeight = 17.sp)
+}
+
+/**
+ * tv-material's [androidx.tv.material3.MaterialTheme.typography], mapped onto
+ * [IrisType] so a legacy `MaterialTheme.typography.x` already reads in the
+ * new faces. New code uses [IrisType] directly.
+ */
 val IrisTvTypography = TvTypography(
-    displayLarge = TextStyle(fontFamily = CalSans, fontSize = 64.sp, lineHeight = 64.sp, fontWeight = FontWeight.Normal, letterSpacing = (-1.8).sp),
-    displayMedium = TextStyle(fontFamily = CalSans, fontSize = 52.sp, lineHeight = 54.sp, fontWeight = FontWeight.Normal, letterSpacing = (-1.4).sp),
-    displaySmall = TextStyle(fontFamily = CalSans, fontSize = 40.sp, lineHeight = 44.sp, fontWeight = FontWeight.Normal, letterSpacing = (-1.0).sp),
-    headlineLarge = TextStyle(fontFamily = CalSans, fontSize = 34.sp, lineHeight = 40.sp, fontWeight = FontWeight.Normal, letterSpacing = (-0.8).sp),
-    headlineMedium = TextStyle(fontFamily = CalSans, fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Normal, letterSpacing = (-0.5).sp),
-    headlineSmall = TextStyle(fontFamily = CalSans, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.Normal, letterSpacing = (-0.3).sp),
-    titleLarge = TextStyle(fontFamily = Inter, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
-    titleMedium = TextStyle(fontFamily = Inter, fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.1).sp),
-    titleSmall = TextStyle(fontFamily = Inter, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.1).sp),
-    bodyLarge = TextStyle(fontFamily = Inter, fontSize = 18.sp, lineHeight = 28.sp, fontWeight = FontWeight.Normal),
-    bodyMedium = TextStyle(fontFamily = Inter, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Normal),
-    bodySmall = TextStyle(fontFamily = Inter, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Normal),
-    // Label roles carry the eyebrow tracking (uppercase + wide letter-spacing)
-    // applied at call sites; the base style stays Inter SemiBold.
-    labelLarge = TextStyle(fontFamily = Inter, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp),
-    labelMedium = TextStyle(fontFamily = Inter, fontSize = 13.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.4.sp),
-    labelSmall = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp),
+    displayLarge = IrisType.hero,
+    displayMedium = IrisType.title,
+    displaySmall = IrisType.page,
+    headlineLarge = IrisType.stageTitle,
+    headlineMedium = IrisType.panel,
+    headlineSmall = IrisType.section,
+    titleLarge = IrisType.group,
+    titleMedium = IrisType.bodyStrong.copy(fontSize = 13.sp, lineHeight = 17.sp),
+    titleSmall = IrisType.control,
+    bodyLarge = IrisType.metaLarge.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = null),
+    bodyMedium = IrisType.body,
+    bodySmall = IrisType.meta,
+    labelLarge = IrisType.controlSmall,
+    labelMedium = IrisType.eyebrow,
+    labelSmall = IrisType.key,
 )

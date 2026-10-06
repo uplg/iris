@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.background
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,10 +34,9 @@ import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IrisSession
 import studio.kahn.iris.tv.data.LoginRequest
-import studio.kahn.iris.tv.ui.components.IrisButton
+import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.IrisWordmark
 import studio.kahn.iris.tv.ui.theme.IrisColors
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 
 /**
  * Fallback re-pair / direct login screen. The user types their Iris URL +
@@ -64,7 +64,7 @@ fun SetupScreen(
     }
 
     Box(Modifier.fillMaxSize().background(IrisColors.Background), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Box(Modifier.fillMaxSize().background(IrisColor.ground))
         Column(
             // Scrollable + IME-aware: on a phone (landscape, soft keyboard
             // up) the fixed column was taller than the viewport and the
@@ -115,10 +115,10 @@ fun SetupScreen(
                 Text(it, color = MaterialTheme.colorScheme.error)
             }
 
-            IrisButton(
+            ActionButton(
                 if (pending) "Signing in…" else "Sign in",
                 {
-                    if (pending) return@IrisButton
+                    if (pending) return@ActionButton
                     pending = true
                     error = null
                     scope.launch {

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -84,7 +85,10 @@ object AppUpdater {
         val tmp = File(cacheDir, "$APK_FILENAME.part")
         if (tmp.exists()) tmp.delete()
 
-        val request = Request.Builder().url(APK_URL).get().build()
+        // no-store: the HTTP cache must not copy a 50 MB APK it will never serve.
+        val request = Request.Builder().url(APK_URL).get()
+            .cacheControl(CacheControl.Builder().noStore().build())
+            .build()
         val response = try {
             client.newCall(request).execute()
         } catch (e: IOException) {
@@ -162,7 +166,9 @@ object AppUpdater {
     suspend fun fetchLatestVersion(client: OkHttpClient): String? =
         withContext(Dispatchers.IO) {
             try {
-                val req = Request.Builder().url(LATEST_VERSION_URL).get().build()
+                val req = Request.Builder().url(LATEST_VERSION_URL).get()
+                    .cacheControl(CacheControl.FORCE_NETWORK)
+                    .build()
                 client.newCall(req).execute().use { resp ->
                     if (!resp.isSuccessful) return@withContext null
                     val raw = resp.body.string().trim()

@@ -37,8 +37,8 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MoodResults
 import androidx.compose.ui.text.style.TextOverflow
 import studio.kahn.iris.tv.data.MoodTile
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -110,23 +110,23 @@ fun MoodsScreen(
             ) {
                 SectionTitle(selected?.label ?: "What are you in the mood for?")
                 Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                    IrisButton(
+                    ActionButton(
                         text = "Films",
                         onClick = { kind = "movie" },
-                        variant =
-                            if (kind == "movie") IrisButtonVariant.Primary else IrisButtonVariant.Ghost,
+                        style =
+                            if (kind == "movie") ActionStyle.Primary else ActionStyle.Secondary,
                     )
-                    IrisButton(
+                    ActionButton(
                         text = "Series",
                         onClick = { kind = "tv" },
-                        variant =
-                            if (kind == "tv") IrisButtonVariant.Primary else IrisButtonVariant.Ghost,
+                        style =
+                            if (kind == "tv") ActionStyle.Primary else ActionStyle.Secondary,
                     )
                     if (selected != null) {
-                        IrisButton(
+                        ActionButton(
                             text = "← Back",
                             onClick = { selected = null },
-                            variant = IrisButtonVariant.Ghost,
+                            style = ActionStyle.Secondary,
                         )
                     }
                 }

@@ -2,7 +2,9 @@ package studio.kahn.iris.tv.data
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import okhttp3.Authenticator
+import okhttp3.Cache
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -18,6 +20,8 @@ import java.util.concurrent.TimeUnit
  *  by `client_version::client_version_layer` for telemetry + the
  *  `426 Upgrade Required` gate. */
 const val IRIS_CLIENT_HEADER = "X-Iris-Client"
+
+private const val HTTP_CACHE_BYTES = 20L * 1024 * 1024
 
 /** HTTP 426 — server tells us we're below `MIN_TV_VERSION`. */
 private const val HTTP_UPGRADE_REQUIRED = 426
@@ -36,6 +40,7 @@ private const val HTTP_UPGRADE_REQUIRED = 426
  */
 fun buildOkHttpClient(
     sessionStore: SessionStore,
+    cacheDir: File?,
     onOutdated: () -> Unit,
 ): OkHttpClient {
     val authenticator = IrisAuthenticator(sessionStore)
@@ -45,6 +50,9 @@ fun buildOkHttpClient(
     val clientHeaderValue = "tv/${BuildConfig.VERSION_NAME}"
     val client = OkHttpClient.Builder()
         .cookieJar(SessionCookieJar(sessionStore))
+        // Honours the server's Cache-Control / ETag on API reads; posters
+        // go through Coil's own caches, streams through the media client.
+        .apply { if (cacheDir != null) cache(Cache(File(cacheDir, "http"), HTTP_CACHE_BYTES)) }
         .authenticator(authenticator)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -113,6 +121,8 @@ fun buildOkHttpClient(
  */
 fun deriveMediaOkHttpClient(api: OkHttpClient): OkHttpClient =
     api.newBuilder()
+        // Byte-range video bodies have no business in the API's HTTP cache.
+        .cache(null)
         .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
         .dispatcher(Dispatcher())
         .callTimeout(0, TimeUnit.MILLISECONDS)

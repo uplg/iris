@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -48,8 +49,8 @@ import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -209,7 +210,7 @@ fun TorrentsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost, focusedScale = 1f)
+                ActionButton("← Back", onBack, style = ActionStyle.Secondary)
             }
             list?.let { SummaryStrip(it, totalUploaded, totalDownloaded) }
             error?.let {
@@ -399,7 +400,7 @@ private fun TorrentCard(
                         shape = ButtonDefaults.shape(shape = RoundedCornerShape(10.dp)),
                         colors = ButtonDefaults.colors(
                             containerColor = Danger,
-                            contentColor = Color(0xFF1A0B0B),
+                            contentColor = IrisColor.ground,
                         ),
                         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
                     ) { Text(if (deleting) "Deleting…" else "Confirm") }

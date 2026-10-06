@@ -1,80 +1,58 @@
 package studio.kahn.iris.tv.ui.theme
 
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 
 /**
- * The Iris palette, ported 1:1 from the web design system's OKLCH tokens
- * (`web` `styles` `:root` + `[data-accent="violet"]`). OKLCH was converted to
- * sRGB offline so the TV reads as the same product as the web app — same
- * slate-violet ground, same indigo→violet→fuchsia brand ramp.
+ * The synthe.se palette, dark side, as `web/src/styles/tokens.css` declares it
+ * (names follow the web custom properties, camel-cased). Ground, ink and ONE
+ * hue, petrol; warn and down for states, always said in words beside them.
+ * No gradients, no glow, no glass: every fill below is flat.
  *
- * Single source of truth: `Theme.kt` feeds these into both the TV-Material and
- * stock-Material3 color schemes, and components read the brand ramp / glow /
- * elevation tints directly from here for things the Material `ColorScheme`
- * can't express (gradients, focus glow, layered surfaces).
+ * The only colors allowed outside `ui/theme/`. The player is a dark "stage"
+ * of its own ([stage] and friends), the same in every theme.
  */
-object IrisColors {
-    // ── Ground & ink ────────────────────────────────────────────────────────
-    val Background = Color(0xFF0B0C10)      // oklch(0.155 0.008 270)
-    val BackgroundDeep = Color(0xFF07080B)  // oklch(0.135 0.008 270) — gradient floor
-    val Foreground = Color(0xFFF9FAFC)      // oklch(0.985 0.003 270)
-    val Card = Color(0xFF131418)            // oklch(0.192 0.009 270) — base surface / elev
-    val Elev2 = Color(0xFF1C1E24)           // oklch(0.235 0.012 270) — raised surface
-    val MutedForeground = Color(0xFFA2A4AA) // oklch(0.72 0.008 270)
-    val FgDim = Color(0xFF72747B)           // oklch(0.56 0.01 270) — captions, mono subs
+object IrisColor {
+    val ground = Color(0xFF151A21)
+    val groundRaised = Color(0xFF1E2530)
+    val surface = Color(0xFF1A2029)
+    val line = Color(0xFF2E3744)
+    val ink = Color(0xFFEAE7E0)
+    val inkMuted = Color(0xFFA8AEB8)
+    /** Muted text on an [ink] fill (a focused row's secondary line). */
+    val inkMutedOnInk = Color(0xFF525A66)
 
-    // Hairlines are pure-white at low alpha, exactly like the web
-    // `--border` / `--border-strong` (`oklch(1 0 0 / 0.08|0.18)`).
-    val Border = Color(0xFFFFFFFF).copy(alpha = 0.08f)
-    val BorderStrong = Color(0xFFFFFFFF).copy(alpha = 0.18f)
-    val Overlay06 = Color(0xFFFFFFFF).copy(alpha = 0.06f) // ghost button fill
-    val Overlay12 = Color(0xFFFFFFFF).copy(alpha = 0.12f) // ghost button focus fill
+    val accent = Color(0xFF63C0CB)
+    /** UI and large text only (3.6:1 on ground). */
+    val accentSoft = Color(0xFF3E7A84)
+    val accentWash = Color(0xFF1D2A31)
+    val onAccent = Color(0xFF151A21)
 
-    // ── Brand ramp (violet accent — the design default) ─────────────────────
-    val Brand = Color(0xFFA58DFF)           // oklch(0.72 0.18 290)
-    val BrandHi = Color(0xFFB199FF)         // brand l+0.04 — primary button top stop
-    val Brand2 = Color(0xFF69C1FC)          // oklch(0.78 0.12 240) — cool end
-    val Brand3 = Color(0xFFF08FE8)          // oklch(0.78 0.16 330) — warm end
-    val OnBrand = Color(0xFF0C0D12)         // oklch(0.16 0.01 270) — ink on brand fills
-    val BrandSoft = Brand.copy(alpha = 0.18f)
-    val BrandGlow = Brand.copy(alpha = 0.45f)
+    /** web `--status-degraded` / `--warn-text`. */
+    val warn = Color(0xFFD89372)
+    /** web `--status-down` / `--blocked`. */
+    val down = Color(0xFFE07A63)
+    val downWash = Color(0xFF33211F)
 
-    // ── Status ──────────────────────────────────────────────────────────────
-    val Success = Color(0xFF55C483)         // oklch(0.74 0.14 155)
-    val Warn = Color(0xFFFFB330)            // oklch(0.82 0.16 75)
-    val Destructive = Color(0xFFFF4C4D)     // oklch(0.68 0.22 25)
+    /** Behind a dialog. */
+    val overlay = Color(0xB8151A21)
+
+    /** The fallback tile behind a poster or still with no artwork, and its title. */
+    val art = Color(0xFF24323F)
+    val artInk = Color(0xFFF2F0EA)
+    /** A provider tag laid over artwork. */
+    val artScrim = Color(0xC70E1218)
+
+    val stage = Color(0xFF0E1218)
+    val stageRaised = Color(0xFF1F2B36)
+    val stageInk = Color(0xFFEAE7E0)
+    val stageMuted = Color(0xFFA8AEB8)
+    /** The player's top and bottom bars (web `--stage-scrim`). */
+    val stageScrim = Color(0xDB0E1218)
+    /** The seek track, and a key cap's frame on the stage. */
+    val stageLine = Color(0x2EFFFFFF)
+    /** The buffered part of the seek track. */
+    val stageFill = Color(0x52FFFFFF)
+
+    val cueBackground = Color(0xC7000000)
+    val cueInk = Color(0xFFFFFFFF)
 }
-
-/**
- * The signature indigo→violet→fuchsia wordmark/heading gradient
- * (`--brand-text`, `linear-gradient(105deg, brand-3, brand, brand-2)`).
- * 105° ≈ left→right with a slight downward tilt; for a single line of text a
- * horizontal sweep reads identically and survives any width.
- */
-fun irisBrandGradient(): Brush = Brush.linearGradient(
-    0.0f to IrisColors.Brand3,
-    0.5f to IrisColors.Brand,
-    1.0f to IrisColors.Brand2,
-)
-
-/**
- * Primary-button fill — the subtle top-down sheen the web uses
- * (`linear-gradient(180deg, brand l+0.04, brand)`), giving the flat brand a
- * touch of dimensionality without a hard bevel.
- */
-fun irisPrimaryFill(): Brush = Brush.verticalGradient(
-    0.0f to IrisColors.BrandHi,
-    1.0f to IrisColors.Brand,
-)
-
-/**
- * Ambient backlight wash for the home backdrop (`.ambient`): a soft violet
- * glow biased to the upper-right plus a cooler pool at the lower-left, fading
- * to the page ground. Purely decorative — no content depends on it.
- */
-fun irisAmbient(): Brush = Brush.linearGradient(
-    0.0f to IrisColors.Brand.copy(alpha = 0.14f),
-    0.45f to IrisColors.Background,
-    1.0f to IrisColors.Brand2.copy(alpha = 0.10f),
-)

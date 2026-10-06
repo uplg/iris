@@ -69,8 +69,8 @@ import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.installIrisTrackNameProvider
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.IrisPlayerView
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
 
@@ -277,7 +277,7 @@ fun WatchScreen(
                 fileIdx = fileIdx,
                 probe = probe!!,
                 torrentName = torrent?.name,
-                fileSizeBytes = torrent?.files?.firstOrNull { it.index.toInt() == fileIdx }?.sizeBytes ?: 0L,
+                fileSizeBytes = torrent?.files?.firstOrNull { it.index == fileIdx }?.sizeBytes ?: 0L,
                 startPositionSec = resumePositionSec,
                 initialAudioIdx = savedAudioIdx,
                 initialSubIdx = savedSubIdx,
@@ -1351,11 +1351,11 @@ private fun LoadingOverlay(
                     modifier = Modifier.padding(top = 12.dp),
                 ) {
                     if (gone) {
-                        IrisButton(if (regrabbing) "Grabbing…" else "Grab it again", onRegrab)
+                        ActionButton(if (regrabbing) "Grabbing…" else "Grab it again", onRegrab)
                     } else {
-                        IrisButton("Retry", onRetry)
+                        ActionButton("Retry", onRetry)
                     }
-                    IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
+                    ActionButton("Back", onBack, style = ActionStyle.Secondary)
                 }
                 return@Column
             }

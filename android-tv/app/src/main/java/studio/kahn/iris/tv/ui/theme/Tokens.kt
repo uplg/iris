@@ -1,162 +1,164 @@
 package studio.kahn.iris.tv.ui.theme
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.floor
+import kotlin.math.max
 
 /**
- * Centralised spacing scale. Use these instead of literal `Modifier.padding(16.dp)`
- * calls so the visual rhythm of every screen comes from one place.
- *
- * Scale rationale:
- *   * 4 dp grid (`xs`, `sm`, `md`, `lg`, `xl`, `xxl`) — Material's default
- *     baseline. Doubles cleanly which suits TV's bigger UI footprint.
- *   * `gutter` (40 dp) is the standard outer page margin — matches the
- *     hero / shelf indents on HomeScreen.
+ * Spacing scale, from the gaps the TV boards use (board px / 2 = dp). Use
+ * these for padding and gaps; layout-specific sizes live in [IrisSize].
  */
-object Spacing {
-    val xs = 4.dp
-    val sm = 8.dp
-    val md = 12.dp
-    val lg = 16.dp
-    val xl = 24.dp
-    val xxl = 32.dp
-    val xxxl = 48.dp
-    val gutter = 40.dp
+object IrisSpace {
+    /** 4 px: a hairline gap. */
+    val s0 = 2.dp
+    /** 8 px: tabs, a dense row of chips. */
+    val s1 = 4.dp
+    /** 10-12 px: card text lines, key cap to its words, chip gaps. */
+    val s2 = 6.dp
+    /** 16 px: action rows, a field's inner gap, fact rows' vertical padding. */
+    val s3 = 8.dp
+    /** 20 px: a section's title to its content, an icon to its label. */
+    val s4 = 10.dp
+    /** 24 px: blocks inside a column. */
+    val s5 = 12.dp
+    /** 28-32 px: the page header's gap, cards in a row. */
+    val s6 = 16.dp
+    /** 40 px: the page sections, key hints between each other. */
+    val s7 = 20.dp
+    /** 48 px: two columns side by side. */
+    val s8 = 24.dp
+    /** 64 px: an aside next to its content. */
+    val s9 = 32.dp
+    /** 72 px: the keyboard column next to the results. */
+    val s10 = 36.dp
 }
 
-/**
- * Corner radius scale used by Card / Surface / Button shapes. Picks from
- * the same handful of values across the app so focus highlights land on
- * a consistent silhouette.
- */
-object Radius {
-    val sm = 4.dp
-    val md = 8.dp
-    val lg = 12.dp
-    val xl = 16.dp
-    /** Poster / large card corner (web `.poster` 18px, `.detail-poster` 24px). */
-    val poster = 18.dp
-    /** Buttons (web `.btn` 14px). */
-    val button = 14.dp
-    /** Glass panels / search bar (web `.search-bar` 22px). */
-    val panel = 20.dp
-    /** Pill / fully-rounded (chips, progress bars). */
+/** Corner radii by role (board px / 2). */
+object IrisRadius {
+    /** 8 px: a key cap, a mini poster. */
+    val key = 4.dp
+    /** 10 px: an on-screen keyboard key. */
+    val control = 5.dp
+    /** 12 px: posters, stills, rows, fields, side-panel options. */
+    val card = 6.dp
+    /** 14 px: a large poster beside a page, a framed panel. */
+    val panel = 7.dp
+    /** Pills, tabs, buttons, meters. */
     val pill = 999.dp
 }
 
-/**
- * Focus treatment constants shared by the focusable design-system
- * components, so the brand ring + lift + glow read identically whether the
- * focused thing is a poster, a button, or an icon chip (web: `box-shadow:
- * 0 0 0 3px brand, 0 0 0 7px brand-soft` + `translateY` + glow).
- */
-object Focus {
-    /** Brand ring stroke width on focus. */
-    val ring = 3.dp
-    /** Poster pop on focus (web `.card[data-focused] scale(1.06)`). */
-    const val posterScale = 1.06f
-    /** Button / chip pop (web `.btn` `scale(1.02)`). */
-    const val controlScale = 1.04f
-    /** Brand glow elevation behind a focused surface. */
-    val glow = 16.dp
+/** The shapes behind [IrisRadius], built once. */
+object IrisShape {
+    val key = RoundedCornerShape(IrisRadius.key)
+    val control = RoundedCornerShape(IrisRadius.control)
+    val card = RoundedCornerShape(IrisRadius.card)
+    val panel = RoundedCornerShape(IrisRadius.panel)
+    val pill = RoundedCornerShape(IrisRadius.pill)
+    val circle = CircleShape
 }
 
 /**
- * Card width scale for poster-style cards. `Sm` is the Watchlist /
- * Continue Watching size; `Md` for hero-adjacent featured cards.
+ * The one focus treatment (every board): a 4 px accent outline 4 px outside
+ * the element; a focused card grows to 1.06; a focused button, pill, tab or
+ * row fills with [IrisColor.ink] and its words turn [IrisColor.ground].
  */
-object CardSize {
-    val sm = 140.dp
-    val md = 180.dp
-    val lg = 220.dp
+object IrisFocus {
+    val ringWidth = 2.dp
+    val ringOffset = 2.dp
+    const val cardScale = 1.06f
+    const val animationMs = 150
+}
+
+/** Component sizes from the boards (px / 2). */
+object IrisSize {
+    /** 72 px: a large action, the search field, a getting-ready step. */
+    val controlLarge = 36.dp
+    /** 64 px: a regular action, an on-screen key. */
+    val control = 32.dp
+    /** 56 px: a tab, a small action. */
+    val controlSmall = 28.dp
+    /** 52 px: a filter pill. */
+    val pill = 26.dp
+    /** 40 px: a chip. */
+    val chip = 20.dp
+    /** 36 px: a small chip. */
+    val chipSmall = 18.dp
+    /** 68 px: a side-panel option. */
+    val option = 34.dp
+    /** 44 px: the avatar disc and the logo mark. */
+    val avatar = 22.dp
+    val mark = 22.dp
+    /** 28 px: an icon beside an action's label. */
+    val icon = 14.dp
+    /** 16 px: a status icon beside meta words. */
+    val iconSmall = 9.dp
+    /** 36 px tall, at least 44 px wide: a key cap. */
+    val keyCapHeight = 18.dp
+    val keyCapMinWidth = 22.dp
+    /** 8 px: a meter's track. */
+    val meter = 4.dp
+    /** 200 px: a poster in a row. */
+    val posterRow = 100.dp
+    /** The narrowest poster in a grid (7 columns on a TV). */
+    val posterGridMin = 104.dp
+    /** The narrowest poster in a dense grid (8 columns on a TV). */
+    val posterDenseMin = 92.dp
+    /** 384 px: a 16:9 still in a row (continue watching). */
+    val stillRow = 192.dp
+    /** 72 px: a poster beside a release row. */
+    val posterMini = 36.dp
+    /** 300 px: the poster in a page's aside. */
+    val posterAside = 150.dp
+    /** 680 px: a side panel. */
+    val sidePanel = 340.dp
+    /** 200 px: a fact's label column. */
+    val factLabel = 100.dp
+    /** 44 px: a step's icon column. */
+    val stepIcon = 22.dp
 }
 
 /**
- * Density bucket of the current TV. The Compose-on-TV ecosystem doesn't
- * ship a `WindowSizeClass` analogue — we derive it from the Configuration's
- * `smallestScreenWidthDp` and use it to tune card sizes, gutters and
- * column counts so the layout stays comfortable on a 1280×720 Mi Box,
- * a 1080p panel, and a 3840×2160 Sony Bravia alike.
+ * The screen the app draws on, and what follows from it: the 5 % safe
+ * margins (96x54 px on the boards = 48x27 dp on a TV, less on a phone) and
+ * grid columns computed from the width left between them. The same APK runs
+ * on landscape phones (800x360, 915x412 dp), so never hard-code a TV count.
  *
- * Buckets in `dp` (not pixels — Compose has already applied `densityDpi`):
- *   * **Compact** ≤ 720 dp wide. 720p panels, older Android TV boxes.
- *   * **Medium**  ≤ 1080 dp wide. The mainstream 1080p TV.
- *   * **Expanded** > 1080 dp.    1440p+ and 4K.
+ * Read it with [IrisLayout.current]; [IrisTheme] provides it from the window.
  */
-enum class TvSizeClass { Compact, Medium, Expanded }
+@Immutable
+data class IrisLayout(val width: Dp, val height: Dp) {
+    val safeHorizontal: Dp get() = width * SAFE_FRACTION
+    val safeVertical: Dp get() = height * SAFE_FRACTION
+    /** Padding that keeps content inside the TV's overscan-safe area. */
+    val safePadding: PaddingValues
+        get() = PaddingValues(horizontal = safeHorizontal, vertical = safeVertical)
+    /** Width between the safe margins. */
+    val contentWidth: Dp get() = width - safeHorizontal * 2
 
-@Composable
-@ReadOnlyComposable
-fun rememberTvSizeClass(): TvSizeClass {
-    val widthDp = LocalConfiguration.current.screenWidthDp
-    return when {
-        widthDp <= 720 -> TvSizeClass.Compact
-        widthDp <= 1080 -> TvSizeClass.Medium
-        else -> TvSizeClass.Expanded
+    /** How many cells at least [minCell] wide fit [available] with [gap] between them. */
+    fun columns(minCell: Dp, gap: Dp, available: Dp = contentWidth): Int =
+        columnsFor(available.value, minCell.value, gap.value)
+
+    companion object {
+        const val SAFE_FRACTION = 0.05f
+        /** A 1080p or 720p TV: both are 960x540 dp. */
+        val Tv = IrisLayout(960.dp, 540.dp)
+
+        val current: IrisLayout
+            @Composable @ReadOnlyComposable get() = LocalIrisLayout.current
     }
 }
 
-/**
- * Layout constants picked per [TvSizeClass]. Pulled into a single struct
- * so `gutter`, `posterMin`, `shelfPosterWidth` move together — without
- * this, "make the search grid wider" inevitably forgot to also widen
- * the home shelves.
- */
-data class TvLayout(
-    val gutterHorizontal: Dp,
-    val gutterVertical: Dp,
-    /** Minimum width for `LazyVerticalGrid(GridCells.Adaptive)`. */
-    val gridPosterMin: Dp,
-    /** Fixed width for poster cards on horizontal shelves. */
-    val shelfPosterWidth: Dp,
-    /** Hero (backdrop) aspect ratio. 16:5 on tight panels (Mi Box) so
-     *  the poster + title still fit above the fold; 16:7 on roomier
-     *  panels for the full Netflix-style proportions. */
-    val heroAspect: Float,
-    /** Side rail width on the multi-column detail screens. */
-    val detailRail: Dp,
-)
+/** Pure column count, shared with the unit tests. */
+fun columnsFor(available: Float, minCell: Float, gap: Float): Int =
+    max(1, floor((available + gap) / (minCell + gap)).toInt())
 
-private val Compact = TvLayout(
-    gutterHorizontal = 24.dp,
-    gutterVertical = 20.dp,
-    gridPosterMin = 140.dp,
-    shelfPosterWidth = 124.dp,
-    heroAspect = 16f / 5f,
-    detailRail = 220.dp,
-)
-
-private val Medium = TvLayout(
-    gutterHorizontal = 32.dp,
-    gutterVertical = 24.dp,
-    gridPosterMin = 160.dp,
-    shelfPosterWidth = 140.dp,
-    heroAspect = 16f / 6f,
-    detailRail = 280.dp,
-)
-
-private val Expanded = TvLayout(
-    gutterHorizontal = 48.dp,
-    gutterVertical = 32.dp,
-    gridPosterMin = 200.dp,
-    shelfPosterWidth = 180.dp,
-    heroAspect = 16f / 7f,
-    detailRail = 360.dp,
-)
-
-@Composable
-@ReadOnlyComposable
-fun rememberTvLayout(): TvLayout = when (rememberTvSizeClass()) {
-    TvSizeClass.Compact -> Compact
-    TvSizeClass.Medium -> Medium
-    TvSizeClass.Expanded -> Expanded
-}
-
-/** Used by composables that need to look up the active layout outside
- *  a `rememberTvLayout()` call site (rare but handy for e.g. one-off
- *  computations inside a child composable). */
-val LocalTvLayout = staticCompositionLocalOf { Medium }
+val LocalIrisLayout = staticCompositionLocalOf { IrisLayout.Tv }

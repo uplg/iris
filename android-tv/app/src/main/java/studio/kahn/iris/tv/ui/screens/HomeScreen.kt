@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.formatSpeed
 import studio.kahn.iris.tv.ui.formatSize
 import androidx.activity.compose.BackHandler
@@ -92,12 +93,11 @@ import androidx.compose.ui.unit.sp
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
-import studio.kahn.iris.tv.ui.components.MetaDot
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.IrisWordmark
 import studio.kahn.iris.tv.ui.components.SectionTitle
-import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.components.IconAction
 import studio.kahn.iris.tv.ui.components.irisPosterBorder
 import studio.kahn.iris.tv.ui.components.irisPosterGlow
 import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
@@ -107,7 +107,6 @@ import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
@@ -294,7 +293,7 @@ fun HomeScreen(
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         // Ambient backlight wash (web `.ambient`) — a fixed, faint violet
         // glow behind the scrolling content. Decorative only.
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Box(Modifier.fillMaxSize().background(IrisColor.ground))
         if (needsOnboarding) {
             OnboardingScreen(
                 container = container,
@@ -785,11 +784,10 @@ internal fun Shelf(
                 SectionTitle(title)
             }
             if (onSeeAll != null) {
-                IrisButton(
+                ActionButton(
                     "See all →",
                     onSeeAll,
-                    variant = IrisButtonVariant.Ghost,
-                    focusedScale = 1.04f,
+                    style = ActionStyle.Secondary,
                     modifier = Modifier.focusRequester(seeAllFocus),
                 )
             }
@@ -840,27 +838,27 @@ private fun HomeTopBar(
     ) {
         IrisWordmark(fontSize = 34.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TvIconButton(
+            IconAction(
                 icon = Icons.Filled.Search,
                 contentDescription = "Search",
                 onClick = { onOpenSearch(null) },
             )
-            TvIconButton(
+            IconAction(
                 icon = Icons.Filled.Star,
                 contentDescription = "Discover",
                 onClick = onOpenDiscover,
             )
-            TvIconButton(
+            IconAction(
                 icon = Icons.Filled.VideoLibrary,
                 contentDescription = "Library",
                 onClick = onOpenLibrary,
             )
-            TvIconButton(
+            IconAction(
                 icon = Icons.Filled.LiveTv,
                 contentDescription = "Live TV",
                 onClick = onOpenLiveTv,
             )
-            TvIconButton(
+            IconAction(
                 icon = Icons.Filled.Settings,
                 contentDescription = "Settings",
                 onClick = onOpenSettings,
@@ -996,7 +994,7 @@ private fun ResumeHero(
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         metaParts.forEachIndexed { i, m ->
-                            if (i > 0) MetaDot()
+                            if (i > 0) androidx.tv.material3.Text("·", color = IrisColor.inkMuted)
                             Text(m, style = MaterialTheme.typography.bodyMedium, color = IrisColors.MutedForeground)
                         }
                     }
@@ -1010,7 +1008,7 @@ private fun ResumeHero(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                IrisButton(
+                ActionButton(
                     when {
                         grabbing -> "Grabbing…"
                         item.grabbable -> "Grab & play"
@@ -1157,24 +1155,24 @@ private fun ContinueWatchingManageDialog(
             // A grabbable tile has no file on disk to mark watched — its
             // only managing action is removal.
             if (!item.grabbable) {
-                IrisButton(
+                ActionButton(
                     if (item.nextUp) "Mark watched & skip" else "Mark as watched",
                     onMarkWatched,
                     modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
                 )
             }
-            IrisButton(
+            ActionButton(
                 "Remove from Continue Watching",
                 onRemove,
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
                 modifier = Modifier.fillMaxWidth().let {
                     if (item.grabbable) it.focusRequester(firstFocus) else it
                 },
             )
-            IrisButton(
+            ActionButton(
                 "Cancel",
                 onDismiss,
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1405,7 +1403,7 @@ private fun DownloadingCard(
         title = prettifyFilename(torrent.name ?: torrent.infohash.take(12)),
         subtitle = subtitle,
         progress = pct,
-        progressColor = androidx.compose.ui.graphics.Color(0xFF3B82F6),
+        progressColor = IrisColor.accent,
         onClick = onClick,
     )
 }

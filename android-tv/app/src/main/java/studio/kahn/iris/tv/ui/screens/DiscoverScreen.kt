@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,12 +29,11 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.components.IconAction
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
@@ -55,7 +55,7 @@ fun DiscoverScreen(
     // Saveable: Back-from-detail lands on the tab the user was on.
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Box(Modifier.fillMaxSize().background(IrisColor.ground))
         Column(Modifier.fillMaxSize()) {
             Row(
                 Modifier
@@ -67,7 +67,7 @@ fun DiscoverScreen(
             ) {
                 // Visible Back — on TV the remote covers it, but on a
                 // phone the only exit was a system gesture.
-                TvIconButton(
+                IconAction(
                     icon = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
                     onClick = onBack,

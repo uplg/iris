@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import studio.kahn.iris.tv.data.RecordSearchRequest
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.data.GrabOutcome
 import studio.kahn.iris.tv.data.grabRelease
 import studio.kahn.iris.tv.ui.formatSize
@@ -107,17 +108,16 @@ import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Warning
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
-import studio.kahn.iris.tv.ui.components.LanguageBadge
-import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.LanguageChip
+import studio.kahn.iris.tv.ui.components.IconAction
 import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 import kotlin.math.sqrt
 
@@ -408,7 +408,7 @@ fun SearchScreen(
     val context = LocalContext.current
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         // Ambient backlight wash (web `.ambient`) — fixed, faint, decorative.
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Box(Modifier.fillMaxSize().background(IrisColor.ground))
         Column(
         Modifier
             .fillMaxSize()
@@ -434,7 +434,7 @@ fun SearchScreen(
             // Visible Back — on TV the remote's Back covers it, but on a
             // phone the only exits were system gestures. Same affordance
             // as the other screens' headers.
-            TvIconButton(
+            IconAction(
                 icon = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "Back",
                 onClick = onBack,
@@ -610,7 +610,7 @@ fun SearchScreen(
                 )
             }
             // View: a single toggle showing the mode it switches TO.
-            TvIconButton(
+            IconAction(
                 icon = if (viewMode == SearchViewMode.GRID) {
                     Icons.AutoMirrored.Filled.ViewList
                 } else {
@@ -1043,7 +1043,7 @@ private fun LibraryMatchCard(
                 }
                 BadgePill(
                     "IN LIBRARY",
-                    Color(0xFF10B981),
+                    IrisColor.accent,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(6.dp),
@@ -1070,7 +1070,7 @@ private fun LibraryMatchCard(
                 Text(
                     libraryMatchSubtitle(match),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF34D399),
+                    color = IrisColor.accent,
                 )
             }
         }
@@ -1149,10 +1149,10 @@ private fun LibraryMatchRow(
                 Text(
                     libraryMatchSubtitle(match),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF34D399),
+                    color = IrisColor.accent,
                 )
             }
-            BadgePill("IN LIBRARY", Color(0xFF10B981))
+            BadgePill("IN LIBRARY", IrisColor.accent)
         }
     }
 }
@@ -1224,7 +1224,7 @@ private fun ResultCard(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     if (result.freeleech == true) {
-                        BadgePill("FL", Color(0xFF10B981))
+                        BadgePill("FL", IrisColor.accent)
                     }
                     BadgePill(result.providerId, Color.Black.copy(alpha = 0.65f))
                 }
@@ -1274,12 +1274,12 @@ private fun ResultCard(
                         Text(
                             "↑ ${result.seeders ?: 0}",
                             style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFF34D399),
+                            color = IrisColor.accent,
                         )
                         Text(
                             "↓ ${result.leechers ?: 0}",
                             style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFFFB7185),
+                            color = IrisColor.down,
                         )
                     }
                     result.sizeBytes?.let {
@@ -1304,9 +1304,9 @@ private fun ResultCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        LanguageBadge(language = result.language)
+                        LanguageChip(language = result.language)
                         if (parsed.subs) {
-                            BadgePill("SUB", Color(0xFF6366F1), small = true)
+                            BadgePill("SUB", IrisColor.accent, small = true)
                         }
                         if (swDecode) {
                             SoftwareDecodeHint()
@@ -1417,12 +1417,12 @@ private fun ResultRow(
                     Text(
                         "↑ ${result.seeders ?: 0}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFF34D399),
+                        color = IrisColor.accent,
                     )
                     Text(
                         "↓ ${result.leechers ?: 0}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFFFB7185),
+                        color = IrisColor.down,
                     )
                     result.sizeBytes?.let {
                         Text(
@@ -1450,15 +1450,15 @@ private fun ResultRow(
                         small = true,
                     )
                 }
-                LanguageBadge(language = result.language)
+                LanguageChip(language = result.language)
                 if (parsed.subs) {
-                    BadgePill("SUB", Color(0xFF6366F1), small = true)
+                    BadgePill("SUB", IrisColor.accent, small = true)
                 }
                 if (needsSoftwareDecode(result)) {
                     SoftwareDecodeHint()
                 }
                 if (result.freeleech == true) {
-                    BadgePill("FL", Color(0xFF10B981), small = true)
+                    BadgePill("FL", IrisColor.accent, small = true)
                 }
                 BadgePill(result.providerId, Color.Black.copy(alpha = 0.65f), small = true)
             }
@@ -1501,7 +1501,7 @@ private fun SoftwareDecodeHint(modifier: Modifier = Modifier) {
     Icon(
         imageVector = Icons.Filled.Warning,
         contentDescription = "Plays via software decode on this device",
-        tint = Color(0xFFF59E0B),
+        tint = IrisColor.warn,
         modifier = modifier.size(14.dp),
     )
 }
@@ -1728,7 +1728,7 @@ private fun ErrorBlock(message: String, onRetry: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.error,
         )
-        IrisButton("Retry", onRetry, variant = IrisButtonVariant.Ghost)
+        ActionButton("Retry", onRetry, style = ActionStyle.Secondary)
     }
 }
 
@@ -1752,16 +1752,16 @@ private fun Pagination(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            IrisButton(
+            ActionButton(
                 "← Prev",
                 onPrev,
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
                 enabled = !pending && page > 1,
             )
-            IrisButton(
+            ActionButton(
                 "Next →",
                 onNext,
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
                 enabled = !pending && page < totalPages,
             )
         }

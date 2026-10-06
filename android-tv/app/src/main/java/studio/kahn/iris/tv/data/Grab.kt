@@ -25,7 +25,7 @@ suspend fun AppContainer.grabRelease(body: ResolveBody): GrabOutcome {
         val snapshot = apiFor(url).ingest(body).snapshot
         val videos = snapshot.files.filter { isVideoPath(it.path) }
         if (videos.size <= 1) {
-            GrabOutcome.Play(snapshot.infohash, videos.maxByOrNull { it.sizeBytes }?.index?.toInt() ?: 0)
+            GrabOutcome.Play(snapshot.infohash, videos.maxByOrNull { it.sizeBytes }?.index ?: 0)
         } else {
             GrabOutcome.Choose(snapshot.infohash)
         }

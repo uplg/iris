@@ -46,8 +46,8 @@ import studio.kahn.iris.tv.data.HistoryItem
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.tmdbPosterUrl
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
@@ -216,7 +216,7 @@ fun HistoryScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost)
+            ActionButton("← Back", onBack, style = ActionStyle.Secondary)
             Text(
                 "Watch history",
                 style = MaterialTheme.typography.displaySmall,
@@ -281,7 +281,7 @@ fun HistoryScreen(
                             Modifier.fillMaxWidth().padding(vertical = Spacing.md),
                             contentAlignment = Alignment.Center,
                         ) {
-                            IrisButton(
+                            ActionButton(
                                 if (loadingMore) "Loading…" else "Load more",
                                 {
                                     scope.launch {
@@ -290,7 +290,7 @@ fun HistoryScreen(
                                         loadingMore = false
                                     }
                                 },
-                                variant = IrisButtonVariant.Ghost,
+                                style = ActionStyle.Secondary,
                                 enabled = !loadingMore,
                             )
                         }
@@ -478,10 +478,10 @@ private fun EpisodeRow(
         }
         if (canRestore(item)) {
             val busy = restoringKey == "${item.infohash}:${item.fileIdx}"
-            IrisButton(
+            ActionButton(
                 if (busy) "Restoring…" else "Download again",
                 { onRestore(item) },
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
                 enabled = !busy && restoringKey == null,
             )
         }
@@ -579,10 +579,10 @@ private fun SoloRow(
         }
         if (canRestore(item)) {
             val busy = restoringKey == "${item.infohash}:${item.fileIdx}"
-            IrisButton(
+            ActionButton(
                 if (busy) "Restoring…" else "Download again",
                 { onRestore(item) },
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
                 enabled = !busy && restoringKey == null,
             )
         }

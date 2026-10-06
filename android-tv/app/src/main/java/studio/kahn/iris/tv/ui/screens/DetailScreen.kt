@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.formatSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -48,15 +49,14 @@ import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.Chip
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 
 
@@ -117,7 +117,7 @@ fun DetailScreen(
             if (error != null) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(error!!, color = MaterialTheme.colorScheme.error)
-                    IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost, icon = Icons.AutoMirrored.Filled.ArrowBack)
+                    ActionButton("Back", onBack, style = ActionStyle.Secondary, icon = Icons.AutoMirrored.Filled.ArrowBack)
                 }
             } else {
                 Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -134,7 +134,7 @@ fun DetailScreen(
 
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
         // Ambient backlight wash behind the detail, matching Home (web `.ambient`).
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Box(Modifier.fillMaxSize().background(IrisColor.ground))
         Row(
             Modifier
                 .fillMaxSize()
@@ -212,7 +212,7 @@ fun DetailScreen(
                         color = IrisColors.FgDim,
                     )
                 }
-                IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost, icon = Icons.AutoMirrored.Filled.ArrowBack)
+                ActionButton("Back", onBack, style = ActionStyle.Secondary, icon = Icons.AutoMirrored.Filled.ArrowBack)
             }
 
             // Right rail: file list.

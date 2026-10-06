@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- The window paints the Iris ground (IrisColor.ground) before Compose
+         draws, so a cold start shows no black flash. -->
+    <color name="iris_ground">#151A21</color>
+
     <style name="Theme.IrisTV" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">@color/iris_ground</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>

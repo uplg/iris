@@ -60,7 +60,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
     private val outdatedFlag = MutableStateFlow(false)
     override val clientOutdated: StateFlow<Boolean> = outdatedFlag.asStateFlow()
     override val okHttpClient: OkHttpClient =
-        buildOkHttpClient(sessionStore) { outdatedFlag.value = true }
+        buildOkHttpClient(sessionStore, context.applicationContext.cacheDir) { outdatedFlag.value = true }
     override val mediaOkHttpClient: OkHttpClient = deriveMediaOkHttpClient(okHttpClient)
     override val channels: ChannelsService = ChannelsService(context.applicationContext)
     override val applicationScope: CoroutineScope =

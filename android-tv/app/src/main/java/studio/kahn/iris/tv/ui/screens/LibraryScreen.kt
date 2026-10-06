@@ -63,8 +63,8 @@ import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.irisPosterPlaceholder
 import studio.kahn.iris.tv.ui.theme.FontMono
@@ -207,7 +207,7 @@ fun LibraryScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 SectionTitle("Library")
-                IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost)
+                ActionButton("← Back", onBack, style = ActionStyle.Secondary)
             }
 
             // One compact filter line: search + Type chips + Sort chips + count.

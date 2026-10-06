@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "iris-tv"
 include(":app")
+include(":baselineprofile")

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -38,8 +37,9 @@ import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.Meter
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -114,8 +114,8 @@ fun SettingsScreen(
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Eyebrow("More")
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    IrisButton("Watch history", onOpenHistory, variant = IrisButtonVariant.Ghost)
-                    IrisButton("Torrents", onOpenTorrents, variant = IrisButtonVariant.Ghost)
+                    ActionButton("Watch history", onOpenHistory, style = ActionStyle.Secondary)
+                    ActionButton("Torrents", onOpenTorrents, style = ActionStyle.Secondary)
                 }
             }
         }
@@ -124,9 +124,9 @@ fun SettingsScreen(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            IrisButton("Back", onBack, variant = IrisButtonVariant.Ghost)
+            ActionButton("Back", onBack, style = ActionStyle.Secondary)
             Box(Modifier.weight(1f))
-            IrisButton(
+            ActionButton(
                 "Sign out",
                 {
                     scope.launch {
@@ -138,7 +138,7 @@ fun SettingsScreen(
                         onSignOut()
                     }
                 },
-                variant = IrisButtonVariant.Ghost,
+                style = ActionStyle.Secondary,
             )
         }
     }
@@ -224,13 +224,13 @@ private fun UpdaterCard(container: AppContainer) {
             ) {
                 val downloading = state is AppUpdater.Progress.Connecting
                     || state is AppUpdater.Progress.Downloading
-                IrisButton(
+                ActionButton(
                     if (downloading) "Cancel" else "Download & install",
                     {
                         if (job?.isActive == true) {
                             job?.cancel()
                             state = null
-                            return@IrisButton
+                            return@ActionButton
                         }
                         if (!AppUpdater.canInstallPackages(context)) {
                             // Punt to the system "install unknown apps"
@@ -240,7 +240,7 @@ private fun UpdaterCard(container: AppContainer) {
                             state = AppUpdater.Progress.Failed(
                                 "grant Install unknown apps for Iris TV, then try again",
                             )
-                            return@IrisButton
+                            return@ActionButton
                         }
                         state = AppUpdater.Progress.Connecting
                         job = scope.launch {
@@ -291,10 +291,10 @@ private fun UpdaterCard(container: AppContainer) {
                     // swallowed, the manual relaunch is a single OK press.
                     val reopenFocus = remember { FocusRequester() }
                     LaunchedEffect(Unit) { runCatching { reopenFocus.requestFocus() } }
-                    IrisButton(
+                    ActionButton(
                         "Reopen installer",
                         { AppUpdater.requestInstall(context, ready.file) },
-                        variant = IrisButtonVariant.Ghost,
+                        style = ActionStyle.Secondary,
                         modifier = Modifier.focusRequester(reopenFocus),
                     )
                 }
@@ -340,16 +340,7 @@ private fun UpdaterStatus(state: AppUpdater.Progress?) {
                 "Downloading · ${formatSize(state.bytes)} (size unknown)"
             }
             Text(label, style = MaterialTheme.typography.bodyMedium)
-            if (pct != null) {
-                LinearProgressIndicator(
-                    progress = { pct },
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                )
-            } else {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                )
-            }
+            if (pct != null) Meter(pct, Modifier.padding(top = 4.dp))
         }
         is AppUpdater.Progress.Ready ->
             Text(

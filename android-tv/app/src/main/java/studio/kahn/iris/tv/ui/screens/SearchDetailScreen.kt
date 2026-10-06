@@ -55,9 +55,9 @@ import studio.kahn.iris.tv.data.VideoInfo
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
-import studio.kahn.iris.tv.ui.components.TvIconButton
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.IconAction
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.LocalTvLayout
 import studio.kahn.iris.tv.ui.theme.Spacing
@@ -263,12 +263,12 @@ fun SearchDetailScreen(
                 }
                 Box(Modifier.weight(1f))
                 if (kind == "tv") {
-                    IrisButton(
+                    ActionButton(
                         if (following) "Following…" else "♥  Follow",
                         {
-                            if (following) return@IrisButton
+                            if (following) return@ActionButton
                             val title = details?.title ?: meta?.title
-                            if (title.isNullOrBlank()) return@IrisButton
+                            if (title.isNullOrBlank()) return@ActionButton
                             following = true
                             error = null
                             scope.launch {
@@ -294,18 +294,18 @@ fun SearchDetailScreen(
                                 }
                             }
                         },
-                        variant = IrisButtonVariant.Ghost,
+                        style = ActionStyle.Secondary,
                         enabled = (details != null || meta != null) && !following && !ingesting,
                     )
                 }
-                IrisButton(
+                ActionButton(
                     if (dead) "Dead torrent" else if (ingesting) "Starting…" else "▶  Download & play",
                     {
-                        if (ingesting || dead) return@IrisButton
+                        if (ingesting || dead) return@ActionButton
                         val size = details?.fileSizeBytes
                         if (size != null && size > HUGE_GRAB_BYTES) {
                             hugeConfirm = true
-                            return@IrisButton
+                            return@ActionButton
                         }
                         grab(allowDuplicate = false)
                     },
@@ -455,7 +455,7 @@ private fun Hero(
         }
         // Focusable Back at the top-left — holds initial focus so the screen
         // opens at the top (title readable) and ↑ from the actions returns here.
-        TvIconButton(
+        IconAction(
             icon = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = "Back",
             onClick = onBack,

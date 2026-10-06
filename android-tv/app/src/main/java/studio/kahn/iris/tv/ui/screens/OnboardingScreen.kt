@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,14 +47,13 @@ import studio.kahn.iris.tv.data.LanguageOption
 import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.data.UpdatePreferencesRequest
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.IrisColors
 import studio.kahn.iris.tv.ui.theme.Radius
 import studio.kahn.iris.tv.ui.theme.Spacing
-import studio.kahn.iris.tv.ui.theme.irisAmbient
 import studio.kahn.iris.tv.ui.components.touchClick
 
 /**
@@ -134,7 +134,7 @@ fun OnboardingScreen(
     }
 
     Box(Modifier.fillMaxSize().background(IrisColors.Background)) {
-        Box(Modifier.fillMaxSize().background(irisAmbient()))
+        Box(Modifier.fillMaxSize().background(IrisColor.ground))
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().widthIn(max = 1100.dp),
@@ -242,13 +242,13 @@ fun OnboardingScreen(
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
-                    IrisButton(
+                    ActionButton(
                         text = "Skip for now",
                         onClick = { finish(false) },
-                        variant = IrisButtonVariant.Ghost,
+                        style = ActionStyle.Secondary,
                         enabled = !saving,
                     )
-                    IrisButton(
+                    ActionButton(
                         text = if (saving) "Saving…" else "Save preferences",
                         onClick = { finish(true) },
                         enabled = !saving,

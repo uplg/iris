@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import studio.kahn.iris.tv.ui.theme.IrisColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,8 +64,8 @@ import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveNowNext
 import studio.kahn.iris.tv.data.LiveSearchResult
 import studio.kahn.iris.tv.ui.components.Eyebrow
-import studio.kahn.iris.tv.ui.components.IrisButton
-import studio.kahn.iris.tv.ui.components.IrisButtonVariant
+import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.theme.Focus
 import studio.kahn.iris.tv.ui.theme.FontMono
@@ -236,12 +237,12 @@ fun LiveTvScreen(
                         modifier = Modifier.width(280.dp),
                     )
                     val current = countries.firstOrNull { it.code == country }
-                    IrisButton(
+                    ActionButton(
                         text = current?.let { "${it.flag} ${it.name}" } ?: "Country",
                         onClick = { pickingCountry = !pickingCountry },
-                        variant = IrisButtonVariant.Ghost,
+                        style = ActionStyle.Secondary,
                     )
-                    IrisButton("← Back", onBack, variant = IrisButtonVariant.Ghost)
+                    ActionButton("← Back", onBack, style = ActionStyle.Secondary)
                 }
             }
 
@@ -564,7 +565,7 @@ private enum class LogoTone {
 
     fun well(): Color = when (this) {
         Light -> Color.White.copy(alpha = 0.92f)
-        Neutral -> Color(0xFF7A7D84).copy(alpha = 0.55f)
+        Neutral -> IrisColor.inkMuted.copy(alpha = 0.55f)
         Dark -> IrisColors.BackgroundDeep
     }
 }

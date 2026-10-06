@@ -92,6 +92,30 @@ logged so you can verify the cookie session round-trips work.
 inside Studio without booting the emulator. Useful for rapid layout
 iteration.
 
+### Screenshot tests
+
+Components and screens render on the JVM (Robolectric + Roborazzi) at the TV
+size (960×540 dp) and at two landscape phone sizes; the PNGs live in
+`app/src/test/screenshots/`. Helper: `IrisScreenshotRule` in
+`app/src/test/.../screenshot/`.
+
+```sh
+./gradlew :app:recordRoborazziDebug   # write the PNGs, then open them
+./gradlew :app:verifyRoborazziDebug   # compare against the committed ones
+```
+
+### Baseline profile
+
+Generated on a real box (API 33+, or rooted) that is already paired, so the
+home rows load. With the box connected over adb:
+
+```sh
+./gradlew :app:generateReleaseBaselineProfile
+```
+
+Commit the resulting `app/src/release/generated/baselineProfiles/`;
+profileinstaller applies it on first launch of the sideloaded APK.
+
 ## Sideloading on a real Android TV (Chromecast Google TV / Shield TV)
 
 ```sh
