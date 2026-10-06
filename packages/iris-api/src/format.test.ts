@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clock, duration, episodeCode, formatSize, languageLabel, percent, timeLeft } from "./format";
+import { clock, duration, episodeCode, formatSize, languageLabel, percent, plural, timeLeft } from "./format";
 
 describe("format", () => {
   it("clocks positions, unknown as dashes", () => {
@@ -15,6 +15,12 @@ describe("format", () => {
     expect(duration(72 * 60)).toBe("1 h 12 min");
     expect(duration(2 * 3600)).toBe("2 h");
     expect(timeLeft(23 * 60)).toBe("23 min left");
+  });
+
+  it("counts with the right noun", () => {
+    expect(plural(1, "download")).toBe("1 download");
+    expect(plural(3, "download")).toBe("3 downloads");
+    expect(plural(2, "series", "series")).toBe("2 series");
   });
 
   it("writes episode codes the way the cards do", () => {

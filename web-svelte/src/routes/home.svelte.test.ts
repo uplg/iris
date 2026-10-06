@@ -59,7 +59,7 @@ function home(routes: Record<string, unknown> = {}) {
 		'/me/watchlist': [],
 		'/me/for-you': { shelves: [] },
 		'/library?view=collections': { view: 'collections', items: [] },
-		'/torrents': [],
+		'/library?view=torrents': { view: 'torrents', items: [] },
 		'/me/summary': { downloading: 0, downloading_pct: 0, new_episodes: 0, seeding: 0 },
 		'/me/preferences': { languages: [], genres: [], include_anime: false, onboarding_completed: true },
 		'/discover/featured': { movies: [], series: [] },
@@ -206,7 +206,10 @@ describe('home', () => {
 	it('the watchlist: fresh episodes first, what downloads said in words', async () => {
 		home({
 			'/me/watchlist': [followed(), followed({ id: 'c4', name: 'The Bear', normalized_name: 'the bear', new_count: 3 })],
-			'/torrents': [{ collection_id: 'c2', finished: false, progress_bytes: 42, total_size_bytes: 100 }]
+			'/library?view=torrents': {
+				view: 'torrents',
+				items: [{ collection_id: 'c2', finished: false, progress_bytes: 42, total_size_bytes: 100 }]
+			}
 		});
 		await show();
 		const row = shelf('Your watchlist');

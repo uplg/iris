@@ -3,13 +3,14 @@
 	// feeds, read every 10 s (the query's refetchInterval). Each person: what plays, playing or
 	// paused in words and by its icon, how far, on which app, for how long.
 	import { createQuery } from '@tanstack/svelte-query';
+	import { plural } from '@iris/api/format';
 	import type { ActiveSession } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import Group from '#lib/components/Group.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import TitlePoster from '#lib/history/TitlePoster.svelte';
-	import { count, fileName, progressWords, since, watchedShare } from '#lib/history/words.ts';
+	import { fileName, progressWords, since, watchedShare } from '#lib/history/words.ts';
 	import { sessionsQuery } from './queries.ts';
 
 	const sessions = createQuery(sessionsQuery, () => queryClient);
@@ -22,13 +23,13 @@
 	};
 </script>
 
-<Group id="watching-title" title="Now watching" fact={sessions.data ? count(sessions.data.length, 'person', 'people') : undefined}>
+<Group id="watching-title" title="Now watching" fact={sessions.data ? plural(sessions.data.length, 'person', 'people') : undefined}>
 	<Loaded {value} empty={sessions.data?.length === 0} emptyText="Nobody is watching right now.">
 		<ul class="plain-list rows">
 			{#each sessions.data ?? [] as s (s.user_id)}
 				{@const playing = s.state === 'playing'}
 				<li class="row">
-					<TitlePoster tmdbId={s.tmdb_id} kind={s.kind} title={what(s)} />
+					<TitlePoster posterPath={s.poster_path} title={what(s)} />
 					<div class="text">
 						<span class="name">
 							<strong>{s.display_name}</strong>

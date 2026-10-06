@@ -8,7 +8,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import { loadable } from '#lib/query.ts';
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
-	import { KEYS } from '#lib/home/data.ts';
+	import { KEYS } from '#lib/queries.ts';
 
 	const page = createQuery(() => ({ queryKey: KEYS.forYouPage, queryFn: me.forYouPage, staleTime: 60_000 }));
 	const shelves = $derived((page.data?.shelves ?? []).filter((s) => s.items.length > 0));

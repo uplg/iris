@@ -5,14 +5,14 @@
 	// watchlist (a series).
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, me, type CollectionDetail, type ContinueWatchingItem, type TmdbMetadata } from '@iris/api/client';
-	import { clock, duration } from '@iris/api/format';
+	import { clock, duration, plural } from '@iris/api/format';
 	import { queryClient } from '#lib/query.ts';
+	import { KEYS, read } from '#lib/queries.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import {
 		audioChip,
-		count,
 		firstPlayable,
 		mergeEpisodes,
 		mergeEpisodesAbsolute,
@@ -46,11 +46,11 @@
 		const out: string[] = [];
 		if (series) {
 			const seasons = new Set(rows.filter((r) => r.absolute === null && r.season > 0).map((r) => r.season)).size;
-			if (seasons && c.numbering !== 'absolute') out.push(count(seasons, 'season'));
-			if (rows.length) out.push(count(rows.length, 'episode'));
+			if (seasons && c.numbering !== 'absolute') out.push(plural(seasons, 'season'));
+			if (rows.length) out.push(plural(rows.length, 'episode'));
 		} else if (meta?.runtime_minutes) out.push(duration(meta.runtime_minutes * 60));
 		if ((meta?.vote_score ?? 0) > 0) out.push(`TMDB ${((meta?.vote_score ?? 0) * 10).toFixed(1)}`);
-		out.push(`${count(c.torrents.length, 'release')} on disk`);
+		out.push(`${plural(c.torrents.length, 'release')} on disk`);
 		return out.join(' · ');
 	});
 
@@ -68,7 +68,7 @@
 	const label = $derived(playLabel(c, resume, clock));
 
 	const list = createQuery(
-		() => ({ queryKey: ['watchlist'], queryFn: me.watchlist, enabled: series }),
+		() => ({ ...read.watchlist(), enabled: series }),
 		() => queryClient
 	);
 	const entry = $derived(list.data?.find((w) => w.id === c.id));
@@ -81,7 +81,7 @@
 				else await follows.add(c.display_title, c.tmdb_id ?? null);
 			},
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: ['watchlist'] });
+				await queryClient.invalidateQueries({ queryKey: KEYS.watchlist });
 				ui.say(entry ? `${c.display_title} is no longer on your watchlist.` : `${c.display_title} is on your watchlist.`);
 			},
 			'watchlist'
@@ -95,7 +95,7 @@
 	<p class="facts">{facts}</p>
 	{#if chips.length || fresh > 0}
 		<ul class="plain-list chips" aria-label="Languages and picture">
-			{#if fresh > 0}<li class="chip accent">{count(fresh, 'new episode')} since your last visit</li>{/if}
+			{#if fresh > 0}<li class="chip accent">{plural(fresh, 'new episode')} since your last visit</li>{/if}
 			{#each chips as chip (chip)}<li class="chip">{chip}</li>{/each}
 		</ul>
 	{/if}

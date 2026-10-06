@@ -3,7 +3,7 @@
 // can deliver it. Every search surface (grid, list, details) reads these, never its own.
 
 import type { LibraryMatch, MediaKind, ProviderResultMeta, SearchResult } from '@iris/api/client';
-import { episodeCode, formatRelative, formatSize, languageLabel, prettySceneName } from '@iris/api/format';
+import { episodeCode, formatRelative, formatSize, languageLabel, plural, prettySceneName } from '@iris/api/format';
 
 /** A season or an episode as people say it; episode 0 is the parser's whole-season mark. */
 export function partWords(season: number | null | undefined, episode: number | null | undefined, name = ''): string | null {
@@ -97,7 +97,6 @@ export function ownedFile(r: SearchResult): { infohash: string; idx: number } | 
 
 /** A library match: where it leads (the exact episode asked, else its collection) and what it holds. */
 export function matchTarget(m: LibraryMatch): { href: string; action: string; facts: string } {
-	const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 	if (m.episode_infohash && typeof m.episode_file_idx === 'number') {
 		return {
 			href: watchHref(m.episode_infohash, m.episode_file_idx),

@@ -5,7 +5,7 @@
 	// next play. The cache list is read every 10 s.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { admin, type GcReport, type RemuxJobView } from '@iris/api/client';
-	import { formatSize } from '@iris/api/format';
+	import { formatSize, plural } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -14,8 +14,9 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { count, onDay } from '#lib/history/words.ts';
-	import { remuxQuery } from './queries.ts';
+	import { onDay } from '#lib/history/words.ts';
+	import { remuxQuery, storageQuery } from './queries.ts';
+	import { refreshLibrary } from '#lib/queries.ts';
 
 	const remux = createQuery(remuxQuery, () => queryClient);
 	const value = loadable(remux);
@@ -32,10 +33,9 @@
 			(r) => {
 				report = r;
 				const freed = r.used_bytes_before - r.used_bytes_after;
-				ui.toast(`Freed ${formatSize(freed)}: ${count(r.evicted.length, 'release')} removed.`);
-				void queryClient.invalidateQueries({ queryKey: ['admin', 'storage'] });
-				void queryClient.invalidateQueries({ queryKey: ['torrents'] });
-				void queryClient.invalidateQueries({ queryKey: ['library'] });
+				ui.toast(`Freed ${formatSize(freed)}: ${plural(r.evicted.length, 'release')} removed.`);
+				void queryClient.invalidateQueries({ queryKey: storageQuery().queryKey });
+				void refreshLibrary();
 			},
 			'gc'
 		);
@@ -72,7 +72,7 @@
 		{#if report}
 			<div class="callout" role="group" aria-labelledby="gc-title">
 				<p id="gc-title">
-					<strong>Freed {formatSize(report.used_bytes_before - report.used_bytes_after)}</strong> · {count(
+					<strong>Freed {formatSize(report.used_bytes_before - report.used_bytes_after)}</strong> · {plural(
 						report.evicted.length,
 						'release'
 					)} removed

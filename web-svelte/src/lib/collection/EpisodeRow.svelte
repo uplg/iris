@@ -12,7 +12,8 @@
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
-	import { progressKey, refetchCollection } from './actions.ts';
+	import { refetchCollection } from './actions.ts';
+	import { KEYS } from '#lib/queries.ts';
 	import { episodeName, episodeWords, languageWord, watchHref, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 	import { downloading, offersByLanguage, rowState, type Verb } from './status.ts';
 
@@ -35,7 +36,7 @@
 	const first = $derived(disk[0]);
 	const watched = createQuery(
 		() => ({
-			queryKey: progressKey(first?.infohash ?? ''),
+			queryKey: KEYS.progress(first?.infohash ?? ''),
 			queryFn: () => progressApi.forTorrent(first!.infohash),
 			enabled: !!first
 		}),

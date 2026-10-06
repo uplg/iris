@@ -6,6 +6,7 @@
 	import { me, type PlaybackPrefs } from '@iris/api/client';
 	import { normalizeLang } from '@iris/core/subs/pick-subtitle';
 	import { loadable, queryClient } from '#lib/query.ts';
+	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture } from '#lib/gesture.svelte.ts';
 	import Group from '#lib/components/Group.svelte';
@@ -25,7 +26,7 @@
 	};
 
 	const prefs = createQuery(
-		() => ({ queryKey: ['playback-prefs'], queryFn: me.playbackPreferences }),
+		() => read.playbackPrefs(null),
 		() => queryClient
 	);
 	const value = loadable(prefs);

@@ -2,9 +2,9 @@
 // with it now, from what is on disk, how far they watched, and what the indexer offers.
 
 import type { FileProgressEntry, TorrentView } from '@iris/api/client';
-import { duration, percent, timeLeft } from '@iris/api/format';
+import { duration, percent, plural, timeLeft } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
-import { count, languageWord, listWords, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
+import { languageWord, listWords, type Available, type Downloaded, type Episode, type Gone } from './merge.ts';
 
 /** What the row's first downloaded release does when pressed. */
 export type Verb = 'Resume' | 'Play' | 'Watch again' | 'Play while downloading';
@@ -65,7 +65,7 @@ export function rowState(ep: Episode, look: Lookup): RowState {
 	if (offers.length) {
 		const langs = offers.map((o) => languageWord(o.language)).filter((w): w is string => !!w);
 		const said = langs.length ? ` · ${listWords(langs)} audio` : '';
-		return { tone: 'available', text: `Available · ${count(offers.length, 'release')}${said}` };
+		return { tone: 'available', text: `Available · ${plural(offers.length, 'release')}${said}` };
 	}
 	return { tone: 'info', text: 'Not available yet' };
 }

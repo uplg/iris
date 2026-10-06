@@ -2,8 +2,8 @@
 // and sort, which group a release belongs to. Pure functions over the API shapes, so the views
 // stay markup and the rules are tested in Node.
 
-import type { CollectionListItem, ContinueWatchingItem, HomeSummary, LibraryResponse, TorrentView } from '@iris/api/client';
-import { duration, episodeCode, formatSize, percent, prettySceneName, speed } from '@iris/api/format';
+import type { CollectionListItem, ContinueWatchingItem, HomeSummary, TorrentView } from '@iris/api/client';
+import { duration, episodeCode, formatSize, percent, plural, prettySceneName, speed } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 
 /** The page's views, remembered per browser. */
@@ -12,31 +12,12 @@ export const VIEWS: readonly View[] = ['titles', 'downloads'];
 export const LIBRARY_VIEW_KEY = 'iris-library-view';
 export const LIBRARY_SORT_KEY = 'iris-library-sort';
 
-export const KEYS = {
-	collections: ['library', 'collections'],
-	torrents: ['library', 'torrents'],
-	summary: ['me', 'summary'],
-	continueWatching: ['continue-watching']
-} as const;
-
-/** Live progress: quick while something moves, slow otherwise (`refetchInterval`, never a timer). */
-export const FAST = 3_000;
-export const SLOW = 30_000;
-
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 
 export const isVideo = (path: string) => VIDEO_RE.test(path);
 
 /** A single-file torrent is named after its file: the release name drops the extension. */
 export const releaseName = (name: string) => name.replace(VIDEO_RE, '');
-
-export const collectionsOf = (d: LibraryResponse | undefined): CollectionListItem[] => (d?.view === 'collections' ? d.items : []);
-export const torrentsOf = (d: LibraryResponse | undefined): TorrentView[] => (d?.view === 'torrents' ? d.items : []);
-
-/** A release still fetching data (not finished, not stopped). */
-export const moving = (t: TorrentView) => !t.finished && t.progress_pct < 100 && (t.state === 'live' || t.state === 'initializing');
-
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // Titles
 

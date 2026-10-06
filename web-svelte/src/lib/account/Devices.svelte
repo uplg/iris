@@ -5,6 +5,7 @@
 	// refetchInterval, no timer of our own) until the new device appears, or until the code's
 	// life is over (10 min on the server), when the wait ends and says so.
 	import { createQuery } from '@tanstack/svelte-query';
+	import { plural } from '@iris/api/format';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -18,7 +19,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import { count, onDay } from '#lib/history/words.ts';
+	import { onDay } from '#lib/history/words.ts';
 
 	/** A pairing code's life on the server (routes/devices.rs DEVICE_CODE_TTL_SECS). */
 	const CODE_LIFE_MS = 10 * 60_000;
@@ -100,7 +101,7 @@
 	const problem = $derived(invalid || g.error);
 </script>
 
-<Group id="devices-title" title="Devices" fact={list.data?.length ? count(list.data.length, 'device') : undefined} bind:heading={title}>
+<Group id="devices-title" title="Devices" fact={list.data?.length ? plural(list.data.length, 'device') : undefined} bind:heading={title}>
 	<p class="hint">Pair an Android TV, or another Iris app, by entering the code it shows.</p>
 	<form class="pair" onsubmit={pair} novalidate>
 		<div class="field">

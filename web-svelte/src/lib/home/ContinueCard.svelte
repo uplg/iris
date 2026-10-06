@@ -10,7 +10,7 @@
 	import { sectionHeading } from '#lib/focus.ts';
 	import CardMenu, { type MenuItem } from './CardMenu.svelte';
 	import { kindLabel, secondsLeft, stillUrl, watched } from './data.ts';
-	import { tmdbMeta } from './tmdb.svelte.ts';
+	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, markWatched, nextName, removeTile, tileHref, tileKey } from './continue.ts';
 
 	let { item }: { item: ContinueWatchingItem } = $props();

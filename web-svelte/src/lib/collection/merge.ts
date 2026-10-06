@@ -290,8 +290,5 @@ export function playLabel(c: CollectionDetail, resume: ContinueWatchingItem | nu
 	return 'Play';
 }
 
-/** Several of anything: « 1 release », « 3 releases ». */
-export const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
 /** A list in words: « English, French ». */
 export const listWords = (words: string[]) => [...new Set(words)].join(', ');

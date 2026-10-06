@@ -63,7 +63,7 @@
 <ul class="plain-list history">
 	{#each groups as group (group.key)}
 		<li class="title-row">
-			<TitlePoster tmdbId={group.tmdbId} kind={group.kind} title={group.title} gone={group.ghost} />
+			<TitlePoster posterPath={group.posterPath} title={group.title} gone={group.ghost} />
 			{#if group.solo}
 				{@render line(group, group.items[0])}
 			{:else}

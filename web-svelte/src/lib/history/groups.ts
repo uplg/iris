@@ -2,7 +2,7 @@
 // a film on one line. A title whose every file was reclaimed from disk stays listed (a
 // « ghost »): its title, its poster, how far one got, and the way back to it.
 
-import type { HistoryItem, MediaKind, UserHistoryItem } from '@iris/api/client';
+import type { HistoryItem, UserHistoryItem } from '@iris/api/client';
 
 export type Item = HistoryItem | UserHistoryItem;
 
@@ -10,8 +10,8 @@ export interface Group {
 	key: string;
 	collectionId: string | null;
 	title: string;
-	tmdbId: number | null;
-	kind: MediaKind | null;
+	/** The first verified TMDB poster among its rows. */
+	posterPath: string | null;
 	/** Every file of it is gone from disk. */
 	ghost: boolean;
 	/** One file with no episode to it (a film): drawn as one line. */
@@ -33,8 +33,7 @@ export function groupHistory(items: readonly Item[]): Group[] {
 				key,
 				collectionId: it.collection_id ?? null,
 				title: it.collection_title ?? it.torrent_name,
-				tmdbId: it.tmdb_id ?? null,
-				kind: it.kind ?? null,
+				posterPath: null,
 				ghost: true,
 				solo: false,
 				items: []
@@ -43,6 +42,7 @@ export function groupHistory(items: readonly Item[]): Group[] {
 			groups.push(g);
 		}
 		g.items.push(it);
+		g.posterPath ??= it.poster_path ?? null;
 		if (!it.deleted) g.ghost = false;
 	}
 	for (const g of groups) {

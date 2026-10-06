@@ -1,8 +1,6 @@
 // Playback languages as people say them. The preferences carry ISO 639 codes (the player's
 // track tags: `en`, `fra`); the releases carry the backend's tags (`french`).
 
-export const prefsKey = (collectionId: string) => ['playback-prefs', collectionId] as const;
-
 const names = (() => {
 	try {
 		return new Intl.DisplayNames(['en'], { type: 'language' });

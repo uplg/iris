@@ -3,7 +3,7 @@
 	// is; a movie's copies play from here. Deleting is for an admin or whoever added it (the
 	// server says so per release, `can_delete`): others see the control, not operable, and why.
 	import { torrents as torrentsApi, type CollectionDetail, type TorrentView } from '@iris/api/client';
-	import { formatRecentTime, formatSize, percent } from '@iris/api/format';
+	import { formatRecentTime, formatSize, percent, plural } from '@iris/api/format';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -11,7 +11,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
-	import { count, mainVideo, qualityWords, watchHref } from './merge.ts';
+	import { mainVideo, qualityWords, watchHref } from './merge.ts';
 	import { downloading, eta } from './status.ts';
 
 	let { collection: c }: { collection: CollectionDetail } = $props();
@@ -45,7 +45,7 @@
 <section class="tile panel-box" aria-labelledby="{id}-title">
 	<div class="head">
 		<h2 id="{id}-title" class="group-title" tabindex="-1" bind:this={heading}>On disk</h2>
-		<span class="hint">{count(c.torrents.length, 'release')}</span>
+		<span class="hint">{plural(c.torrents.length, 'release')}</span>
 	</div>
 	{#if c.torrents.length}
 		<ul class="plain-list releases" bind:this={list}>

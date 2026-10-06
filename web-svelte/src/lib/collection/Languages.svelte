@@ -12,7 +12,8 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import Sheet from '#lib/components/Sheet.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
-	import { languageName, prefsKey } from './lang.ts';
+	import { languageName } from './lang.ts';
+	import { KEYS, read } from '#lib/queries.ts';
 
 	interface Props {
 		collectionId: string;
@@ -25,7 +26,7 @@
 	const g = new Gesture();
 
 	const prefs = createQuery(
-		() => ({ queryKey: prefsKey(collectionId), queryFn: () => me.seriesPlaybackPreferences(collectionId) }),
+		() => read.playbackPrefs(collectionId),
 		() => queryClient
 	);
 	const audio = $derived(prefs.data?.audio_language ?? null);
@@ -67,7 +68,7 @@
 					collection_id: collectionId
 				}),
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: prefsKey(collectionId) });
+				await queryClient.invalidateQueries({ queryKey: KEYS.playbackPrefs(collectionId) });
 				draft.reset(next);
 				ui.toast(`Saved for ${title}: audio ${audioWords(next.audio || null)}, subtitles ${subWords(next.subs || null)}.`);
 				close();

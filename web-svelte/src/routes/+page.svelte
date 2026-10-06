@@ -4,7 +4,8 @@
 	// watching, the watchlist (fresh episodes first), the suggestions, the library. The search
 	// lives on its own page; moods on Discover.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { discover, library, me, torrents, type CollectionListItem } from '@iris/api/client';
+	import { discover, me } from '@iris/api/client';
+	import { plural } from '@iris/api/format';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import Shelf from '#lib/components/Shelf.svelte';
 	import Icon from '#lib/components/Icon.svelte';
@@ -20,29 +21,26 @@
 	import LibraryCard from '#lib/home/LibraryCard.svelte';
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
 	import { tileKey } from '#lib/home/continue.ts';
-	import { KEYS, downloadsByCollection, plural } from '#lib/home/data.ts';
+	import { downloadsByCollection } from '#lib/home/data.ts';
+	import { collectionsOf, KEYS, read, torrentsOf } from '#lib/queries.ts';
 
 	const LIBRARY_ROW = 12;
 
-	const cw = createQuery(() => ({ queryKey: KEYS.continueWatching, queryFn: me.continueWatching }));
+	const cw = createQuery(() => read.continueWatching());
 	const watchlist = createQuery(() => ({
-		queryKey: KEYS.watchlist,
-		queryFn: me.watchlist,
-		staleTime: 60_000,
+		...read.watchlist(),
 		// fresh episodes first (a stable sort: the server's order otherwise)
 		select: (items) => items.toSorted((a, b) => b.new_count - a.new_count)
 	}));
 	const forYou = createQuery(() => ({ queryKey: KEYS.forYou, queryFn: me.forYou, staleTime: 60_000 }));
 	const collections = createQuery(() => ({
-		queryKey: KEYS.collections,
-		queryFn: () => library.list('collections'),
-		select: (r): CollectionListItem[] => (r.view === 'collections' ? r.items : [])
+		...read.collections(),
+		select: collectionsOf
 	}));
 	// what still downloads, per collection: read often only while something moves
 	const transfers = createQuery(() => ({
-		queryKey: KEYS.torrents,
-		queryFn: torrents.list,
-		refetchInterval: (q) => (q.state.data?.some((t) => !t.finished) ? 5_000 : 60_000)
+		...read.torrents(),
+		select: torrentsOf
 	}));
 	const downloads = $derived(downloadsByCollection(transfers.data ?? []));
 

@@ -3,14 +3,14 @@
 	// the last visit, or nothing new. Leaving the watchlist goes through the server; the follow
 	// comes back on its own with the next episode got or played, which the toast says.
 	import { me, tmdbImage, type WatchlistItem } from '@iris/api/client';
-	import { percent } from '@iris/api/format';
+	import { percent, plural } from '@iris/api/format';
 	import PosterCard from '#lib/components/PosterCard.svelte';
 	import { Gesture } from '#lib/gesture.svelte.ts';
 	import { queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
 	import CardMenu from './CardMenu.svelte';
-	import { KEYS, plural } from './data.ts';
+	import { KEYS } from '#lib/queries.ts';
 
 	let { item, downloading }: { item: WatchlistItem; downloading?: number } = $props();
 	const g = new Gesture();

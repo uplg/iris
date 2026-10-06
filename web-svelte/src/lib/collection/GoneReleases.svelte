@@ -3,14 +3,13 @@
 	// how far it was watched, its name; « Download again » brings the same release back (same
 	// infohash: the saved position resumes), « Hide » takes it off this page for this person only.
 	import { me, torrents as torrentsApi, type GoneReleaseEntry } from '@iris/api/client';
-	import { formatRecentTime, formatSize, formatTimecode, percent } from '@iris/api/format';
+	import { formatRecentTime, formatSize, formatTimecode, percent, plural } from '@iris/api/format';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
-	import { count } from './merge.ts';
 
 	let { collectionId, releases }: { collectionId: string; releases: GoneReleaseEntry[] } = $props();
 	const id = $props.id();
@@ -43,7 +42,7 @@
 <section class="gone" aria-labelledby="{id}-title">
 	<div class="head">
 		<h2 id="{id}-title" class="group-title" tabindex="-1" bind:this={heading}>Previously on disk</h2>
-		<span class="hint">{count(releases.length, 'release')}</span>
+		<span class="hint">{plural(releases.length, 'release')}</span>
 	</div>
 	<ul class="plain-list" bind:this={list}>
 		{#each releases as r (r.infohash)}

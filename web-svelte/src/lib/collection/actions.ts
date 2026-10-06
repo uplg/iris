@@ -3,14 +3,9 @@
 // same releases are told to read again when next shown.
 
 import { queryClient } from '#lib/query.ts';
-
-export const collectionKey = (id: string) => ['collection', id] as const;
-export const progressKey = (infohash: string) => ['torrent-progress', infohash] as const;
+import { KEYS, refreshLibrary } from '#lib/queries.ts';
 
 export async function refetchCollection(id: string): Promise<void> {
-	for (const key of ['library', 'history', 'continue-watching', 'watchlist']) void queryClient.invalidateQueries({ queryKey: [key] });
-	await queryClient.invalidateQueries({ queryKey: collectionKey(id) });
+	void refreshLibrary();
+	await queryClient.invalidateQueries({ queryKey: KEYS.collection(id) });
 }
-
-/** Something is still downloading: the page reads it again until it is done. */
-export const POLL_MS = 3000;

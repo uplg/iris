@@ -3,20 +3,11 @@
 	// never the one it opens on), the season's pack offers above its list; a fleuve anime
 	// (`numbering: absolute`) is one flat list on the absolute number, no seasons.
 	import type { CollectionDetail, TorrentView } from '@iris/api/client';
+	import { plural } from '@iris/api/format';
 	import Tabs from '#lib/components/Tabs.svelte';
 	import EpisodeList from './EpisodeList.svelte';
 	import SeasonPack from './SeasonPack.svelte';
-	import {
-		count,
-		firstSeason,
-		mergeEpisodes,
-		mergeEpisodesAbsolute,
-		ownedEp,
-		seasonName,
-		seasonsOf,
-		watchedEp,
-		type Episode
-	} from './merge.ts';
+	import { firstSeason, mergeEpisodes, mergeEpisodesAbsolute, ownedEp, seasonName, seasonsOf, watchedEp, type Episode } from './merge.ts';
 
 	let { collection: c, torrents }: { collection: CollectionDetail; torrents: Map<string, TorrentView> } = $props();
 	const id = $props.id();
@@ -32,10 +23,10 @@
 	const tabs = $derived(
 		seasons.map((s) => {
 			const all = s.items.length > 0 && s.items.every(watchedEp);
-			return { value: `s${s.season}`, label: `${seasonName(s.season)} · ${all ? 'watched' : count(s.items.length, 'episode')}` };
+			return { value: `s${s.season}`, label: `${seasonName(s.season)} · ${all ? 'watched' : plural(s.items.length, 'episode')}` };
 		})
 	);
-	const fact = (items: Episode[]) => `${count(items.length, 'episode')} · ${items.filter(ownedEp).length} on disk`;
+	const fact = (items: Episode[]) => `${plural(items.length, 'episode')} · ${items.filter(ownedEp).length} on disk`;
 </script>
 
 <section class="episodes" aria-labelledby="{id}-title">

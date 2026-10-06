@@ -5,12 +5,13 @@
 	// nothing to choose here. Read again every few seconds while something downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { library, me, metadata, tmdbImage, type CollectionDetail, type TorrentView } from '@iris/api/client';
+	import { library, tmdbImage, type CollectionDetail, type TorrentView } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Poster from '#lib/components/Poster.svelte';
-	import { collectionKey, POLL_MS } from './actions.ts';
+	import { FAST, KEYS, moving, read } from '#lib/queries.ts';
+	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import Episodes from './Episodes.svelte';
 	import GoneReleases from './GoneReleases.svelte';
 	import Hero from './Hero.svelte';
@@ -22,31 +23,19 @@
 
 	let { id }: { id: string } = $props();
 
-	const moving = (d: CollectionDetail | undefined) => !!d?.torrents.some((t) => !t.finished && t.state === 'live');
 	const q = createQuery(
 		() => ({
-			queryKey: collectionKey(id),
+			queryKey: KEYS.collection(id),
 			queryFn: () => library.collection(id),
-			refetchInterval: (query) => (moving(query.state.data) ? POLL_MS : false)
+			refetchInterval: (query: { state: { data?: CollectionDetail } }) => (query.state.data?.torrents.some(moving) ? FAST : false)
 		}),
 		() => queryClient
 	);
 	const c = $derived(q.data);
 
 	const tmdb = $derived(c?.tmdb_id ?? null);
-	const info = createQuery(
-		() => ({
-			queryKey: ['tmdb', tmdb, c?.kind],
-			queryFn: () => metadata.tmdb(tmdb!, c?.kind),
-			enabled: tmdb !== null,
-			staleTime: 60 * 60_000
-		}),
-		() => queryClient
-	);
-	const watching = createQuery(
-		() => ({ queryKey: ['continue-watching'], queryFn: me.continueWatching }),
-		() => queryClient
-	);
+	const info = tmdbMeta(() => ({ id: tmdb, kind: c?.kind, trusted: true }));
+	const watching = createQuery(read.continueWatching, () => queryClient);
 
 	// only when the page opens: a copy deleted later down to one keeps the person here
 	let decided = false;

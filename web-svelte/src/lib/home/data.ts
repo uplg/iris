@@ -1,31 +1,8 @@
-// What the home and discover screens read, and the words they say about it: the query keys
-// (shared with every view that invalidates them), the "Right now" facts, the downloads per
-// collection, a title's kind and the playback languages, said once.
+// The words the home and discover screens say about what they read: the "Right now" facts,
+// the downloads per collection, a title's kind and the playback languages, said once.
 
 import type { ContinueWatchingItem, HomeSummary, MediaKind, PlaybackPrefs, TorrentView } from '@iris/api/client';
-import { formatSize, percent, timeLeft } from '@iris/api/format';
-
-export const KEYS = {
-	continueWatching: ['continue-watching'],
-	watchlist: ['watchlist'],
-	summary: ['me', 'summary'],
-	torrents: ['torrents'],
-	collections: ['library', 'collections'],
-	featured: ['discover-featured'],
-	forYou: ['for-you'],
-	forYouPage: ['for-you-page'],
-	moodBoard: (kind: MediaKind) => ['mood-board', kind],
-	moodResults: ['mood-results'],
-	preferences: ['preferences'],
-	genres: ['genres'],
-	languages: ['languages'],
-	playbackPrefs: (collectionId: string | null) => ['playback-prefs', collectionId]
-} as const;
-
-/** `1 download`, `3 downloads`. */
-export function plural(n: number, one: string, many = `${one}s`): string {
-	return `${n} ${n === 1 ? one : many}`;
-}
+import { formatSize, percent, plural, timeLeft } from '@iris/api/format';
 
 const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 

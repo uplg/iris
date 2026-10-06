@@ -3,6 +3,7 @@
 	// their watch history, a new display name in place, a new password (their sessions end), and
 	// removal after asking (never oneself; their grabs stay in the library, re-attributed).
 	import { createQuery } from '@tanstack/svelte-query';
+	import { plural } from '@iris/api/format';
 	import { admin, auth, type UserView } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { session } from '#lib/session.svelte.ts';
@@ -16,8 +17,8 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import RenameField from '#lib/components/RenameField.svelte';
 	import Sheet from '#lib/components/Sheet.svelte';
-	import { count, onDay } from '#lib/history/words.ts';
-	import { usersQuery } from './queries.ts';
+	import { onDay } from '#lib/history/words.ts';
+	import { invitationsQuery, usersQuery } from './queries.ts';
 
 	const MIN = 8;
 	const users = createQuery(usersQuery, () => queryClient);
@@ -84,7 +85,7 @@
 			() => admin.deleteUser(u.id),
 			async () => {
 				ui.toast(`${u.display_name}’s account deleted.`);
-				void queryClient.invalidateQueries({ queryKey: ['admin', 'invitations'] });
+				void queryClient.invalidateQueries({ queryKey: invitationsQuery().queryKey });
 				await users.refetch();
 				await refocus(title);
 			},
@@ -94,13 +95,13 @@
 	const problem = $derived(invalid || g.error);
 </script>
 
-<Group id="users-title" title="Users" fact={users.data ? count(users.data.length, 'account') : undefined} bind:heading={title}>
+<Group id="users-title" title="Users" fact={users.data ? plural(users.data.length, 'account') : undefined} bind:heading={title}>
 	{#if (users.data?.length ?? 0) > 1}
 		<div class="field find">
 			<label for="users-filter">Find a person</label>
 			<input id="users-filter" type="search" bind:value={filter} autocomplete="off" aria-describedby="users-count" />
 			<p class="hint" id="users-count">
-				{q ? `${count(shown.length, 'match', 'matches')} of ${users.data?.length}` : 'By name or email.'}
+				{q ? `${plural(shown.length, 'match', 'matches')} of ${users.data?.length}` : 'By name or email.'}
 			</p>
 		</div>
 	{/if}

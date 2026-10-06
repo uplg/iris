@@ -6,7 +6,7 @@
 	import { me, type MediaKind } from '@iris/api/client';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import { loadable } from '#lib/query.ts';
-	import { KEYS } from '#lib/home/data.ts';
+	import { KEYS } from '#lib/queries.ts';
 
 	let { kind }: { kind: MediaKind } = $props();
 	const board = createQuery(() => ({ queryKey: KEYS.moodBoard(kind), queryFn: () => me.moodBoard(kind) }));

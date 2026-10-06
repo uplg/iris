@@ -2,11 +2,11 @@
 	// A brand-new, empty library: the tracker's freshest featured release. Its name comes from
 	// the server's title match when there is one, else the release name tidied.
 	import type { SearchResult } from '@iris/api/client';
-	import { prettySceneName } from '@iris/api/format';
+	import { plural, prettySceneName } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Hero from './Hero.svelte';
-	import { kindLabel, plural, stillUrl } from './data.ts';
-	import { tmdbMeta } from './tmdb.svelte.ts';
+	import { kindLabel, stillUrl } from './data.ts';
+	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 
 	let { result }: { result: SearchResult } = $props();
 	const match = $derived(result.title_match ?? null);

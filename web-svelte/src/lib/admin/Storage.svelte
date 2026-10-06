@@ -3,13 +3,13 @@
 	// and the level it cleans down to, said in words (past the line, a warning in words too),
 	// and what the household gave back to the swarm.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { formatSize, percent } from '@iris/api/format';
+	import { formatSize, percent, plural } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import Group from '#lib/components/Group.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import StatusRow from '#lib/components/StatusRow.svelte';
-	import { count } from '#lib/history/words.ts';
+
 	import { storageQuery } from './queries.ts';
 
 	const storage = createQuery(storageQuery, () => queryClient);
@@ -36,7 +36,7 @@
 					value={over ? 'Past the clean-up line: the next clean-up frees space' : 'Below the clean-up line'}
 					warn={over}
 				/>
-				<StatusRow label="On disk" value={count(s.torrent_count, 'release')} />
+				<StatusRow label="On disk" value={plural(s.torrent_count, 'release')} />
 				<StatusRow label="Clean-up starts at" value="{s.threshold_pct}% ({formatSize(s.threshold_bytes)})" />
 				<StatusRow label="Cleans down to" value="{s.target_pct}% ({formatSize(s.target_bytes)})" />
 				<StatusRow

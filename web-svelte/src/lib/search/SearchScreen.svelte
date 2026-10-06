@@ -16,7 +16,8 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import ToggleGroup from '#lib/components/ToggleGroup.svelte';
-	import { SEARCH_KEY, rememberSearch } from './cache.ts';
+	import { rememberSearch } from './cache.ts';
+	import { KEYS } from '#lib/queries.ts';
 	import { KINDS, SORT_MODES, readSearch, searchHref, searchOpts, type SearchState, type SortMode } from './params.ts';
 	import { failedTrackers, releaseKey, releasesByTitle, summary } from './release.ts';
 	import { VIEWS, keptView, type ResultsView } from './view.ts';
@@ -70,7 +71,7 @@
 		() => {
 			const asked = { ...s, lang: null };
 			return {
-				queryKey: [SEARCH_KEY, asked.q, asked.kind, asked.sort, asked.title],
+				queryKey: [...KEYS.search, asked.q, asked.kind, asked.sort, asked.title],
 				// a newer search aborts this one (its signal): the tracker fan-out stops server-side
 				queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) =>
 					search.query(asked.q, searchOpts(asked, pageParam, PAGE_SIZE), signal),
@@ -164,7 +165,7 @@
 		if (!q) return;
 		// the recent searches are a convenience: failing to keep one is not the search's failure
 		me.recordSearch(q).then(
-			() => queryClient.invalidateQueries({ queryKey: ['recent-searches'] }),
+			() => queryClient.invalidateQueries({ queryKey: KEYS.recentSearches }),
 			() => undefined
 		);
 	}

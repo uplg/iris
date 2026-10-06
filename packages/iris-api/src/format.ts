@@ -110,6 +110,11 @@ export function episodeCode(season: number | null | undefined, episode: number |
   return `S${season}:E${episode}`;
 }
 
+/** A count with its noun: `1 download`, `3 downloads`. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 /** A share as people read it: `42%`. */
 export function percent(fraction0to100: number): string {
   return `${Math.round(fraction0to100)}%`;

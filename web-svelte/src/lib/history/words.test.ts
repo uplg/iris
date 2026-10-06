@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { count, fileName, onDay, progressWords, since, watchedShare, whatWatched } from './words.ts';
+import { plural } from '@iris/api/format';
+import { fileName, onDay, progressWords, since, watchedShare, whatWatched } from './words.ts';
 
 const now = new Date(2026, 9, 6, 15, 0).getTime();
 
@@ -47,8 +48,8 @@ describe('what was watched', () => {
 	});
 
 	it('counts with the right word', () => {
-		expect(count(1, 'title')).toBe('1 title');
-		expect(count(3, 'title')).toBe('3 titles');
-		expect(count(2, 'entry', 'entries')).toBe('2 entries');
+		expect(plural(1, 'title')).toBe('1 title');
+		expect(plural(3, 'title')).toBe('3 titles');
+		expect(plural(2, 'entry', 'entries')).toBe('2 entries');
 	});
 });

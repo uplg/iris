@@ -11,14 +11,15 @@
 	import Group from '#lib/components/Group.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import PreferencesEditor from './PreferencesEditor.svelte';
-	import { genresQuery, languagesQuery, picksOf, preferencesQuery, type Picks } from './preferences.ts';
+	import PreferencesEditor from '#lib/preferences/PreferencesEditor.svelte';
+	import { NO_PICKS, picksOf, preferencesSaved, type Picks } from '#lib/preferences/preferences.ts';
+	import { read } from '#lib/queries.ts';
 
-	const prefs = createQuery(preferencesQuery, () => queryClient);
-	const genres = createQuery(genresQuery, () => queryClient);
-	const languages = createQuery(languagesQuery, () => queryClient);
+	const prefs = createQuery(read.preferences, () => queryClient);
+	const genres = createQuery(read.genres, () => queryClient);
+	const languages = createQuery(read.languages, () => queryClient);
 	const value = loadable(prefs);
-	const draft = new Draft<Picks>({ languages: [], genres: [], include_anime: false });
+	const draft = new Draft<Picks>(NO_PICKS);
 	const g = new Gesture();
 	let seeded = false;
 
@@ -33,7 +34,7 @@
 		return g.run(
 			() => me.savePreferences({ ...draft.current, onboarding_completed: prefs.data?.onboarding_completed ?? true }),
 			(saved) => {
-				queryClient.setQueryData(['preferences'], saved);
+				preferencesSaved(saved);
 				draft.reset(picksOf(saved));
 				ui.toast('Recommendations saved.');
 			},

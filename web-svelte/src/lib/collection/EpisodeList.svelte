@@ -5,10 +5,11 @@
 	// no timer); two buttons do the same for the keyboard. Rows outside the screen are not laid
 	// out either (`content-visibility`, EpisodeRow).
 	import { untrack } from 'svelte';
+	import { plural } from '@iris/api/format';
 	import type { TorrentView } from '@iris/api/client';
 	import Icon from '#lib/components/Icon.svelte';
 	import EpisodeRow from './EpisodeRow.svelte';
-	import { count, watchedEp, type Episode } from './merge.ts';
+	import { watchedEp, type Episode } from './merge.ts';
 
 	interface Props {
 		collectionId: string;
@@ -48,17 +49,17 @@
 
 {#if start > 0}
 	<button class="btn wide" onclick={() => (start = Math.max(0, start - step))}>
-		<Icon name="chevron-up" />Show {count(Math.min(step, start), 'earlier episode')}
+		<Icon name="chevron-up" />Show {plural(Math.min(step, start), 'earlier episode')}
 	</button>
 {/if}
-<ol class="episodes" aria-label={count(episodes.length, 'episode')}>
+<ol class="episodes" aria-label={plural(episodes.length, 'episode')}>
 	{#each shown as ep (ep.absolute !== null ? `a${ep.absolute}` : `${ep.season}-${ep.episode}`)}
 		<EpisodeRow {collectionId} {ep} {torrents} />
 	{/each}
 </ol>
 {#if after > 0}
 	<button class="btn wide" bind:this={more} onclick={grow}>
-		<Icon name="chevron-down" />Show {count(Math.min(step, after), 'more episode')} ({after} left)
+		<Icon name="chevron-down" />Show {plural(Math.min(step, after), 'more episode')} ({after} left)
 	</button>
 {/if}
 

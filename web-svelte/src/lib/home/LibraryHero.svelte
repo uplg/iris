@@ -5,7 +5,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import Hero from './Hero.svelte';
 	import { kindLabel, stillUrl } from './data.ts';
-	import { tmdbMeta } from './tmdb.svelte.ts';
+	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 
 	let { item }: { item: CollectionListItem } = $props();
 	const md = tmdbMeta(() => ({ id: item.tmdb_id, kind: item.kind, trusted: true }));

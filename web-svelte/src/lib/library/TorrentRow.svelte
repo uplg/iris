@@ -14,7 +14,7 @@
 	import Disclosure from '#lib/components/Disclosure.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { deleteDescription, isVideo, ratioOf, releaseName, releaseStatus, watchState } from './model.ts';
-	import { refreshLibrary } from './queries.svelte.ts';
+	import { refreshLibrary } from '#lib/queries.ts';
 	import FileList from './FileList.svelte';
 
 	interface Props {

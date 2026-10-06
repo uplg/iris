@@ -8,6 +8,7 @@
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
 	import { formatRelative, formatSize, languageLabel, prettySceneName } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
+	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, pending, unavailable } from '#lib/gesture.svelte.ts';
 	import Disclosure from '#lib/components/Disclosure.svelte';
@@ -100,7 +101,7 @@
 
 	const isTv = $derived(kind === 'tv');
 	const followed = createQuery(
-		() => ({ queryKey: ['follows'], queryFn: () => follows.list(), enabled: isTv, staleTime: 60_000 }),
+		() => ({ ...read.follows(), enabled: isTv }),
 		() => queryClient
 	);
 	const following = $derived(
@@ -112,7 +113,7 @@
 		return follow.run(
 			() => follows.add(title, tmdbId),
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: ['follows'] });
+				await queryClient.invalidateQueries({ queryKey: KEYS.follows });
 				ui.toast(`You follow ${title}. New episodes show on your home page.`);
 			}
 		);

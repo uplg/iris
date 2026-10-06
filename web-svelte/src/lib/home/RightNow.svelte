@@ -2,16 +2,12 @@
 	// "Right now": what the house's Iris is doing, in a few words (downloads, new episodes,
 	// room on disk, what it shares). Read again every few seconds while something downloads.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { me } from '@iris/api/client';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import { loadable } from '#lib/query.ts';
-	import { KEYS, rightNow } from './data.ts';
+	import { read } from '#lib/queries.ts';
+	import { rightNow } from './data.ts';
 
-	const summary = createQuery(() => ({
-		queryKey: KEYS.summary,
-		queryFn: me.summary,
-		refetchInterval: (q) => ((q.state.data?.downloading ?? 0) > 0 ? 5_000 : 60_000)
-	}));
+	const summary = createQuery(() => read.summary());
 	const facts = $derived(summary.data ? rightNow(summary.data) : []);
 	const value = loadable(summary);
 </script>

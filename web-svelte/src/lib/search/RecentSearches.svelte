@@ -4,6 +4,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { me } from '@iris/api/client';
 	import { queryClient } from '#lib/query.ts';
+	import { KEYS, read } from '#lib/queries.ts';
 	import { refocus } from '#lib/focus.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
@@ -13,10 +14,7 @@
 	const SHOWN = 5;
 	const g = new Gesture();
 
-	const recent = createQuery(
-		() => ({ queryKey: ['recent-searches'], queryFn: () => me.recentSearches(), staleTime: 60_000 }),
-		() => queryClient
-	);
+	const recent = createQuery(read.recentSearches, () => queryClient);
 	const shown = $derived((recent.data ?? []).slice(0, SHOWN));
 
 	function forget(query?: string) {
@@ -24,7 +22,7 @@
 		return g.run(
 			() => me.forgetSearches(query),
 			async () => {
-				await queryClient.invalidateQueries({ queryKey: ['recent-searches'] });
+				await queryClient.invalidateQueries({ queryKey: KEYS.recentSearches });
 				// the next search takes the focus, else the field
 				const next = at >= 0 ? document.getElementById(`${id}-${Math.min(at, shown.length - 1)}`) : null;
 				await refocus(next, back);

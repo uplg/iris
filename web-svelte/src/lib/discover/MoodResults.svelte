@@ -8,7 +8,8 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import { loadable } from '#lib/query.ts';
 	import CatalogCard from '#lib/home/CatalogCard.svelte';
-	import { KEYS, plural } from '#lib/home/data.ts';
+	import { KEYS } from '#lib/queries.ts';
+	import { plural } from '@iris/api/format';
 
 	let { mood, kind }: { mood: string; kind: MediaKind } = $props();
 	const board = createQuery(() => ({ queryKey: KEYS.moodBoard(kind), queryFn: () => me.moodBoard(kind) }));

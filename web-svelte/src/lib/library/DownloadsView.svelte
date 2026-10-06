@@ -7,14 +7,15 @@
 	import { refocus } from '#lib/focus.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Group from '#lib/components/Group.svelte';
-	import { GROUPS, collectionsOf, groupOf, releaseTitle, torrentsOf, type Group as GroupId } from './model.ts';
-	import { collectionsQuery, continueWatchingQuery, torrentsQuery } from './queries.svelte.ts';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { collectionsOf, read, torrentsOf } from '#lib/queries.ts';
+	import { GROUPS, groupOf, releaseTitle, type Group as GroupId } from './model.ts';
 	import TorrentRow from './TorrentRow.svelte';
 
 	const id = $props.id();
-	const torrents = torrentsQuery();
-	const collections = collectionsQuery();
-	const watching = continueWatchingQuery();
+	const torrents = createQuery(() => read.torrents());
+	const collections = createQuery(() => read.collections());
+	const watching = createQuery(() => read.continueWatching());
 	const value = loadable(torrents);
 
 	let query = $state('');

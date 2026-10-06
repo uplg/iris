@@ -3,12 +3,13 @@
 	// is known; one not yet read says so rather than a zero.
 	import { formatSize, percent } from '@iris/api/format';
 	import Progress from '#lib/components/Progress.svelte';
-	import { collectionsOf, downloadingLine, ratioOf, titleCounts } from './model.ts';
-	import { collectionsQuery, summaryQuery, torrentsQuery } from './queries.svelte.ts';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { collectionsOf, read } from '#lib/queries.ts';
+	import { downloadingLine, ratioOf, titleCounts } from './model.ts';
 
-	const summary = summaryQuery();
-	const collections = collectionsQuery();
-	const torrents = torrentsQuery();
+	const summary = createQuery(() => read.summary());
+	const collections = createQuery(() => read.collections());
+	const torrents = createQuery(() => read.torrents());
 
 	const titles = $derived(collections.data ? titleCounts(collectionsOf(collections.data)) : null);
 	const disk = $derived(summary.data?.disk ?? null);

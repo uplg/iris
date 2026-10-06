@@ -57,8 +57,3 @@ export function whatWatched(it: {
 export function fileName(path: string | null | undefined): string | null {
 	return path ? (path.split('/').pop() ?? path) : null;
 }
-
-/** « 1 title », « 3 titles ». */
-export function count(n: number, one: string, many = `${one}s`): string {
-	return `${n} ${n === 1 ? one : many}`;
-}

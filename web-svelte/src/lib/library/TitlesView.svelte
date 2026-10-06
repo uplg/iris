@@ -2,6 +2,7 @@
 	// The titles on disk as a poster grid: found by name, filtered by type and state, sorted.
 	// Each card says its state in words. A ghost (every release reclaimed, but you watched it)
 	// stays greyed and labelled, and you can hide it from your own library.
+	import { createQuery } from '@tanstack/svelte-query';
 	import { me, tmdbImage, type CollectionListItem } from '@iris/api/client';
 	import { loadable } from '#lib/query.ts';
 	import { stored, text } from '#lib/stored.ts';
@@ -16,20 +17,18 @@
 		LIBRARY_SORT_KEY,
 		SORTS,
 		activityByCollection,
-		collectionsOf,
 		filterTitles,
 		titleMeta,
 		titleStatus,
-		torrentsOf,
 		type ShowFilter,
 		type Sort,
 		type TypeFilter
 	} from './model.ts';
-	import { collectionsQuery, refreshLibrary, torrentsQuery } from './queries.svelte.ts';
+	import { collectionsOf, read, refreshLibrary, torrentsOf } from '#lib/queries.ts';
 
 	const id = $props.id();
-	const collections = collectionsQuery();
-	const torrents = torrentsQuery();
+	const collections = createQuery(() => read.collections());
+	const torrents = createQuery(() => read.torrents());
 	const value = loadable(collections);
 	const g = new Gesture();
 

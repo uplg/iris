@@ -3,26 +3,20 @@
 	// from there, the series' episodes, starting over; and the languages the play will use. A
 	// tile whose file is not on disk gets it first, then plays it while it downloads.
 	import { createQuery } from '@tanstack/svelte-query';
-	import { me, type ContinueWatchingItem } from '@iris/api/client';
+	import type { ContinueWatchingItem } from '@iris/api/client';
 	import { clock, duration, percent, prettySceneName, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Hero from './Hero.svelte';
-	import { KEYS, kindLabel, languagesLine, secondsLeft, stillUrl, watched } from './data.ts';
-	import { tmdbMeta } from './tmdb.svelte.ts';
+	import { kindLabel, languagesLine, secondsLeft, stillUrl, watched } from './data.ts';
+	import { read } from '#lib/queries.ts';
+	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, nextName, startOver, tileKey, watchHref } from './continue.ts';
 
 	let { item }: { item: ContinueWatchingItem } = $props();
 	const md = tmdbMeta(() => ({ id: item.tmdb_id, kind: item.kind, trusted: item.tmdb_verified }));
-	const prefs = createQuery(() => {
-		const cid = item.collection_id ?? null;
-		return {
-			queryKey: KEYS.playbackPrefs(cid),
-			queryFn: () => (cid ? me.seriesPlaybackPreferences(cid) : me.playbackPreferences()),
-			staleTime: 5 * 60_000
-		};
-	});
+	const prefs = createQuery(() => read.playbackPrefs(item.collection_id ?? null));
 	const g = new Gesture();
 
 	const title = $derived(md.data?.title ?? prettySceneName(item.torrent_name));

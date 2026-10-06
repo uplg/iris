@@ -12,7 +12,7 @@ import { errorText } from '#lib/errors.ts';
 import { FAILURE, haptic } from '#lib/haptics.ts';
 import { refocus } from '#lib/focus.ts';
 import type { Gesture } from '#lib/gesture.svelte.ts';
-import { KEYS } from './data.ts';
+import { KEYS } from '#lib/queries.ts';
 
 /** A tile's identity: tiles not on disk all carry an empty infohash, their series tells them apart. */
 export const tileKey = (it: ContinueWatchingItem) => (it.collection_id ? `c:${it.collection_id}` : `${it.infohash}:${it.file_idx}`);

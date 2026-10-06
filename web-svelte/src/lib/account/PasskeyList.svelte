@@ -5,6 +5,7 @@
 	// focus then on the list's title). Passkeys are optional here: the password keeps working,
 	// so the last one can go too. « Add a passkey » only where the browser can make one.
 	import { createQuery } from '@tanstack/svelte-query';
+	import { plural } from '@iris/api/format';
 	import { passkeys, register, supported, type PasskeyView } from '@iris/api/passkeys';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -16,7 +17,7 @@
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import RenameField from '#lib/components/RenameField.svelte';
-	import { count, onDay } from '#lib/history/words.ts';
+	import { onDay } from '#lib/history/words.ts';
 
 	const keys = createQuery(
 		() => ({ queryKey: ['passkeys'], queryFn: passkeys.list }),
@@ -57,7 +58,7 @@
 		);
 </script>
 
-<Group id="keys-title" title="Passkeys" fact={keys.data?.length ? count(keys.data.length, 'passkey') : undefined} bind:heading={title}>
+<Group id="keys-title" title="Passkeys" fact={keys.data?.length ? plural(keys.data.length, 'passkey') : undefined} bind:heading={title}>
 	<p class="hint">
 		Optional: a passkey signs you in with your fingerprint, face or screen lock instead of typing your password. Your password keeps working
 		either way.
