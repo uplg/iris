@@ -56,12 +56,74 @@ pub async fn remove_torrent(
     })
 }
 
+/// An engine torrent no live row owns, as the sweep found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stray {
+    pub infohash: String,
+    pub name: Option<String>,
+    /// Its row exists but was removed (`false`: no row at all).
+    pub row_removed: bool,
+    /// The sweep paused it on this pass.
+    pub paused_now: bool,
+}
+
+/// Engine torrents no live row owns: the remains of a grab or a delete cut
+/// short (a crash between the engine add and the row, a delete whose soft
+/// delete went through but not its engine delete). Nothing is deleted here,
+/// ever: each one is paused (out of the swarm, files untouched) and logged,
+/// for an admin to re-grab or remove. Under the infohash lock, so a grab
+/// between its add and its row isn't one.
+///
+/// # Errors
+/// A DB read failed.
+pub async fn sweep_strays(engine: &Engine, pool: &SqlitePool) -> anyhow::Result<Vec<Stray>> {
+    let live: std::collections::HashSet<String> = iris_db::torrents::list_active_infohashes(pool)
+        .await?
+        .into_iter()
+        .collect();
+    let mut strays = Vec::new();
+    for snap in engine.list() {
+        if live.contains(&snap.infohash) {
+            continue;
+        }
+        let _held = engine.lock(&snap.infohash).await;
+        let row = iris_db::torrents::find_by_infohash(pool, &snap.infohash).await?;
+        if row.as_ref().is_some_and(|r| r.deleted_at.is_none()) {
+            continue;
+        }
+        let Some(current) = engine.get_by_infohash(&snap.infohash) else {
+            continue;
+        };
+        let paused_now = current.state != crate::TorrentState::Paused;
+        if paused_now {
+            match engine.pause_by_infohash(&snap.infohash).await {
+                Ok(()) => tracing::warn!(
+                    infohash = %snap.infohash,
+                    name = snap.name.as_deref().unwrap_or("?"),
+                    row_removed = row.is_some(),
+                    "stray engine torrent (no library row): paused, files kept",
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, infohash = %snap.infohash, "stray engine torrent: pause failed");
+                }
+            }
+        }
+        strays.push(Stray {
+            infohash: snap.infohash,
+            name: snap.name,
+            row_removed: row.is_some(),
+            paused_now,
+        });
+    }
+    Ok(strays)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use super::remove_torrent;
+    use super::{remove_torrent, sweep_strays};
     use crate::Engine;
 
     /// A multi-file `.torrent` named `name`; `salt` (a `source` key) changes
@@ -161,6 +223,65 @@ pub(crate) mod tests {
 
         let again = remove_torrent(&engine, &pool, &b).await.unwrap();
         assert!(!again.in_engine && !again.row_was_live);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_torrent_without_a_live_row_is_paused_never_deleted() {
+        let dir = temp_dir();
+        let engine = Engine::offline(dir.clone()).await.unwrap();
+        let pool = iris_db::test_support::migrated_pool().await;
+        let owned = grab(
+            &engine,
+            &pool,
+            torrent_bytes("Owned.S01-G", &[("a.mkv", 1_000), ("b.mkv", 1_000)], "o"),
+        )
+        .await;
+        let removed = grab(
+            &engine,
+            &pool,
+            torrent_bytes("Removed.S01-G", &[("a.mkv", 1_000), ("b.mkv", 1_000)], "r"),
+        )
+        .await;
+        iris_db::torrents::soft_delete(&pool, iris_core::ids::TorrentId::from(removed.id))
+            .await
+            .unwrap();
+        let orphan = engine
+            .add_from_bytes(torrent_bytes(
+                "Orphan.S01-G",
+                &[("a.mkv", 1_000), ("b.mkv", 1_000)],
+                "x",
+            ))
+            .await
+            .unwrap()
+            .snapshot
+            .infohash;
+
+        let mut strays = sweep_strays(&engine, &pool).await.unwrap();
+        strays.sort_by(|a, b| a.infohash.cmp(&b.infohash));
+        let mut want = vec![(removed.infohash.clone(), true), (orphan.clone(), false)];
+        want.sort();
+        assert_eq!(
+            strays
+                .iter()
+                .map(|s| (s.infohash.clone(), s.row_removed))
+                .collect::<Vec<_>>(),
+            want
+        );
+        assert!(strays.iter().all(|s| s.paused_now));
+        for ih in [&removed.infohash, &orphan] {
+            assert_eq!(
+                engine.get_by_infohash(ih).unwrap().state,
+                crate::TorrentState::Paused,
+                "kept in the engine, out of the swarm"
+            );
+        }
+        assert_ne!(
+            engine.get_by_infohash(&owned.infohash).unwrap().state,
+            crate::TorrentState::Paused
+        );
+        let again = sweep_strays(&engine, &pool).await.unwrap();
+        assert!(again.iter().all(|s| !s.paused_now), "paused once");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
