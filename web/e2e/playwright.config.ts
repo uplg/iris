@@ -43,6 +43,9 @@ export default defineConfig({
 			}
 		},
 		{ name: 'webkit', grep: /@webkit\b/, use: { browserName: 'webkit', viewport: { width: 1280, height: 800 } } },
+		// Zen is driven by puppeteer over WebDriver BiDi inside its specs (lib/zen.ts): the
+		// project only selects them, its own Playwright browser is never launched
+		{ name: 'zen', grep: /@zen\b/ },
 		{
 			name: 'phone',
 			grep: /@phone\b/,
