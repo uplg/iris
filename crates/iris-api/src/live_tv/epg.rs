@@ -75,10 +75,19 @@ impl EpgIndex {
     }
 }
 
-/// Gunzip a fetched guide body to text.
-pub fn decode_gzip(bytes: &[u8]) -> std::io::Result<String> {
+/// Gunzip a fetched guide body to text, refusing more than `limit` bytes of
+/// output (a gzip bomb would otherwise exhaust memory).
+pub fn decode_gzip(bytes: &[u8], limit: u64) -> std::io::Result<String> {
     let mut out = String::new();
-    flate2::read::GzDecoder::new(bytes).read_to_string(&mut out)?;
+    flate2::read::GzDecoder::new(bytes)
+        .take(limit.saturating_add(1))
+        .read_to_string(&mut out)?;
+    if u64::try_from(out.len()).unwrap_or(u64::MAX) > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "guide exceeds the decompressed size cap",
+        ));
+    }
     Ok(out)
 }
 
@@ -375,7 +384,10 @@ mod tests {
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(GUIDE.as_bytes()).unwrap();
         let gz = enc.finish().unwrap();
-        assert_eq!(decode_gzip(&gz).unwrap(), GUIDE);
-        assert!(decode_gzip(b"not gzip").is_err());
+        assert_eq!(decode_gzip(&gz, 1 << 20).unwrap(), GUIDE);
+        assert!(decode_gzip(b"not gzip", 1 << 20).is_err());
+        let exact = u64::try_from(GUIDE.len()).unwrap();
+        assert_eq!(decode_gzip(&gz, exact).unwrap(), GUIDE);
+        assert!(decode_gzip(&gz, exact - 1).is_err());
     }
 }

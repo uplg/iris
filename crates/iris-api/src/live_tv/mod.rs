@@ -97,6 +97,17 @@ const LOGO_CACHE_MAX: usize = 4096;
 /// tiny PNG/SVG; anything larger is almost certainly not a real logo).
 const LOGO_MAX_BYTES: usize = 512 * 1024;
 
+/// Cap on the iptv-org JSON databases (streams, channels, logos, countries).
+const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
+
+/// Cap on a fetched (usually gzipped) programme guide, and on its gunzipped
+/// XML.
+const MAX_GUIDE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_GUIDE_XML_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Cap on a logo download; past [`LOGO_MAX_BYTES`] it is served uncached.
+const LOGO_FETCH_MAX_BYTES: usize = 4 * 1024 * 1024;
+
 /// How long a failed best-effort load (streams DB, search index, guide…) is
 /// remembered before the next caller may retry it.
 const FAILED_LOAD_RETRY: Duration = Duration::from_mins(10);
@@ -446,17 +457,15 @@ impl LiveTvService {
         {
             return Ok(cached);
         }
-        let fetched: Vec<Country> = self
+        let fetched = self
             .inner
             .http
             .get(&self.inner.cfg.countries_url)
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?
-            .json()
-            .await
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+            .map_err(upstream_err)?;
+        let fetched: Vec<Country> = read_json(fetched).await?;
         let fetched = Arc::new(fetched);
         *self.inner.countries.write().expect("poisoned") = Some((fetched.clone(), Instant::now()));
         Ok(fetched)
@@ -597,9 +606,9 @@ impl LiveTvService {
             .await
             .and_then(reqwest::Response::error_for_status);
         let body = match resp {
-            Ok(r) => r.json::<TunerGrid>().await,
+            Ok(r) => read_json::<TunerGrid>(r).await,
             Err(e) => {
-                tracing::debug!(error = %e, "tuner grid unreachable");
+                tracing::debug!(error = %upstream_err(e), "tuner grid unreachable");
                 return None;
             }
         };
@@ -676,15 +685,15 @@ impl LiveTvService {
             .await
             .and_then(reqwest::Response::error_for_status)
         {
-            Ok(resp) => match resp.json().await {
+            Ok(resp) => match read_json(resp).await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(error = %e.without_url(), "live tv streams db parse failed");
+                    tracing::warn!(error = %e, "live tv streams db parse failed");
                     return None;
                 }
             },
             Err(e) => {
-                tracing::warn!(error = %e.without_url(), "live tv streams db fetch failed");
+                tracing::warn!(error = %upstream_err(e), "live tv streams db fetch failed");
                 return None;
             }
         };
@@ -720,16 +729,9 @@ impl LiveTvService {
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+            .map_err(upstream_err)?;
         let final_url = resp.url().clone();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
-        if body.len() > MAX_PLAYLIST_BYTES {
-            return Err(LiveTvError::Upstream("playlist too large".into()));
-        }
-        Ok((body, final_url))
+        Ok((read_playlist(resp).await?, final_url))
     }
 
     /// Fetch a channel's master playlist, rotating through fallback sources
@@ -949,7 +951,7 @@ impl LiveTvService {
             .replace("channels.json", "logos.json");
         let mut logo_by_channel: HashMap<String, String> = HashMap::new();
         if let Ok(resp) = self.inner.http.get(&logos_url).send().await
-            && let Ok(logos) = resp.json::<Vec<ApiLogo>>().await
+            && let Ok(logos) = read_json::<Vec<ApiLogo>>(resp).await
         {
             for l in logos {
                 logo_by_channel.entry(l.channel).or_insert(l.url);
@@ -964,15 +966,15 @@ impl LiveTvService {
             .await
             .and_then(reqwest::Response::error_for_status)
         {
-            Ok(resp) => match resp.json().await {
+            Ok(resp) => match read_json(resp).await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(error = %e.without_url(), "live tv channels db parse failed");
+                    tracing::warn!(error = %e, "live tv channels db parse failed");
                     return None;
                 }
             },
             Err(e) => {
-                tracing::warn!(error = %e.without_url(), "live tv channels db fetch failed");
+                tracing::warn!(error = %upstream_err(e), "live tv channels db fetch failed");
                 return None;
             }
         };
@@ -1091,33 +1093,29 @@ impl LiveTvService {
             .cfg
             .channels_url
             .replace("channels.json", "logos.json");
-        let logos: Vec<ApiLogo> = self
+        let logos = self
             .inner
             .http
             .get(&logos_url)
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .ok()?
-            .json()
-            .await
             .ok()?;
+        let logos: Vec<ApiLogo> = read_json(logos).await.ok()?;
         let mut logo_by_id: HashMap<String, String> = HashMap::new();
         for l in logos {
             logo_by_id.entry(l.channel).or_insert(l.url);
         }
 
-        let channels: Vec<ApiChannel> = self
+        let channels = self
             .inner
             .http
             .get(&self.inner.cfg.channels_url)
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .ok()?
-            .json()
-            .await
             .ok()?;
+        let channels: Vec<ApiChannel> = read_json(channels).await.ok()?;
         let mut map: HashMap<String, String> = HashMap::new();
         for c in channels {
             let Some(logo) = logo_by_id.get(&c.id) else {
@@ -1227,24 +1225,27 @@ impl LiveTvService {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("image/png")
                         .to_string();
-                    let bytes = resp
-                        .bytes()
-                        .await
-                        .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
-                    if bytes.len() <= LOGO_MAX_BYTES {
-                        CachedLogo {
+                    match read_capped(resp, LOGO_FETCH_MAX_BYTES).await {
+                        Ok(bytes) if bytes.len() <= LOGO_MAX_BYTES => CachedLogo {
                             status,
                             content_type,
-                            bytes: bytes.to_vec(),
+                            bytes,
                             fetched_at: now,
-                        }
-                    } else {
+                        },
                         // Oversized — serve once, don't cache the blob.
-                        return Ok(LogoResponse {
-                            status,
-                            content_type,
-                            bytes: bytes.to_vec(),
-                        });
+                        Ok(bytes) => {
+                            return Ok(LogoResponse {
+                                status,
+                                content_type,
+                                bytes,
+                            });
+                        }
+                        Err(_) => CachedLogo {
+                            status: 502,
+                            content_type: String::new(),
+                            bytes: Vec::new(),
+                            fetched_at: now,
+                        },
                     }
                 } else {
                     CachedLogo {
@@ -1431,15 +1432,9 @@ impl LiveTvService {
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+            .map_err(upstream_err)?;
         let final_url = resp.url().clone();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
-        if body.len() > MAX_PLAYLIST_BYTES {
-            return Err(LiveTvError::Upstream("playlist too large".into()));
-        }
+        let body = read_playlist(resp).await?;
         if !body.trim_start().starts_with("#EXTM3U") {
             return Err(LiveTvError::Upstream("not an HLS playlist".into()));
         }
@@ -1459,14 +1454,12 @@ impl LiveTvService {
             if let Some(referrer) = &source.referrer {
                 vreq = vreq.header(reqwest::header::REFERER, referrer);
             }
-            let vbody = vreq
+            let vresp = vreq
                 .send()
                 .await
                 .and_then(reqwest::Response::error_for_status)
-                .map_err(|e| LiveTvError::Upstream(format!("variant: {e}")))?
-                .text()
-                .await
-                .map_err(|e| LiveTvError::Upstream(format!("variant: {e}")))?;
+                .map_err(upstream_err)?;
+            let vbody = read_playlist(vresp).await?;
             if !vbody.trim_start().starts_with("#EXTM3U") {
                 return Err(LiveTvError::Upstream("variant is not HLS".into()));
             }
@@ -1508,10 +1501,7 @@ impl LiveTvService {
         // NOT rewritten to a 502 that reads as a dead gateway and tanks the
         // stream. Only a real connection failure (can't reach the host) maps
         // to Upstream/502 below.
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+        let resp = req.send().await.map_err(upstream_err)?;
         let final_url = resp.url().clone();
         Ok((resp, final_url))
     }
@@ -1578,11 +1568,6 @@ impl LiveTvService {
         source.map_or((None, None), |s| (s.user_agent.clone(), s.referrer.clone()))
     }
 
-    /// Playlist body cap for nested playlists fetched through the proxy.
-    pub fn max_playlist_bytes(&self) -> usize {
-        MAX_PLAYLIST_BYTES
-    }
-
     /// Now/next for every channel of a country that has a guide match.
     pub async fn epg_now(&self, country: &str) -> Result<Vec<NowNext>, LiveTvError> {
         let country = validate_country(country)?;
@@ -1644,16 +1629,13 @@ impl LiveTvService {
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
+            .map_err(upstream_err)?;
+        let bytes = read_capped(resp, MAX_GUIDE_BYTES).await?;
         // A full guide is tens of MB: gunzip + parse on the blocking pool.
         let index = tokio::task::spawn_blocking(move || {
             // Guides are served gzipped-as-body; accept plain XML too.
-            let xml = epg::decode_gzip(&bytes)
-                .or_else(|_| String::from_utf8(bytes.to_vec()))
+            let xml = epg::decode_gzip(&bytes, MAX_GUIDE_XML_BYTES)
+                .or_else(|_| String::from_utf8(bytes))
                 .map_err(|_| LiveTvError::Upstream("guide is neither gzip nor utf-8 xml".into()))?;
             Ok::<_, LiveTvError>(epg::parse_xmltv(&xml, chrono::Utc::now()))
         })
@@ -1943,6 +1925,51 @@ fn validate_country(code: &str) -> Result<String, LiveTvError> {
     }
 }
 
+/// A transport/status error as a [`LiveTvError`], without its URL: source
+/// URLs carry tokens (Vavoo signatures, tokenised CDN paths).
+pub(crate) fn upstream_err(e: reqwest::Error) -> LiveTvError {
+    LiveTvError::Upstream(e.without_url().to_string())
+}
+
+/// Read a response body, refusing one larger than `cap` — up front from
+/// `Content-Length`, else while streaming. Some playlist entries are endless
+/// raw video streams behind a `.m3u8` name; `text()` would buffer them until
+/// the timeout.
+pub(crate) async fn read_capped(
+    mut resp: reqwest::Response,
+    cap: usize,
+) -> Result<Vec<u8>, LiveTvError> {
+    let too_large = || LiveTvError::Upstream(format!("upstream body exceeds {cap} bytes"));
+    if resp
+        .content_length()
+        .is_some_and(|n| n > u64::try_from(cap).unwrap_or(u64::MAX))
+    {
+        return Err(too_large());
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(upstream_err)? {
+        if out.len() + chunk.len() > cap {
+            return Err(too_large());
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+/// [`read_capped`] at the playlist cap, as text.
+pub(crate) async fn read_playlist(resp: reqwest::Response) -> Result<String, LiveTvError> {
+    let bytes = read_capped(resp, MAX_PLAYLIST_BYTES).await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// [`read_capped`] at the JSON database cap, deserialized.
+async fn read_json<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+) -> Result<T, LiveTvError> {
+    let bytes = read_capped(resp, MAX_JSON_BYTES).await?;
+    serde_json::from_slice(&bytes).map_err(|e| LiveTvError::Upstream(format!("bad json: {e}")))
+}
+
 fn epoch_ms() -> u64 {
     u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
@@ -1950,6 +1977,33 @@ fn epoch_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response(body: Vec<u8>, content_length: Option<usize>) -> reqwest::Response {
+        let mut builder = http::Response::builder().status(200);
+        if let Some(len) = content_length {
+            builder = builder.header(http::header::CONTENT_LENGTH, len);
+        }
+        reqwest::Response::from(builder.body(body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn read_capped_refuses_oversized_bodies() {
+        let ok = read_capped(response(vec![b'a'; 10], None), 10).await;
+        assert_eq!(ok.unwrap().len(), 10);
+        assert!(
+            read_capped(response(vec![b'a'; 11], None), 10)
+                .await
+                .is_err()
+        );
+        // A declared length past the cap is refused before reading.
+        assert!(
+            read_capped(response(vec![b'a'; 4], Some(4)), 3)
+                .await
+                .is_err()
+        );
+        let text = read_playlist(response(b"#EXTM3U\n".to_vec(), None)).await;
+        assert_eq!(text.unwrap(), "#EXTM3U\n");
+    }
 
     /// End-to-end: search must surface channels that only exist via Vavoo or an
     /// extra playlist (not in iptv-org's streams DB). Live — run with

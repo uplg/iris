@@ -462,13 +462,7 @@ pub(crate) async fn live_proxy(
     // Nested playlists (media playlists reached through the master) get the
     // same rewrite treatment as the master itself.
     if is_playlist {
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| ApiError::Upstream(e.to_string()))?;
-        if body.len() > svc.max_playlist_bytes() {
-            return Err(ApiError::Upstream("playlist too large".into()));
-        }
+        let body = crate::live_tv::read_playlist(resp).await?;
         let rewritten = proxy::rewrite_playlist(&body, &final_url, &params.c, svc.signer());
         return playlist_response(rewritten);
     }
