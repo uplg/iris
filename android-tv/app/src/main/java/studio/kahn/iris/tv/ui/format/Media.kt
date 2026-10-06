@@ -21,6 +21,9 @@ fun kindWord(kind: String?): String? = when (kind) {
 
 fun kindWord(kind: MediaKind?): String? = kindWord(kind?.value)
 
+/** A title named in a sentence: `this film`, `this series` (a film is not a series; the web's `thisTitle`). */
+fun thisTitle(kind: MediaKind?): String = if (kind == MediaKind.movie) "this film" else "this series"
+
 /** `Movie`, `Series`, `Anime · Series` (a title with no kind reads as a movie). */
 fun kindLabel(kind: MediaKind?, anime: Boolean = false): String {
     val word = kindWord(kind) ?: "Movie"

@@ -1,11 +1,13 @@
 //! Per-user playback preferences — preferred audio + subtitle *language*.
 //!
 //! - `GET /api/me/playback-preferences`  — the user's preferred languages.
-//! - `PUT /api/me/playback-preferences`  — save them (client sends the full
-//!   current state). `subtitle_language: "off"` means "no subtitles".
-//! - Both take an optional `collection_id`: one series' own choice ("kept
-//!   for the whole series"), falling back to the account-wide one. Without
-//!   it, the account-wide preference, as shipped clients expect.
+//! - `PUT /api/me/playback-preferences`  — save them (replaces the row).
+//!   `subtitle_language: "off"` means "no subtitles".
+//! - Both take an optional `collection_id`: one title's own choice ("kept
+//!   for the whole series" / "for this film"). Read, each field the title
+//!   left NULL inherits the account-wide one; written, a null field is "no
+//!   choice of its own". Without it, the account-wide preference, as shipped
+//!   clients expect.
 //!
 //! Separate from `/api/me/preferences` (the reco onboarding prefs) on purpose:
 //! that endpoint full-replaces its row, so adding fields there would let a
@@ -36,10 +38,18 @@ pub(crate) struct PlaybackPrefsResponse {
     /// Preferred subtitle language, `"off"` for disabled, or null = no
     /// preference.
     subtitle_language: Option<String>,
-    /// `true` when these come from the series' own choice rather than the
-    /// account-wide one. Additive — always `false` without `collection_id`.
+    /// `true` when the title holds a choice of its own for at least one
+    /// field. Additive — always `false` without `collection_id`.
     #[serde(default)]
     for_collection: bool,
+    /// `audio_language` is the title's own choice, not the account's.
+    /// Additive — always `false` without `collection_id`.
+    #[serde(default)]
+    audio_for_collection: bool,
+    /// `subtitle_language` is the title's own choice, not the account's.
+    /// Additive — always `false` without `collection_id`.
+    #[serde(default)]
+    subtitle_for_collection: bool,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -61,19 +71,21 @@ pub(crate) async fn get_prefs(
     user: AuthUser,
     Query(scope): Query<PrefsScope>,
 ) -> ApiResult<Json<PlaybackPrefsResponse>> {
-    let (p, for_collection) = match scope.collection_id {
+    let p = match scope.collection_id {
         Some(c) => {
             iris_db::playback_preferences::get_for_collection(state.db(), user.id, c).await?
         }
-        None => (
-            iris_db::playback_preferences::get(state.db(), user.id).await?,
-            false,
-        ),
+        None => iris_db::playback_preferences::CollectionPreferences {
+            merged: iris_db::playback_preferences::get(state.db(), user.id).await?,
+            own: iris_db::playback_preferences::PlaybackPreferences::default(),
+        },
     };
     Ok(Json(PlaybackPrefsResponse {
-        audio_language: p.audio_language,
-        subtitle_language: p.subtitle_language,
-        for_collection,
+        for_collection: p.for_collection(),
+        audio_for_collection: p.own.audio_language.is_some(),
+        subtitle_for_collection: p.own.subtitle_language.is_some(),
+        audio_language: p.merged.audio_language,
+        subtitle_language: p.merged.subtitle_language,
     }))
 }
 
@@ -83,7 +95,8 @@ pub(crate) struct UpdatePlaybackPrefs {
     audio_language: Option<String>,
     #[serde(default)]
     subtitle_language: Option<String>,
-    /// Save as this series' own choice instead of the account-wide one.
+    /// Save as this title's own choice instead of the account-wide one: send
+    /// only the fields chosen for it, a null one inherits the account's.
     #[serde(default)]
     collection_id: Option<Uuid>,
 }

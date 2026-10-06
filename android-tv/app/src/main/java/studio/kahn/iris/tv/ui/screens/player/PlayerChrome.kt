@@ -106,7 +106,7 @@ fun PlayerChrome(
     playback: VodPlayback,
     chrome: ChromeState,
     header: WatchHeader,
-    forSeries: Boolean,
+    keptFor: String,
     onBack: () -> Unit,
     onNavigateToFile: (String, Int) -> Unit,
 ) {
@@ -264,7 +264,7 @@ fun PlayerChrome(
         when (chrome.panel) {
             PlayerPanel.Tracks -> TracksPanel(
                 menu = menu,
-                forSeries = forSeries,
+                keptFor = keptFor,
                 onChoose = { id -> player.choose(playback.tracks, id) },
                 onDismiss = { chrome.panel = PlayerPanel.None },
             )

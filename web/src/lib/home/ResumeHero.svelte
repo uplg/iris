@@ -35,7 +35,7 @@
 			: [md.data?.year ? String(md.data.year) : null, kindLabel(item.kind), item.duration_seconds ? duration(item.duration_seconds) : null]
 	);
 	const getting = $derived(g.is(`get:${tileKey(item)}`));
-	const languages = $derived(languagesLine(prefs.data));
+	const languages = $derived(languagesLine(prefs.data, item.kind));
 </script>
 
 <Hero

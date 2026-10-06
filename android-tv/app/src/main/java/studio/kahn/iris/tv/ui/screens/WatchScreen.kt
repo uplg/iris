@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SubtitlePick
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.ui.components.LockLandscape
@@ -31,6 +32,7 @@ import studio.kahn.iris.tv.ui.screens.player.VodPlayback
 import studio.kahn.iris.tv.ui.screens.player.WatchHeader
 import studio.kahn.iris.tv.ui.screens.player.WatchSetup
 import studio.kahn.iris.tv.ui.screens.player.WatchViewModel
+import studio.kahn.iris.tv.ui.screens.player.keptForText
 import studio.kahn.iris.tv.ui.screens.player.pictureWords
 import studio.kahn.iris.tv.ui.screens.player.playWords
 import studio.kahn.iris.tv.ui.screens.player.readiness
@@ -62,6 +64,7 @@ fun WatchScreen(
     val vm = irisViewModel(container, key = "watch:$infohash:$fileIdx") { c, _ -> WatchViewModel(c, infohash, fileIdx) }
     val setup by vm.setup.collectAsStateWithLifecycle()
     val header by vm.header.collectAsStateWithLifecycle()
+    val collection by vm.collection.collectAsStateWithLifecycle()
     val playback = remember(vm) { VodPlayback() }
     val chrome = remember(vm) { ChromeState() }
     // From the start, getting ready included: a TV switched off then must not start playing.
@@ -79,7 +82,7 @@ fun WatchScreen(
                 playback = playback,
                 chrome = chrome,
                 header = header,
-                forSeries = ready.collectionId != null,
+                keptFor = keptForText(ready.collectionId, collection?.kind ?: if (header.isMovie) MediaKind.movie else MediaKind.tv),
                 onBack = onBack,
                 onNavigateToFile = onNavigateToFile,
             )

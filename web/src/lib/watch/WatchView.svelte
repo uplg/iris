@@ -456,7 +456,7 @@
 								}
 							: null}
 						{top}
-						keptFor={keptForText(collectionId)}
+						keptFor={keptForText(collectionId, data?.kind)}
 						{notice}
 						onAudioTrackChange={(i) => {
 							saver.audioIdx = i;

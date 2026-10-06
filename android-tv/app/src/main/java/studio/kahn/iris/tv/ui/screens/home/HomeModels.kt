@@ -232,7 +232,7 @@ fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?, prefs: PlaybackPr
         overview = md?.overview?.takeIf { it.isNotBlank() },
         art = tmdbBackdropUrl(md?.backdropPath, "w1280"),
         actions = actions,
-        languages = languagesLine(prefs),
+        languages = languagesLine(prefs, item.kind),
     )
 }
 

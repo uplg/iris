@@ -31,9 +31,9 @@ import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
 import studio.kahn.iris.tv.data.ResolveBody
-import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
+import studio.kahn.iris.tv.ui.screens.player.LanguageChoices
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
@@ -85,6 +85,8 @@ data class LanguagesUi(
     val audio: String?,
     val subtitles: String?,
     val forCollection: Boolean,
+    /** What the series chose itself: the panel starts from these, a null one is « your usual choice ». */
+    val own: LanguageChoices,
     /** Codes worth offering first: the releases', the original one, English and French. */
     val audioOptions: List<String>,
     val subtitleOptions: List<String>,
@@ -175,7 +177,7 @@ class CollectionViewModel(private val container: AppContainer, private val colle
         val series = d.valueOrNull?.kind == MediaKind.tv
         CollectionUiState(
             page = d.map { collectionPage(it, m, cw, chosen) },
-            languages = if (series) pr.map { languagesUi(it, d.valueOrNull, m) } else null,
+            languages = if (series) pr.map { languagesUi(it, d.valueOrNull, m, UUID.fromString(collectionId)) } else null,
             busy = a.busy,
             notice = a.notice,
         )
@@ -320,12 +322,11 @@ class CollectionViewModel(private val container: AppContainer, private val colle
 
     /** Saves the series' languages; [onSaved] runs once the server answered. */
     fun saveLanguages(audio: String?, subtitles: String?, onSaved: () -> Unit) = act("languages", onSaved) {
-        container.api().savePlaybackPreferences(
-            UpdatePlaybackPrefs(audioLanguage = audio, subtitleLanguage = subtitles, collectionId = UUID.fromString(collectionId)),
-        )
+        container.api().savePlaybackPreferences(LanguageChoices(UUID.fromString(collectionId), audio, subtitles).body())
         prefs.refresh()
         val title = detail.value?.displayTitle ?: "this series"
-        "Saved for $title: audio ${audioChoiceWords(audio)}, subtitles ${subtitleChoiceWords(subtitles)}."
+        "Saved for $title: audio ${audio?.let(::audioChoiceWords) ?: USUAL_CHOICE}, " +
+            "subtitles ${subtitles?.let(::subtitleChoiceWords) ?: USUAL_CHOICE}."
     }
 
     private fun act(key: String, onSuccess: (() -> Unit)?, block: suspend CoroutineScope.() -> String?) {
@@ -333,14 +334,18 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     }
 }
 
+/** A series field it never chose itself: it inherits the account's (the web's « your usual choice »). */
+const val USUAL_CHOICE = "your usual choice"
+
 /** The busy key of the title's watched toggle. */
 const val WATCHED_KEY = "title-watched"
 
-fun languagesUi(p: PlaybackPrefsResponse, c: CollectionDetail?, m: MediaMetadata?): LanguagesUi {
+fun languagesUi(p: PlaybackPrefsResponse, c: CollectionDetail?, m: MediaMetadata?, collectionId: UUID): LanguagesUi {
     val known = releaseCodes(c?.episodes.orEmpty().map { it.language } + c?.availableEpisodes.orEmpty().map { it.language }) +
         listOfNotNull(m?.originalLanguage)
     fun options(current: String?) = (known + listOf("en", "fr") + listOfNotNull(current?.takeIf { it != NO_SUBTITLES })).distinct()
-    return LanguagesUi(p.audioLanguage, p.subtitleLanguage, p.forCollection == true, options(p.audioLanguage), options(p.subtitleLanguage))
+    val own = LanguageChoices.of(p, collectionId)
+    return LanguagesUi(p.audioLanguage, p.subtitleLanguage, p.forCollection == true, own, options(p.audioLanguage), options(p.subtitleLanguage))
 }
 
 fun collectionPage(

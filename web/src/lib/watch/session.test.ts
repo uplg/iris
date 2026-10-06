@@ -73,7 +73,13 @@ describe('language choices', () => {
 		const save = vi.fn(async () => undefined);
 		const saved = vi.fn();
 		const c = new PlaybackChoices('col-1', save, saved);
-		c.adopt({ audio_language: 'en', subtitle_language: 'off' });
+		c.adopt({
+			audio_language: 'en',
+			subtitle_language: 'off',
+			for_collection: true,
+			audio_for_collection: true,
+			subtitle_for_collection: true
+		});
 		await c.audioPicked(m, 1);
 		await c.subtitlePicked(m, 3);
 		await c.subtitlePicked(m, null);
@@ -84,7 +90,29 @@ describe('language choices', () => {
 		]);
 		// each saved pick is read again, so the next episode starts in it
 		expect(saved.mock.calls).toEqual([['col-1'], ['col-1'], ['col-1']]);
-		expect(keptForText('col-1')).toBe('Kept for the whole series');
+		expect(keptForText('col-1', 'tv')).toBe('Kept for the whole series');
+		expect(keptForText('col-1', 'movie')).toBe('Kept for this film');
+	});
+
+	it('never copies the account default into the title', async () => {
+		const save = vi.fn(async () => undefined);
+		const c = new PlaybackChoices('avatar', save, vi.fn());
+		// the title owns nothing yet: these are the account's
+		c.adopt({ audio_language: 'kor', subtitle_language: 'fre', for_collection: false });
+		await c.subtitlePicked(m, null);
+		expect(save).toHaveBeenLastCalledWith({ audio_language: null, subtitle_language: 'off', collection_id: 'avatar' });
+		// the title owns its subtitles only: the audio still inherits the account's
+		c.adopt({
+			audio_language: 'kor',
+			subtitle_language: 'off',
+			for_collection: true,
+			audio_for_collection: false,
+			subtitle_for_collection: true
+		});
+		await c.subtitlePicked(m, 3);
+		expect(save).toHaveBeenLastCalledWith({ audio_language: null, subtitle_language: 'eng', collection_id: 'avatar' });
+		await c.audioPicked(m, 1);
+		expect(save).toHaveBeenLastCalledWith({ audio_language: 'fre', subtitle_language: 'eng', collection_id: 'avatar' });
 	});
 
 	it('keeps them account-wide otherwise; a track without a tag changes nothing', () => {
@@ -93,7 +121,7 @@ describe('language choices', () => {
 		expect(c.audioPicked(testManifest({ audio: [{ ...m.audio[0], lang: null }] }), 0)).toBeNull();
 		void c.audioPicked(m, 0);
 		expect(save).toHaveBeenCalledWith({ audio_language: 'eng', subtitle_language: null });
-		expect(keptForText(null)).toBe('Kept as your default');
+		expect(keptForText(null, 'movie')).toBe('Kept as your default');
 	});
 });
 

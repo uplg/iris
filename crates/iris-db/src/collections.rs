@@ -796,11 +796,11 @@ mod tests {
         // The survivor keeps the moved episode file (no cascade wipe)…
         assert_eq!(ef_count(&pool, anime.id).await, 1);
         // …and the user's series preference.
-        let (prefs, own) = crate::playback_preferences::get_for_collection(&pool, user, anime.id)
+        let prefs = crate::playback_preferences::get_for_collection(&pool, user, anime.id)
             .await
             .unwrap();
-        assert!(own);
-        assert_eq!(prefs.audio_language.as_deref(), Some("fre"));
+        assert!(prefs.for_collection());
+        assert_eq!(prefs.merged.audio_language.as_deref(), Some("fre"));
     }
 
     /// Ghosts are scoped to the user who watched them: a fully-GC'd

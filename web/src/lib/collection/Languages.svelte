@@ -1,7 +1,9 @@
 <script lang="ts">
 	// The languages the next episodes of this series start with, in words, and the way to change
 	// them for this series alone (saved with its `collection_id`; the account-wide choice stays
-	// for everything else). The player still lets each file pick its own track.
+	// for everything else). The sheet holds the series' own choices: a field left on « your usual
+	// choice » saves as null and keeps inheriting the account's, never a copy of it. The player
+	// still lets each file pick its own track.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { me } from '@iris/api/client';
 	import { queryClient } from '#lib/query.ts';
@@ -15,6 +17,7 @@
 	import PillChoice from '#lib/components/PillChoice.svelte';
 	import { playbackPrefsSaved, read } from '#lib/queries.ts';
 	import { languageName } from '#lib/language.ts';
+	import { ownChoices } from '#lib/watch/prefs.ts';
 
 	interface Props {
 		collectionId: string;
@@ -32,9 +35,10 @@
 	);
 	const audio = $derived(prefs.data?.audio_language ?? null);
 	const subs = $derived(prefs.data?.subtitle_language ?? null);
+	const own = $derived(ownChoices(prefs.data, collectionId));
 
 	type Choice = { audio: string; subs: string };
-	// '' is « no preference » (null on the wire): a radio needs a value
+	// '' is « your usual choice » (null on the wire: inherits the account's): a radio needs a value
 	const draft = new Draft<Choice>({ audio: '', subs: '' });
 	let open = $state(false);
 	let opener = $state<HTMLElement>();
@@ -46,7 +50,7 @@
 	const subOptions = $derived(options(subs));
 
 	function show() {
-		draft.reset({ audio: audio ?? '', subs: subs ?? '' });
+		draft.reset({ audio: own.audio_language ?? '', subs: own.subtitle_language ?? '' });
 		open = true;
 	}
 
@@ -57,6 +61,9 @@
 
 	const audioWords = (v: string | null) => (v ? (languageName(v) ?? v) : 'Each file’s own default');
 	const subWords = (v: string | null) => (v === 'off' ? 'Off' : v ? (languageName(v) ?? v) : 'Each file’s own default');
+
+	const USUAL = 'your usual choice';
+	const chosenWords = (v: string, words: (v: string | null) => string) => (v ? words(v) : USUAL);
 
 	function save(e: SubmitEvent) {
 		e.preventDefault();
@@ -71,7 +78,7 @@
 			async () => {
 				await playbackPrefsSaved(collectionId);
 				draft.reset(next);
-				ui.toast(`Saved for ${title}: audio ${audioWords(next.audio || null)}, subtitles ${subWords(next.subs || null)}.`);
+				ui.toast(`Saved for ${title}: audio ${chosenWords(next.audio, audioWords)}, subtitles ${chosenWords(next.subs, subWords)}.`);
 				close();
 			},
 			'save',
@@ -105,7 +112,7 @@
 		<PillChoice
 			legend="Audio"
 			options={[
-				{ value: '', label: 'Each file’s own default' },
+				{ value: '', label: 'Your usual choice' },
 				...audioOptions.map((code) => ({ value: code, label: languageName(code) ?? code }))
 			]}
 			value={draft.current.audio}
@@ -114,7 +121,7 @@
 		<PillChoice
 			legend="Subtitles"
 			options={[
-				{ value: '', label: 'Each file’s own default' },
+				{ value: '', label: 'Your usual choice' },
 				{ value: 'off', label: 'Off' },
 				...subOptions.map((code) => ({ value: code, label: languageName(code) ?? code }))
 			]}

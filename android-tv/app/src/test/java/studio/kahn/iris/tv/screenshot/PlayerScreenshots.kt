@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import java.time.OffsetDateTime
 import java.util.Locale
+import java.util.UUID
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +22,7 @@ import studio.kahn.iris.tv.data.LiveChannel
 import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveNowNext
 import studio.kahn.iris.tv.data.LiveProgramme
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.Step
 import studio.kahn.iris.tv.ui.components.StepState
 import studio.kahn.iris.tv.ui.screens.LiveBottomBar
@@ -38,6 +40,7 @@ import studio.kahn.iris.tv.ui.screens.player.PlayerControls
 import studio.kahn.iris.tv.ui.screens.player.PlayerTitle
 import studio.kahn.iris.tv.ui.screens.player.ReadyProblem
 import studio.kahn.iris.tv.ui.screens.player.Readiness
+import studio.kahn.iris.tv.ui.screens.player.keptForText
 import studio.kahn.iris.tv.ui.screens.player.ScrubPosition
 import studio.kahn.iris.tv.ui.screens.player.SideRow
 import studio.kahn.iris.tv.ui.screens.player.TrackChoice
@@ -113,7 +116,7 @@ class PlayerScreenshots {
                     ),
                     summary = "",
                 ),
-                forSeries = true,
+                keptFor = keptForText(UUID.randomUUID(), MediaKind.tv),
                 onChoose = {},
                 onDismiss = {},
             )

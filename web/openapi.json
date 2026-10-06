@@ -7004,6 +7004,10 @@
       "PlaybackPrefsResponse": {
         "type": "object",
         "properties": {
+          "audio_for_collection": {
+            "type": "boolean",
+            "description": "`audio_language` is the title's own choice, not the account's.\nAdditive — always `false` without `collection_id`."
+          },
           "audio_language": {
             "type": [
               "string",
@@ -7013,7 +7017,11 @@
           },
           "for_collection": {
             "type": "boolean",
-            "description": "`true` when these come from the series' own choice rather than the\naccount-wide one. Additive — always `false` without `collection_id`."
+            "description": "`true` when the title holds a choice of its own for at least one\nfield. Additive — always `false` without `collection_id`."
+          },
+          "subtitle_for_collection": {
+            "type": "boolean",
+            "description": "`subtitle_language` is the title's own choice, not the account's.\nAdditive — always `false` without `collection_id`."
           },
           "subtitle_language": {
             "type": [
@@ -8865,7 +8873,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Save as this series' own choice instead of the account-wide one."
+            "description": "Save as this title's own choice instead of the account-wide one: send\nonly the fields chosen for it, a null one inherits the account's."
           },
           "subtitle_language": {
             "type": [

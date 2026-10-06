@@ -2,6 +2,7 @@ package studio.kahn.iris.tv.ui.screens.home
 
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.HomeSummary
+import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
@@ -11,6 +12,7 @@ import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
+import studio.kahn.iris.tv.ui.format.thisTitle
 import studio.kahn.iris.tv.ui.format.timeLeft
 
 /*
@@ -59,8 +61,8 @@ fun watchedShare(item: ContinueWatchingItem): Float? =
 /** A resume, not a fresh start: there is a position worth keeping. */
 fun isResuming(item: ContinueWatchingItem): Boolean = !item.grabbable && !item.nextUp && item.positionSeconds >= 5
 
-/** The languages a play will use, when the account (or the series) chose them. */
-fun languagesLine(p: PlaybackPrefsResponse?): String? {
+/** The languages a play will use, when the account (or the title) chose them. */
+fun languagesLine(p: PlaybackPrefsResponse?, kind: MediaKind?): String? {
     if (p == null) return null
     val parts = buildList {
         p.audioLanguage?.takeIf { it.isNotBlank() }?.let { add("audio in ${languageName(it) ?: it}") }
@@ -71,6 +73,6 @@ fun languagesLine(p: PlaybackPrefsResponse?): String? {
         }
     }
     if (parts.isEmpty()) return null
-    val series = if (p.forCollection == true) ", as chosen for this series" else ""
-    return "Plays with ${parts.joinToString(", ")}$series."
+    val chosen = if (p.forCollection == true) ", as chosen for ${thisTitle(kind)}" else ""
+    return "Plays with ${parts.joinToString(", ")}$chosen."
 }

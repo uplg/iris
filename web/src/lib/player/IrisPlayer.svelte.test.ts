@@ -51,7 +51,7 @@ describe('IrisPlayer', () => {
 	it('remounts at the playhead for an audio switch on a remounting tier, and saves the language for the series', async () => {
 		const api = stubApi({ 'PUT /me/playback-preferences': {} });
 		const choices = new PlaybackChoices('col-1');
-		choices.adopt({ audio_language: 'en', subtitle_language: 'off' });
+		choices.adopt({ audio_language: 'en', subtitle_language: 'off', for_collection: true, subtitle_for_collection: true });
 		const manifest = testManifest();
 		const { mounts, engine, key } = await mountPlayer({
 			keptFor: 'Kept for the whole series',
