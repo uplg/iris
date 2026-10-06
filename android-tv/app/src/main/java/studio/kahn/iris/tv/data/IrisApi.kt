@@ -249,11 +249,12 @@ interface IrisApi {
         @Query("tmdb_id") tmdbId: Long? = null,
     ): SearchResponse
 
+    /** The tracker's details plus Iris' match, poster and copy on disk: a release page needs nothing else. */
     @GET("api/search/details")
     suspend fun torrentDetails(
         @Query("provider") provider: String,
         @Query("id") id: String,
-    ): TorrentDetails
+    ): ReleaseDetails
 
     /** Add a torrent to Iris from a search hit. Returns the snapshot + id. */
     @POST("api/torrents")

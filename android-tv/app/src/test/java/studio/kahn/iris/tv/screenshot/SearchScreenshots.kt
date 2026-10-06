@@ -128,6 +128,15 @@ class SearchScreenshots {
     }
 
     @Test
+    fun releaseStandsAlone() = shots.snapEverySize("release_standalone") {
+        ReleaseContent(
+            release.copy(hit = null, details = F.details.copy(libraryInfohash = "def", libraryFileIdx = 0), follow = FollowState.Following),
+            GrabUi.Idle,
+            ReleaseActions(onOtherReleases = { _, _ -> }),
+        )
+    }
+
+    @Test
     fun releaseStates() {
         shots.snap("release_slot_full") {
             ReleaseContent(
@@ -155,7 +164,7 @@ class SearchScreenshots {
         }
         shots.snap("release_duplicate") {
             ReleaseContent(
-                release.copy(hit = F.releases[3], follow = FollowState.Hidden),
+                release.copy(hit = F.releases[3], details = F.details.copy(titleMatch = F.severanceMovie), follow = FollowState.Hidden),
                 GrabUi.AskDuplicate("release", "Severance (2006) is already in your library."),
                 ReleaseActions(),
             )

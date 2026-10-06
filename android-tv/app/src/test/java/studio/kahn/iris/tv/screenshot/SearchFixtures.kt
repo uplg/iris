@@ -11,11 +11,12 @@ import studio.kahn.iris.tv.data.MediaInfoSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.ProviderResultMeta
 import studio.kahn.iris.tv.data.RecentSearchView
+import studio.kahn.iris.tv.data.ReleaseDetails
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SubInfo
 import studio.kahn.iris.tv.data.TitleCard
 import studio.kahn.iris.tv.data.TitleMatch
-import studio.kahn.iris.tv.data.TorrentDetails
+import studio.kahn.iris.tv.data.TitleWatch
 import studio.kahn.iris.tv.data.TorrentFilePreview
 import studio.kahn.iris.tv.data.TorrentPreview
 import studio.kahn.iris.tv.data.VideoInfo
@@ -38,7 +39,7 @@ object SearchFixtures {
     )
 
     private val severanceTv = TitleMatch(kind = MediaKind.tv, title = "Severance", tmdbId = 95396, year = 2022)
-    private val severanceMovie = TitleMatch(kind = MediaKind.movie, title = "Severance", tmdbId = 9900, year = 2006)
+    val severanceMovie = TitleMatch(kind = MediaKind.movie, title = "Severance", tmdbId = 9900, year = 2006)
 
     val titles = listOf(
         TitleCard(kind = MediaKind.tv, title = "Severance", tmdbId = 95396, collectionId = UUID(0, 1), year = 2022),
@@ -137,7 +138,7 @@ object SearchFixtures {
         "[img]https://example.org/banner.png[/img]\n" +
         "[table][tr][td]Source[/td][td]ATVP WEB-DL[/td][/tr][tr][td]Encoder[/td][td]x264[/td][/tr][/table]"
 
-    val details = TorrentDetails(
+    val details = ReleaseDetails(
         externalId = "2",
         providerId = "v3x",
         title = "Severance.S02.VOSTFR.1080p.WEB.H264",
@@ -152,6 +153,7 @@ object SearchFixtures {
             audio = listOf(AudioInfo(lang = "English", commercialName = "Dolby Digital Plus", channels = 6)),
             subtitles = listOf(SubInfo(lang = "French", format = "UTF-8"), SubInfo(lang = "French", format = "UTF-8", forced = true)),
         ),
+        titleMatch = severanceTv,
         nfo = (1..40).joinToString("\n") { "Line $it ........ Severance.S02E%02d  1920x1080  AVC  6400 kb/s".format((it % 10) + 1) },
     )
 

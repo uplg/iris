@@ -7,6 +7,7 @@ import studio.kahn.iris.tv.data.AudioInfo
 import studio.kahn.iris.tv.data.LibraryMatch
 import studio.kahn.iris.tv.data.MediaInfoSummary
 import studio.kahn.iris.tv.data.MediaKind
+import studio.kahn.iris.tv.data.ReleaseDetails
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SubInfo
 import studio.kahn.iris.tv.data.TitleCard
@@ -78,7 +79,14 @@ fun ownedFile(r: SearchResult): OwnedFile? {
     return if (r.alreadyInLibrary == true) OwnedFile(infohash, idx) else null
 }
 
-/** Where a library match leads: the exact episode asked for plays at once, else its collection. */
+/** The copy on disk the server names for a release page; null for a pack (no one file to play). */
+fun ownedFile(d: ReleaseDetails): OwnedFile? {
+    val infohash = d.libraryInfohash ?: return null
+    val idx = d.libraryFileIdx ?: return null
+    return OwnedFile(infohash, idx.toInt())
+}
+
+/** Where a library match leads: the exact episode asked for, else the file left mid-way, else its collection. */
 sealed interface MatchTarget {
     val action: String
     val facts: String
