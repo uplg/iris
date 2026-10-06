@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.data
 
+import android.annotation.SuppressLint
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.os.Build
@@ -85,11 +86,15 @@ object IrisCaps {
                 info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
                 runCatching {
                     info.getCapabilitiesForType(mime).profileLevels.any {
-                        it.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10
+                        it.profile == AV1_MAIN10
                     }
                 }.getOrDefault(false)
         }
     }
+
+    // An int inlined at build time; no device below API 29 lists an AV1 decoder to compare it with.
+    @SuppressLint("InlinedApi")
+    private const val AV1_MAIN10 = MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10
 
     private fun videoDecoderCaps(): List<String> =
         VIDEO_MIME.mapNotNull { (label, mime) ->

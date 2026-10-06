@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- App icon: the unified Iris diamond, shared with the web favicon
-     (web/public/favicon.svg). The brand ramp is faceted with FLAT fills
-     (top-left fuchsia → center violet → bottom-right blue) rather than an
-     aapt gradient — `offset` gradients need API 24 and minSdk is 23, so flat
-     facets keep it valid + previewable on every target. -->
+<!-- App icon: the smooth-gradient Iris diamond, matched 1:1 to the web favicon
+     (web/public/favicon.svg). Diamond kept within the adaptive-icon safe zone (~66 of 108). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
@@ -15,23 +13,39 @@
         android:fillColor="#0B0C10"
         android:pathData="M0,0h108v108h-108z" />
 
-    <!-- Diamond, four facets meeting at the center (54,54). Points:
-         top (54,24), right (84,54), bottom (54,84), left (24,54). -->
-    <!-- top-left -->
+    <!-- Soft brand glow, upper-right (mirrors the favicon's glow) -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="79"
+                android:centerY="27"
+                android:gradientRadius="80">
+                <item android:offset="0" android:color="#33A58DFF" />
+                <item android:offset="1" android:color="#00A58DFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Diamond -->
+    <path android:pathData="M54,24 L84,54 L54,84 L24,54 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="30"
+                android:startY="30"
+                android:endX="78"
+                android:endY="78">
+                <item android:offset="0" android:color="#FFF08FE8" />
+                <item android:offset="0.5" android:color="#FFA58DFF" />
+                <item android:offset="1" android:color="#FF69C1FC" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Upper facet highlight (gem shading) -->
     <path
-        android:fillColor="#F08FE8"
-        android:pathData="M54,54 L54,24 L24,54 Z" />
-    <!-- top-right -->
-    <path
-        android:fillColor="#A58DFF"
-        android:pathData="M54,54 L54,24 L84,54 Z" />
-    <!-- bottom-left -->
-    <path
-        android:fillColor="#9E8BFA"
-        android:pathData="M54,54 L24,54 L54,84 Z" />
-    <!-- bottom-right -->
-    <path
-        android:fillColor="#69C1FC"
-        android:pathData="M54,54 L84,54 L54,84 Z" />
+        android:fillColor="#1FFFFFFF"
+        android:pathData="M54,24 L84,54 L24,54 Z" />
 
 </vector>

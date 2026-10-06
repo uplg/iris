@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- The banner wordmark is one TV-banner bitmap, drawn at xhdpi on purpose (scripts/gen_banner.py). -->
+    <issue id="IconMissingDensityFolder" severity="ignore" />
+</lint>
