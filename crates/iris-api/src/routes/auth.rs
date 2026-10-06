@@ -715,6 +715,29 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn guessing_the_current_password_is_rate_limited_like_a_login() {
+        let (_state, app, _, _) = app_with_member().await;
+        let mut limited = false;
+        for _ in 0..40 {
+            let reply = call(
+                &app,
+                "POST",
+                "/api/me/password",
+                None,
+                None,
+                Some(json!({ "old_password": "guess", "new_password": "whatever long" })),
+            )
+            .await;
+            if reply.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = true;
+                break;
+            }
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+        }
+        assert!(limited, "the login lane's burst ran out");
+    }
+
+    #[tokio::test]
     async fn a_deleted_account_loses_its_access_token_at_once() {
         let (state, app, user, _) = app_with_member().await;
         let admin = iris_db::test_support::make_user(state.db()).await;

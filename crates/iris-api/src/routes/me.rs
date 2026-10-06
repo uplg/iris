@@ -33,8 +33,12 @@ pub fn router() -> Router<AppState> {
         )
         .route("/watchlist", get(watchlist))
         .route("/watchlist/remove", axum::routing::post(remove_watchlist))
-        .route("/password", axum::routing::post(change_password))
         .route("/display-name", axum::routing::post(change_display_name))
+}
+
+/// The password change runs two Argon2 hashes: it gets the login lane.
+pub fn password_router() -> Router<AppState> {
+    Router::new().route("/password", axum::routing::post(change_password))
 }
 
 #[derive(Debug, serde::Deserialize, ToSchema)]

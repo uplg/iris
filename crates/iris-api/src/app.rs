@@ -50,13 +50,16 @@ pub fn build_router(state: AppState) -> Router {
     // keeps its own governor across the merge.
     let auth = routes::auth::strict_router()
         .merge(routes::passkeys::auth_router())
-        .layer(GovernorLayer::new(login_governor))
+        .layer(GovernorLayer::new(login_governor.clone()))
         .merge(
             routes::auth::session_router()
                 .nest("/device", routes::devices::auth_router())
                 .layer(GovernorLayer::new(session_governor)),
         );
+    // Same bucket as login: a stolen session guessing the current password
+    // spends the household's sign-in budget, not one of its own.
     let me = routes::me::router()
+        .merge(routes::me::password_router().layer(GovernorLayer::new(login_governor)))
         .nest("/devices", routes::devices::me_router())
         .nest("/passkeys", routes::passkeys::me_router())
         .nest("/follows", routes::follows::router())
