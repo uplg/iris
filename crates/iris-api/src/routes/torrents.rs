@@ -489,6 +489,31 @@ async fn is_dead(provider: &Arc<dyn iris_providers::SearchProvider>, external_id
 ///
 /// Only *live* unfinished torrents count: a paused one has announced
 /// `stopped` on the way out, so the tracker no longer counts it either.
+/// [`check_leech_slots`] for a grab, holding the provider's slot lock: the
+/// caller keeps the guard until the torrent has its library row, so two
+/// grabs can't both see a free slot before either one counts. `None` for an
+/// uncapped provider.
+pub(crate) async fn take_leech_slot(
+    state: &AppState,
+    provider_id: &str,
+) -> ApiResult<Option<tokio::sync::OwnedMutexGuard<()>>> {
+    static LOCKS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::LazyLock::new(Default::default);
+    if state.providers().leech_slots(provider_id).is_none() {
+        return Ok(None);
+    }
+    let lock = LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(provider_id.to_owned())
+        .or_default()
+        .clone();
+    let guard = lock.lock_owned().await;
+    check_leech_slots(state, provider_id).await?;
+    Ok(Some(guard))
+}
+
 pub(crate) async fn check_leech_slots(state: &AppState, provider_id: &str) -> ApiResult<()> {
     let Some(slots) = state.providers().leech_slots(provider_id) else {
         return Ok(());
@@ -507,6 +532,9 @@ pub(crate) async fn check_leech_slots(state: &AppState, provider_id: &str) -> Ap
         .await?
         .into_iter()
         .filter(|row| row.source_provider.as_deref() == Some(provider_id))
+        // Stamped finished: complete on disk, whatever the snapshot says
+        // during the post-restart re-check.
+        .filter(|row| row.finished_at.is_none())
         .filter_map(|row| unfinished.get(&row.infohash).map(|snap| (row, snap)))
         .map(|(row, snap)| format!("{} ({:.0}%)", row.name, snap.progress_pct))
         .collect();
@@ -633,7 +661,7 @@ pub(crate) async fn ingest_core(
         return Err(ApiError::DeadTorrent);
     }
 
-    check_leech_slots(state, &provider_id).await?;
+    let _slot = take_leech_slot(state, &provider_id).await?;
     let source = resolve_release(state, &provider, &provider_id, &external_id).await?;
     pre_engine_guards(state, &source, allow_duplicate).await?;
     let result = match source {

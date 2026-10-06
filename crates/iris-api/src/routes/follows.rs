@@ -1259,7 +1259,7 @@ pub(crate) async fn grab_episode_core(
         GrabSource::Singleton(pick) => pick,
     };
 
-    let result = ingest_picked(
+    let (result, slot) = ingest_picked(
         state,
         &pick,
         ReprimeHint {
@@ -1283,6 +1283,7 @@ pub(crate) async fn grab_episode_core(
         super::torrents::discard_unrecorded(state, &result).await;
         return Err(e.into());
     }
+    drop(slot);
 
     // Prefer the leaf whose name designates the requested episode —
     // singleton releases usually repeat the SxxEyy marker in the video
@@ -1571,11 +1572,18 @@ async fn ingest_picked(
     state: &AppState,
     pick: &PickedAvailability,
     reprime: ReprimeHint<'_>,
-) -> ApiResult<iris_torrent::IngestResult> {
+) -> ApiResult<(iris_torrent::IngestResult, Option<LeechSlot>)> {
+    // Same slot guard as the manual grab: the follow scheduler grabs
+    // unattended, so on a capped tracker it is the likeliest way to walk into
+    // the cap without anyone reading the error. The caller holds the slot
+    // until the torrent's row is written.
+    let slot = super::torrents::take_leech_slot(state, &pick.indexer_provider).await?;
     let result = add_picked(state, pick, reprime).await?;
     super::torrents::reject_unstreamable(state, &result).await?;
-    Ok(result)
+    Ok((result, slot))
 }
+
+type LeechSlot = tokio::sync::OwnedMutexGuard<()>;
 
 async fn add_picked(
     state: &AppState,
@@ -1594,10 +1602,6 @@ async fn add_picked(
     //      the indexer. Works for providers that don't
     //      ship a URL in the search payload, and as a fallback when
     //      the persisted URL has expired.
-    // Same slot guard as the manual grab (`torrents::check_leech_slots`):
-    // the follow scheduler grabs unattended, so on a capped tracker it is the
-    // likeliest way to walk into the cap without anyone reading the error.
-    crate::routes::torrents::check_leech_slots(state, &pick.indexer_provider).await?;
     if !pick.magnet.is_empty() {
         return state
             .engine()
@@ -1764,7 +1768,7 @@ async fn ingest_pack_and_pick_episode(
     season: i64,
     episode: i64,
 ) -> ApiResult<GrabResponse> {
-    let result = ingest_picked(
+    let (result, slot) = ingest_picked(
         state,
         &pack,
         // Re-prime hint targets the season pack, not the individual
@@ -1818,6 +1822,7 @@ async fn ingest_pack_and_pick_episode(
         super::torrents::discard_unrecorded(state, &result).await;
         return Err(e.into());
     }
+    drop(slot);
 
     // Same finalisation as the singleton path — collection_assign
     // will SCENE-parse every file in the pack and create
