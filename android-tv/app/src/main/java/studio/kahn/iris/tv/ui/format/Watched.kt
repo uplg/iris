@@ -5,8 +5,12 @@ import studio.kahn.iris.tv.data.TitleWatch
 // Where the person is in a title, from the server's `watch` (library cards, the search's
 // library matches, a title's page), read one way everywhere (web `lib/watched.ts`).
 
-/** A position past the opening seconds, not finished: worth resuming. */
-private const val RESUMABLE_SECONDS = 5.0
+/** Past the opening seconds: a position worth resuming (web `RESUMABLE_SECONDS`). */
+const val RESUMABLE_SECONDS = 5.0
+
+/** The one rule for "Resume" rather than "Play", everywhere: a position past [RESUMABLE_SECONDS], not finished. */
+fun isResumable(positionSeconds: Double?, completed: Boolean = false): Boolean =
+    !completed && positionSeconds != null && positionSeconds >= RESUMABLE_SECONDS
 
 data class Resume(
     val infohash: String,
@@ -21,7 +25,7 @@ data class Resume(
 
 /** The file to resume, when the last one watched was left mid-way. */
 fun resumeOf(w: TitleWatch?): Resume? {
-    if (w == null || w.completed || w.positionSeconds < RESUMABLE_SECONDS) return null
+    if (w == null || !isResumable(w.positionSeconds, w.completed)) return null
     val length = w.durationSeconds?.takeIf { it > 0 }
     return Resume(
         infohash = w.infohash,

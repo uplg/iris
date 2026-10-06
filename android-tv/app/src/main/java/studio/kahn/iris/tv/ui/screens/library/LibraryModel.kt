@@ -1,8 +1,10 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import java.time.Duration
 import androidx.compose.runtime.Immutable
 import kotlin.math.max
 import kotlin.math.min
+import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.MediaKind
@@ -178,11 +180,27 @@ private fun done(t: TorrentView) = t.finished || t.progressPct >= 100.0
 fun moving(t: TorrentView): Boolean =
     !t.finished && t.progressPct < 100.0 && (t.state == TorrentState.live || t.state == TorrentState.initializing)
 
-/** Fetching, needing a hand (an error, paused, no peers), or sharing what it has. */
+/** How long a fresh grab may sit without peers before it counts as stalled: finding them takes a while. */
+val STALL_GRACE: Duration = Duration.ofMinutes(2)
+
+/**
+ * The one stalled-swarm rule (the library's "Stalled", the player's dead swarm): in the swarm,
+ * not finished, no peer and nothing coming in, [STALL_GRACE] after it was added. Both
+ * timestamps are the server's, so this device's clock does not matter.
+ */
+fun stalled(t: TorrentView): Boolean =
+    t.state == TorrentState.live &&
+        !t.finished &&
+        t.peers == 0 &&
+        t.downloadSpeedBps == 0L &&
+        t.progressPct.coerceIn(0.0, 100.0) < 100.0 &&
+        Duration.between(t.addedAt, t.fetchedAt) > STALL_GRACE
+
+/** Fetching, needing a hand (an error, paused, [stalled]), or sharing what it has. */
 fun groupOf(t: TorrentView): ReleaseGroup = when {
     t.state == TorrentState.error || t.state == TorrentState.paused -> ReleaseGroup.Attention
     done(t) -> ReleaseGroup.Seeding
-    t.state == TorrentState.live && t.peers == 0 && t.downloadSpeedBps == 0L -> ReleaseGroup.Attention
+    stalled(t) -> ReleaseGroup.Attention
     else -> ReleaseGroup.Downloading
 }
 
@@ -237,17 +255,17 @@ fun canPause(t: TorrentView): Boolean = t.state == TorrentState.live || t.state 
 
 fun canResume(t: TorrentView): Boolean = t.state == TorrentState.paused || t.state == TorrentState.error
 
-/** A file's watch state for the caller: [pct] null = never started. */
+/** A file's watch state for the caller: [pct] null = never started or no length known. */
 @Immutable
-data class WatchState(val pct: Double?, val done: Boolean) {
-    val resumable: Boolean get() = pct != null && pct > 0 && !done
+data class WatchState(val pct: Double?, val done: Boolean, val positionSeconds: Double? = null) {
+    val resumable: Boolean get() = isResumable(positionSeconds, done)
 }
 
 fun watchState(w: ContinueWatchingItem?): WatchState {
     if (w == null) return WatchState(null, false)
     if (w.completed) return WatchState(100.0, true)
     val d = w.durationSeconds ?: 0.0
-    return WatchState(if (d > 0) min(100.0, w.positionSeconds / d * 100) else null, false)
+    return WatchState(if (d > 0) min(100.0, w.positionSeconds / d * 100) else null, false, w.positionSeconds)
 }
 
 fun releaseTitle(t: TorrentView, c: CollectionListItem?): String =

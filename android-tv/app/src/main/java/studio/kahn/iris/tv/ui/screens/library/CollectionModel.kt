@@ -1,19 +1,19 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.data.playFileOf
 import androidx.compose.runtime.Immutable
 import kotlin.math.max
+import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.AvailableEpisodeEntry
 import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.EpisodeEntry
 import studio.kahn.iris.tv.data.EpisodeInfo
-import studio.kahn.iris.tv.data.FileEntry
 import studio.kahn.iris.tv.data.GoneEpisodeEntry
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SeasonPackEntry
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.ui.format.clock
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.episodeCode
@@ -265,9 +265,6 @@ fun qualityWords(name: String): String? {
     return listOfNotNull(res, codec, hdr).takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
-/** The file a release plays: its biggest video. */
-fun mainVideo(t: TorrentView): FileEntry? = t.files.filter { isVideoPath(it.path) }.maxByOrNull { it.sizeBytes }
-
 @Immutable
 data class PlayTarget(val infohash: String, val fileIdx: Int, val season: Long? = null, val episode: Long? = null, val absolute: Long? = null)
 
@@ -276,8 +273,8 @@ fun firstPlayable(c: CollectionDetail): PlayTarget? {
     val owned = c.episodes.filter { it.episode > 0 }.minWithOrNull(compareBy({ it.season }, { it.episode }))
     if (owned != null) return PlayTarget(owned.infohash, owned.fileIdx.toInt(), owned.season, owned.episode, owned.absoluteEpisode)
     for (t in c.torrents) {
-        val f = t.files.firstOrNull { isVideoPath(it.path) } ?: continue
-        return PlayTarget(t.infohash, f.index)
+        val f = playFileOf(t) ?: continue
+        return PlayTarget(t.infohash, f)
     }
     return null
 }
@@ -294,7 +291,7 @@ fun resumeOf(c: CollectionDetail, items: List<ContinueWatchingItem>?): ContinueW
 fun playLabel(c: CollectionDetail, resume: ContinueWatchingItem?): String {
     if (resume != null) {
         val code = episodeCode(resume.season, resume.episode)
-        if (resume.nextUp || resume.positionSeconds <= 0) return if (code != null) "Play $code" else "Play"
+        if (resume.nextUp || !isResumable(resume.positionSeconds)) return if (code != null) "Play $code" else "Play"
         val at = clock(resume.positionSeconds)
         return if (code != null) "Resume $code at $at" else "Resume at $at"
     }
@@ -313,7 +310,7 @@ fun playLabel(c: CollectionDetail, resume: ContinueWatchingItem?): String {
 fun straightToPlayer(c: CollectionDetail): PlayTarget? {
     if (c.kind != MediaKind.movie || c.torrents.size != 1) return null
     val t = c.torrents[0]
-    return mainVideo(t)?.let { PlayTarget(t.infohash, it.index) }
+    return playFileOf(t)?.let { PlayTarget(t.infohash, it) }
 }
 
 /** The facts under the title: `2 seasons · 18 episodes · TMDB 8.4 · 3 releases on disk`. */
@@ -385,7 +382,7 @@ fun rowState(
         if (first.watched) {
             return RowState(StatusTone.Ok, if (length != null) "Watched · ${duration(length)}" else "Watched", verb = Verb.WatchAgain)
         }
-        if (at > 0) {
+        if (isResumable(at)) {
             val left = length?.let { " · ${timeLeft(it - at)}" }.orEmpty()
             return RowState(StatusTone.Info, "In progress$left", length?.let { (at / it).toFloat() }, Verb.Resume)
         }
@@ -521,7 +518,7 @@ fun goneWatchLine(
 ): String? {
     if (watched == true) return lastWatched?.let { "Watched ${recentTime(it, now)}" } ?: "Watched"
     val pos = position ?: 0.0
-    if (pos <= 0) return null
+    if (!isResumable(pos)) return null
     val share = duration?.takeIf { it > 0 }?.let { percent(minOf(100.0, pos / it * 100)) }
     return listOfNotNull("Stopped at", clock(pos), share?.let { "($it)" }, lastWatched?.let { recentTime(it, now) }).joinToString(" ")
 }

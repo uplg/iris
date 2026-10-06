@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.data.playFileOf
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -420,8 +421,8 @@ fun collectionPage(
                 .joinToString(" · ")
             row.copy(
                 facts = facts,
-                playIdx = if (series) null else mainVideo(t)?.index,
-                resume = !series && mainVideo(t)?.let { watchState(watched[t.infohash]?.get(it.index)).resumable } == true,
+                playIdx = if (series) null else playFileOf(t),
+                resume = !series && playFileOf(t)?.let { watchState(watched[t.infohash]?.get(it)).resumable } == true,
             )
         },
         gone = goneReleasesBelow(c).map { r ->

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.CollectionDetail
 import studio.kahn.iris.tv.data.EpisodeContext
@@ -239,7 +240,7 @@ class WatchViewModel(
                 val freshProbe = api.probe(infohash, fileIdx)
                 val progresses = bestEffort { api.torrentProgress(infohash) }.orEmpty()
                 val resume = progresses.firstOrNull { it.fileIdx == fileIdx.toLong() }
-                    ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
+                    ?.takeIf { isResumable(it.positionSeconds, it.completed) }?.positionSeconds ?: 0.0
                 val saved = bestEffort { api.getProgress(infohash, fileIdx) }
                 val prefs = bestEffort { api.playbackPreferences(collectionId?.toString()) }
                 setupState.value = WatchSetup(

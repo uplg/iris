@@ -129,6 +129,7 @@ class PlayerScreenshots {
             mono = false,
             watched = watched,
             watchedPct = pct,
+            positionSeconds = pct?.let { it * 30 },
             active = active,
             grab = if (grab) GrabTarget(2, e, "english") else null,
             season = 2,

@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.home
 
+import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
@@ -55,7 +56,7 @@ fun watchedShare(item: ContinueWatchingItem): Float? =
     item.durationSeconds?.takeIf { it > 0 }?.let { (item.positionSeconds / it).toFloat().coerceIn(0f, 1f) }
 
 /** A resume, not a fresh start: there is a position worth keeping. */
-fun isResuming(item: ContinueWatchingItem): Boolean = !item.grabbable && !item.nextUp && item.positionSeconds >= 5
+fun isResuming(item: ContinueWatchingItem): Boolean = !item.grabbable && !item.nextUp && isResumable(item.positionSeconds)
 
 /** The languages a play will use, when the account (or the title) chose them. */
 fun languagesLine(p: PlaybackPrefsResponse?, kind: MediaKind?): String? {

@@ -54,6 +54,10 @@ fun sortFiles(files: List<ReleaseFile>): List<ReleaseFile> = files
 fun playableFiles(files: List<ReleaseFile>): List<ReleaseFile> =
     sortFiles(files).filter { it.isVideo && !isSample(it.path) }
 
+/**
+ * The one rule for which file plays when nobody chose (web `autoFile`), for a grab, a release,
+ * a title or the launcher: samples left out, a pack's first episode, else the biggest video.
+ */
 fun autoFile(files: List<ReleaseFile>): Int? {
     val videos = files.filter { it.isVideo && !isSample(it.path) }
     val pool = videos.ifEmpty { files }
@@ -62,6 +66,9 @@ fun autoFile(files: List<ReleaseFile>): Int? {
     if (episodes.isNotEmpty()) return sortFiles(episodes).first().index
     return pool.maxBy { it.sizeBytes }.index
 }
+
+/** The file [t] plays ([autoFile] over its videos); null when it has none. */
+fun playFileOf(t: TorrentView): Int? = autoFile(t.files.map { it.asReleaseFile() }.filter { it.isVideo })
 
 /** The main action's words for the chosen file: which episode a pack starts with. */
 fun playWords(files: List<ReleaseFile>, index: Int?): String {

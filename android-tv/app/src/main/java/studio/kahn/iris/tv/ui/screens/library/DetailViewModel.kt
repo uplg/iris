@@ -56,6 +56,7 @@ data class DetailUiState(
 private fun FileProgressEntry.toWatch() = WatchState(
     pct = if (completed) 100.0 else durationSeconds?.takeIf { it > 0 }?.let { minOf(100.0, positionSeconds / it * 100) },
     done = completed,
+    positionSeconds = positionSeconds,
 )
 
 /**
