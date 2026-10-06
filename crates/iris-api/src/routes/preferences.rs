@@ -125,12 +125,13 @@ pub(crate) async fn put_preferences(
         }
     }
     // Genre ids: keep positive, distinct, order-preserving.
-    let mut genres: Vec<i64> = Vec::with_capacity(body.genres.len());
-    for &g in &body.genres {
-        if g > 0 && !genres.contains(&g) {
-            genres.push(g);
-        }
-    }
+    let mut seen = std::collections::HashSet::new();
+    let genres: Vec<i64> = body
+        .genres
+        .iter()
+        .copied()
+        .filter(|&g| g > 0 && seen.insert(g))
+        .collect();
     let update = iris_db::preferences::PreferencesUpdate {
         languages,
         genres,

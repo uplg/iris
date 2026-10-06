@@ -118,3 +118,12 @@ impl IntoResponse for ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+/// A write naming a row that doesn't exist (a foreign key) is the caller's
+/// 404, not a 500.
+pub fn missing_ref_is_not_found(e: sqlx::Error) -> ApiError {
+    match e.as_database_error() {
+        Some(db) if db.is_foreign_key_violation() => ApiError::NotFound,
+        _ => ApiError::Db(e),
+    }
+}

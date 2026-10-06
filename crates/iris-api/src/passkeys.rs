@@ -13,7 +13,7 @@
 //! rules as ariane/maison (`docs/dependances/passkeys.md` there).
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -58,11 +58,10 @@ impl<T> Ceremonies<T> {
         }
     }
 
-    /// Keep `value`, started from `ip`; returns the id to send back with the
-    /// answer.
-    fn put(&self, ip: IpAddr, value: T) -> String {
+    /// Keep `value`, started from `from` (a `ClientIp`, already folded to one
+    /// household); returns the id to send back with the answer.
+    fn put(&self, from: IpAddr, value: T) -> String {
         let id = Uuid::new_v4().simple().to_string();
-        let from = address_key(ip);
         let mut map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
         map.retain(|_, (t, _, _)| t.elapsed() < self.ttl);
         let oldest = |map: &HashMap<String, (Instant, IpAddr, T)>, only: Option<IpAddr>| {
@@ -93,15 +92,6 @@ impl<T> Ceremonies<T> {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(id)?;
         (t.elapsed() < self.ttl).then_some(v)
-    }
-}
-
-/// What counts as one address: an IPv4 address, or an IPv6 /64 (one
-/// household's prefix).
-fn address_key(ip: IpAddr) -> IpAddr {
-    match ip.to_canonical() {
-        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & (u128::MAX << 64))),
-        v4 @ IpAddr::V4(_) => v4,
     }
 }
 
@@ -366,7 +356,7 @@ mod tests {
     use passkey::types::webauthn::{CredentialCreationOptions, CredentialRequestOptions};
     use url::Url;
 
-    use super::{Ceremonies, Passkeys, address_key, device_label, relying_party};
+    use super::{Ceremonies, Passkeys, device_label, relying_party};
 
     const ORIGIN: &str = "https://iris.example.com";
 
@@ -476,17 +466,6 @@ mod tests {
         let expired = Ceremonies::new(Duration::ZERO, 3, 3);
         let b = expired.put(ip, 2);
         assert_eq!(expired.take(&b), None);
-    }
-
-    #[test]
-    fn an_ipv6_household_is_one_address() {
-        let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
-        let b: IpAddr = "2001:db8:1:2:bbbb::2".parse().unwrap();
-        assert_eq!(address_key(a), address_key(b));
-        assert_eq!(
-            address_key("::ffff:192.0.2.1".parse().unwrap()),
-            "192.0.2.1".parse::<IpAddr>().unwrap()
-        );
     }
 
     #[test]

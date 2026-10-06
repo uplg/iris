@@ -74,7 +74,8 @@ pub(crate) async fn create_code(
 
     let code = generate_code();
     let expires_at = Utc::now() + Duration::seconds(DEVICE_CODE_TTL_SECS);
-    let row = iris_db::device_codes::create(state.db(), &code, expires_at, &req.kind).await?;
+    let kind = bounded(req.kind.trim());
+    let row = iris_db::device_codes::create(state.db(), &code, expires_at, kind).await?;
 
     let public_url = state.cfg().server.public_url.trim_end_matches('/');
     let verification_url = format!("{public_url}/account?pair={}", row.code);
@@ -204,7 +205,7 @@ pub(crate) async fn link(
     let label = req
         .label
         .as_deref()
-        .map(str::trim)
+        .map(|s| bounded(s.trim()))
         .filter(|s| !s.is_empty());
     let claimed = iris_db::device_codes::claim(state.db(), &code, user.id, label).await?;
     if !claimed {
@@ -270,6 +271,17 @@ pub(crate) async fn revoke(
     }
 }
 
+/// A client-sent device tag as stored: at most 64 bytes, cut on a character
+/// boundary. Both routes take it from any caller (pairing is unauthenticated).
+fn bounded(s: &str) -> &str {
+    const MAX: usize = 64;
+    let mut end = s.len().min(MAX);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// 8-character user-facing pairing code, alphabet trimmed of confusable
 /// glyphs (no 0/O, no 1/I/L).
 fn generate_code() -> String {
@@ -283,4 +295,17 @@ fn generate_code() -> String {
     let head = take(&mut rng, 4);
     let tail = take(&mut rng, 4);
     format!("{head}-{tail}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded;
+
+    #[test]
+    fn a_device_tag_is_cut_to_64_bytes_on_a_char_boundary() {
+        assert_eq!(bounded("android-tv"), "android-tv");
+        let long = format!("{}é", "x".repeat(63));
+        assert_eq!(bounded(&long), "x".repeat(63));
+        assert_eq!(bounded(&"y".repeat(500)).len(), 64);
+    }
 }

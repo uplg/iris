@@ -23,7 +23,7 @@
 //! absent only if the server is served without
 //! `into_make_service_with_connect_info`; we fall back to loopback then.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,8 +109,23 @@ impl KeyExtractor for CloudflareIpKeyExtractor {
 }
 
 /// The client a request comes from, as the module docs describe: the
-/// `CF-Connecting-IP` set by the tunnel, else the peer socket, else loopback.
+/// `CF-Connecting-IP` set by the tunnel, else the peer socket, else loopback;
+/// folded by [`address_key`].
 pub fn client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> IpAddr {
+    address_key(raw_client_ip(headers, extensions))
+}
+
+/// What counts as one client: an IPv4 address, or an IPv6 /64 (one
+/// household's prefix). Keying on the full IPv6 address would hand a
+/// client 2^64 fresh buckets.
+fn address_key(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & (u128::MAX << 64))),
+        v4 @ IpAddr::V4(_) => v4,
+    }
+}
+
+fn raw_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> IpAddr {
     if let Some(hdr) = headers.get(&CF_CONNECTING_IP)
         && let Ok(s) = hdr.to_str()
         && let Ok(ip) = s.trim().parse::<IpAddr>()
@@ -148,7 +163,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
-    use super::{Quota, lane};
+    use super::{Quota, client_ip, lane};
 
     fn household() -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))
@@ -172,5 +187,20 @@ mod tests {
             std::thread::sleep(quota.refill_interval() * 2);
             assert!(limiter.check_key(&household()).is_ok());
         }
+    }
+
+    #[test]
+    fn an_ipv6_household_is_one_client() {
+        let key = |ip: &str| {
+            let mut headers = http::HeaderMap::new();
+            headers.insert("cf-connecting-ip", ip.parse().unwrap());
+            client_ip(&headers, &http::Extensions::new())
+        };
+        assert_eq!(key("2001:db8:1:2:aaaa::1"), key("2001:db8:1:2:bbbb::2"));
+        assert_ne!(key("2001:db8:1:2::1"), key("2001:db8:1:3::1"));
+        assert_eq!(
+            key("::ffff:192.0.2.1"),
+            "192.0.2.1".parse::<IpAddr>().unwrap()
+        );
     }
 }

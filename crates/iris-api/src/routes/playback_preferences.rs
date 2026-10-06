@@ -130,9 +130,39 @@ pub(crate) async fn put_prefs(
     match body.collection_id {
         Some(c) => {
             iris_db::playback_preferences::set_for_collection(state.db(), user.id, c, &prefs)
-                .await?;
+                .await
+                .map_err(crate::error::missing_ref_is_not_found)?;
         }
         None => iris_db::playback_preferences::set(state.db(), user.id, &prefs).await?,
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use iris_db::test_support::{make_user, migrated_pool};
+    use iris_providers::ProviderRegistry;
+    use tower::ServiceExt;
+
+    use crate::state::AppState;
+
+    #[tokio::test]
+    async fn an_unknown_collection_is_a_404() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let state = AppState::for_tests(pool, ProviderRegistry::from_entries(&[]).unwrap()).await;
+        let token = state.jwt().issue_access(user, false).unwrap();
+        let req = Request::put("/api/me/playback-preferences")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(
+                r#"{{"audio_language":"fr","collection_id":"{}"}}"#,
+                uuid::Uuid::new_v4()
+            )))
+            .unwrap();
+        let res = crate::app::build_router(state).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
 }
