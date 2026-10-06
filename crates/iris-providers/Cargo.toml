@@ -28,3 +28,7 @@ futures = { workspace = true }
 chrono = { workspace = true }
 quick-xml = { workspace = true }
 scraper = { workspace = true }
+
+[dev-dependencies]
+# Paused clock for the circuit-breaker test.
+tokio = { workspace = true, features = ["test-util"] }

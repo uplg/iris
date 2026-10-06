@@ -25,6 +25,14 @@ const SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 /// search deadline and expires without ever hitting the tracker.
 const MAX_INFLIGHT_PER_PROVIDER: usize = 2;
 
+/// Deadline timeouts in a row after which searches stop asking a provider
+/// for [`BREAKER_COOLDOWN`]: a tracker that is down would otherwise cost
+/// every search the full [`SEARCH_DEADLINE`].
+const BREAKER_TIMEOUTS: u32 = 3;
+/// How long a provider that keeps timing out is skipped. Then one search
+/// probes it: an answer closes the breaker, a timeout opens it again.
+const BREAKER_COOLDOWN: std::time::Duration = std::time::Duration::from_mins(5);
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderInfo {
     pub id: String,
@@ -141,6 +149,22 @@ pub struct ProviderRegistry {
     switched_off: Arc<RwLock<HashSet<String>>>,
     /// Provider-id → how its last aggregated search went.
     last_search: Arc<Mutex<HashMap<String, SearchOutcome>>>,
+    /// Provider-id → its run of deadline timeouts ([`BREAKER_TIMEOUTS`]).
+    breakers: Arc<Mutex<HashMap<String, Breaker>>>,
+}
+
+#[derive(Default)]
+struct Breaker {
+    timeouts: u32,
+    /// Skipped until then; `None` while closed. A probe moves it to the
+    /// probe's own deadline, so the searches meanwhile still skip it and a
+    /// probe dropped half-way (client gone) can't hold it open for good.
+    open_until: Option<tokio::time::Instant>,
+}
+
+enum Admit {
+    Ask,
+    Skip(std::time::Duration),
 }
 
 /// How a provider's last aggregated search went, for the admin view.
@@ -226,6 +250,7 @@ impl ProviderRegistry {
             tracker_tmdb: Arc::default(),
             switched_off: Arc::default(),
             last_search: Arc::default(),
+            breakers: Arc::default(),
         })
     }
 
@@ -285,6 +310,36 @@ impl ProviderRegistry {
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
+    }
+
+    fn admit(&self, id: &str) -> Admit {
+        let mut breakers = self.breakers.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(b) = breakers.get_mut(id) else {
+            return Admit::Ask;
+        };
+        let Some(until) = b.open_until else {
+            return Admit::Ask;
+        };
+        let now = tokio::time::Instant::now();
+        if now < until {
+            return Admit::Skip(until.saturating_duration_since(now));
+        }
+        b.open_until = Some(now + SEARCH_DEADLINE);
+        Admit::Ask
+    }
+
+    fn settle(&self, id: &str, timed_out: bool) {
+        let mut breakers = self.breakers.lock().unwrap_or_else(PoisonError::into_inner);
+        if !timed_out {
+            breakers.remove(id);
+            return;
+        }
+        let b = breakers.entry(id.to_owned()).or_default();
+        b.timeouts += 1;
+        if b.timeouts >= BREAKER_TIMEOUTS {
+            b.open_until = Some(tokio::time::Instant::now() + BREAKER_COOLDOWN);
+            tracing::warn!(provider = %id, timeouts = b.timeouts, "provider keeps timing out; skipped for {} min", BREAKER_COOLDOWN.as_secs() / 60);
+        }
     }
 
     fn record_outcome(&self, id: &str, took: std::time::Duration, error: Option<&Error>) {
@@ -443,7 +498,12 @@ impl ProviderRegistry {
         use futures::stream::{FuturesUnordered, StreamExt};
 
         let mut futs = FuturesUnordered::new();
+        let mut skipped = Vec::new();
         for (id, p) in self.enabled().into_iter().filter(|(id, _)| include(id)) {
+            if let Admit::Skip(left) = self.admit(&id) {
+                skipped.push((id, left));
+                continue;
+            }
             let q = q.clone();
             let sem = self.search_permits.get(&id).cloned();
             futs.push(async move {
@@ -459,28 +519,47 @@ impl ProviderRegistry {
                             "skipped: queued behind concurrent searches for {}s",
                             SEARCH_DEADLINE.as_secs()
                         ));
-                        return (id, started.elapsed(), Err(err));
+                        return (id, started.elapsed(), Err(err), None);
                     };
                     permit.ok()
                 } else {
                     None
                 };
                 let remaining = SEARCH_DEADLINE.saturating_sub(started.elapsed());
-                let res = match tokio::time::timeout(remaining, p.search(&q)).await {
-                    Ok(res) => res,
-                    Err(_) => Err(Error::Provider(format!(
-                        "timed out after {}s",
-                        SEARCH_DEADLINE.as_secs()
-                    ))),
+                let (res, timed_out) = match tokio::time::timeout(remaining, p.search(&q)).await {
+                    Ok(res) => (res, Some(false)),
+                    Err(_) => (
+                        Err(Error::Provider(format!(
+                            "timed out after {}s",
+                            SEARCH_DEADLINE.as_secs()
+                        ))),
+                        Some(true),
+                    ),
                 };
-                (id, started.elapsed(), res)
+                (id, started.elapsed(), res, timed_out)
             });
         }
 
         let mut agg = AggregatedResults::default();
         let limit = q.limit.unwrap_or(25);
         let page = q.page.unwrap_or(1);
-        while let Some((id, took, res)) = futs.next().await {
+        for (id, left) in skipped {
+            agg.providers.push(ProviderResultMeta {
+                id,
+                current_page: page,
+                limit,
+                total_count: None,
+                total_pages: None,
+                error: Some(format!(
+                    "skipped: timed out {BREAKER_TIMEOUTS} times in a row, asked again in {} min",
+                    left.as_secs().div_ceil(60).max(1)
+                )),
+            });
+        }
+        while let Some((id, took, res, timed_out)) = futs.next().await {
+            if let Some(timed_out) = timed_out {
+                self.settle(&id, timed_out);
+            }
             self.record_outcome(&id, took, res.as_ref().err());
             match res {
                 Ok(p) => {
@@ -661,6 +740,96 @@ mod policy_tests {
         assert!(registry.set_enabled("off", true));
         assert!(registry.get("off").is_some());
         assert_eq!(registry.ids(), ["off", "on"]);
+    }
+
+    /// Hangs until told to answer.
+    struct Flaky {
+        http: reqwest::Client,
+        answers: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        asked: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::SearchProvider for Flaky {
+        fn id(&self) -> &'static str {
+            "flaky"
+        }
+        fn capabilities(&self) -> iris_core::search::ProviderCapabilities {
+            iris_core::search::ProviderCapabilities::default()
+        }
+        fn http(&self) -> &reqwest::Client {
+            &self.http
+        }
+        async fn search(
+            &self,
+            _q: &iris_core::search::SearchQuery,
+        ) -> iris_core::Result<iris_core::search::ProviderPage> {
+            use std::sync::atomic::Ordering;
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            if !self.answers.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            Ok(iris_core::search::ProviderPage {
+                results: Vec::new(),
+                current_page: 1,
+                limit: 25,
+                total_count: None,
+                total_pages: None,
+            })
+        }
+        async fn resolve(&self, _id: &str) -> iris_core::Result<iris_core::search::TorrentSource> {
+            Err(iris_core::Error::Provider("unused".into()))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_provider_that_keeps_timing_out_is_skipped_then_probed() {
+        use std::sync::atomic::Ordering;
+        let answers = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let flaky: std::sync::Arc<dyn crate::SearchProvider> = std::sync::Arc::new(Flaky {
+            http: reqwest::Client::new(),
+            answers: answers.clone(),
+            asked: asked.clone(),
+        });
+        let registry = super::ProviderRegistry {
+            providers: std::sync::Arc::new([("flaky".to_string(), flaky)].into()),
+            ..Default::default()
+        };
+        let q = iris_core::search::SearchQuery {
+            q: "x".into(),
+            ..Default::default()
+        };
+        let error = |agg: super::AggregatedResults| agg.providers[0].error.clone();
+
+        for _ in 0..super::BREAKER_TIMEOUTS {
+            assert!(error(registry.search_all(&q).await).is_some_and(|e| e.contains("timed out")));
+        }
+        let skipped = error(registry.search_all(&q).await).expect("an error entry");
+        assert!(
+            skipped.starts_with("skipped: timed out 3 times"),
+            "{skipped}"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            3,
+            "an open breaker never asks"
+        );
+
+        tokio::time::advance(super::BREAKER_COOLDOWN).await;
+        assert!(error(registry.search_all(&q).await).is_some_and(|e| e.contains("timed out")));
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            4,
+            "one probe after the cooldown"
+        );
+        assert!(error(registry.search_all(&q).await).is_some_and(|e| e.starts_with("skipped")));
+
+        tokio::time::advance(super::BREAKER_COOLDOWN).await;
+        answers.store(true, Ordering::SeqCst);
+        assert_eq!(error(registry.search_all(&q).await), None);
+        assert_eq!(error(registry.search_all(&q).await), None, "closed again");
+        assert_eq!(asked.load(Ordering::SeqCst), 6);
     }
 
     #[test]
