@@ -1,5 +1,5 @@
 <script lang="ts">
-	// My account, after Maison's: who I am, my passkeys (optional), my password, my paired
+	// My account: who I am, my passkeys (optional), my password, my paired
 	// devices, the languages playback starts in, what « For You » is tuned by, and the theme
 	// (also in the header's panel). Each section is labelled by its title; what cannot be
 	// undone asks first.

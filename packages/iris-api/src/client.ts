@@ -24,14 +24,14 @@ export class ApiError extends Error {
 }
 
 /** Event fired when a refresh attempt failed and the user must be
- *  treated as logged out. The AuthProvider listens for this and flips
- *  the auth state to `anonymous` so the route guards send the user to
- *  /login instead of leaving stale React Query errors on screen. */
+ *  treated as signed out. The session (`session.ts`) listens for it and
+ *  says `signed_out`, so the shell asks to sign in instead of leaving
+ *  stale query errors on screen. */
 export const AUTH_EXPIRED_EVENT = 'iris:auth-expired';
 
 /** Event fired when any backend request answers HTTP 426 — the
- *  cached bundle is below the server's `MIN_WEB_VERSION`. App.tsx
- *  listens for it and renders a full-screen lock-out with a "Reload"
+ *  cached bundle is below the server's `MIN_WEB_VERSION`. The web app
+ *  listens for it (`update.svelte.ts`) and locks itself with a "Reload"
  *  action so the user pulls the freshly-deployed bundle. */
 export const CLIENT_OUTDATED_EVENT = 'iris:client-outdated';
 
@@ -114,7 +114,7 @@ function refreshSession(): Promise<RefreshOutcome> {
 
 type RequestOpts = {
 	timeoutMs?: number;
-	/** External cancellation (React Query's queryFn signal). Aborting tears the
+	/** External cancellation (TanStack Query's queryFn signal). Aborting tears the
 	 *  connection down, which cancels the handler — and its upstream tracker
 	 *  fan-out — server-side too. */
 	signal?: AbortSignal;
@@ -192,7 +192,7 @@ export type Invitation = components['schemas']['InvitationView'];
 export type CreatedInvitation = components['schemas']['CreatedInvitation'];
 
 export const auth = {
-	// Timeout-bounded: only the AuthProvider bootstrap calls this, and it must
+	// Timeout-bounded: only the session bootstrap calls this, and it must
 	// fail fast on a stalled connection so the retry loop can take over.
 	me: () => request<User>('GET', '/me', undefined, { timeoutMs: AUTH_TIMEOUT_MS }),
 	login: (email: string, password: string) => api.post<User>('/auth/login', { email, password }),
@@ -542,7 +542,7 @@ export const torrents = {
 	downloadUrl: (infohash: string, idx: number) => `/api/torrents/${seg(infohash)}/files/${idx}/stream`,
 	/**
 	 * Universal playback URL — returns the HLS-CMAF master playlist.
-	 * Both web (Vidstack via hls.js) and Android (Media3 HlsMediaSource)
+	 * Both web (hls.js, Tier F) and Android (Media3 HlsMediaSource)
 	 * consume it the same way; multi-audio renditions are exposed via
 	 * EXT-X-MEDIA in the manifest. First request to master.m3u8 blocks
 	 * until ffmpeg has built enough of the cache; later asset fetches
