@@ -12,7 +12,9 @@
 		eager?: boolean;
 	}
 	let { src, title, shape = 'poster', eager = false }: Props = $props();
-	let failed = $state(false);
+	// a failure belongs to the address that failed: a new `src` gets its chance
+	let failedSrc = $state<string | null>(null);
+	const failed = $derived(!!src && failedSrc === src);
 	const [w, h] = $derived(shape === 'poster' ? [342, 513] : [500, 281]);
 </script>
 
@@ -26,7 +28,7 @@
 			loading={eager ? 'eager' : 'lazy'}
 			decoding="async"
 			fetchpriority={eager ? 'high' : 'auto'}
-			onerror={() => (failed = true)}
+			onerror={() => (failedSrc = src ?? null)}
 		/>
 	{:else}
 		<div class="fallback">
