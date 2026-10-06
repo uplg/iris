@@ -288,9 +288,10 @@ impl RemuxPlan {
 /// from `[transcode]` in `config.toml`. Shared by every job.
 #[derive(Debug, Clone)]
 pub struct EncodeConfig {
-    /// `libx264` / `libx265` `-preset` (e.g. `"superfast"`). On a CPU-only
-    /// server this MUST encode faster than real-time, or HLS playback stalls
-    /// when the player catches up to the encoder head.
+    /// `libx264` / `libx265` `-preset`, by default
+    /// [`iris_config::DEFAULT_TRANSCODE_PRESET`]. On a CPU-only server this
+    /// MUST encode faster than real-time, or HLS playback stalls when the
+    /// player catches up to the encoder head.
     pub preset: String,
     /// `-crf` (0..=51). Lower = better quality / larger files.
     pub crf: u8,
@@ -298,10 +299,8 @@ pub struct EncodeConfig {
 
 impl Default for EncodeConfig {
     fn default() -> Self {
-        // superfast/26 keeps a 2011-era CPU-only server ahead of 1080p
-        // playback while still ~2× smaller than H.264.
         Self {
-            preset: "superfast".to_string(),
+            preset: iris_config::DEFAULT_TRANSCODE_PRESET.to_string(),
             crf: 26,
         }
     }

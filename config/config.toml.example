@@ -76,10 +76,10 @@ invitation_ttl_secs = 604800
 #   (hardware-decoded by most TV chips incl. 10-bit, ~2x smaller, but only
 #   viable if your server can sustain real-time x265).
 codec = "h264"
-# preset: libx264/libx265 -preset. "veryfast" gives a comfortable real-time
-# margin for H.264 on an older Xeon; slower presets = smaller files but risk
-# stalling. Drop to "ultrafast" if even veryfast can't keep up.
-preset = "veryfast"
+# preset: libx264/libx265 -preset (default "superfast"). It keeps a
+# comfortable real-time margin on an older Xeon; slower presets = smaller files
+# but risk stalling. Drop to "ultrafast" if even superfast can't keep up.
+preset = "superfast"
 # crf: 0..=51, lower = better quality / larger files. 26 is a good size/quality
 # balance for the fallback path.
 crf = 26

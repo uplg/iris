@@ -2481,6 +2481,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "futures",
+ "iris-config",
  "iris-core",
  "serde",
  "serde_json",
