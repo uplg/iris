@@ -29,6 +29,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,18 +42,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.session.MediaSession
 import androidx.tv.material3.Text
 import java.time.OffsetDateTime
 import java.util.Date
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
@@ -74,11 +80,16 @@ import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.buildMediaSession
+import studio.kahn.iris.tv.ui.screens.live.DecodeStage
 import studio.kahn.iris.tv.ui.screens.live.ENCRYPTED_WORDS
+import studio.kahn.iris.tv.ui.screens.live.LIVE_SOURCES_HEADER
 import studio.kahn.iris.tv.ui.screens.live.LiveErrorStep
 import studio.kahn.iris.tv.ui.screens.live.LiveWatchViewModel
 import studio.kahn.iris.tv.ui.screens.live.RETRY_BUDGET_REFILL_MS
+import studio.kahn.iris.tv.ui.screens.live.headerValue
 import studio.kahn.iris.tv.ui.screens.live.liveErrorStep
+import studio.kahn.iris.tv.ui.screens.live.reconnectDelayMs
+import studio.kahn.iris.tv.ui.screens.live.rotationBudget
 import studio.kahn.iris.tv.ui.screens.live.nextWords
 import studio.kahn.iris.tv.ui.screens.live.nowWords
 import studio.kahn.iris.tv.ui.screens.live.programmeProgress
@@ -94,55 +105,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 /** How long the channel strip stays up after it (re)appears. */
 private const val OVERLAY_VISIBLE_MS = 4_000L
 
-/** Automatic reconnect attempts on a playback error before giving up to the
- *  Retry UI. Each attempt first tells the backend to demote the dead source,
- *  then reloads, so the retries walk through a channel's fallback feeds.
- *
- *  Must therefore EXCEED the largest realistic fallback count, or the last
- *  feeds are unreachable: M6 has no official CDN left and is carried by four
- *  Vavoo feeds alone, which a budget of 3 could never walk to the end of. */
-private const val MAX_AUTO_RETRIES = 6
-
-/** Decode escalation ladder for a silent no-start. ExoPlayer can sit in
- *  BUFFERING forever WITHOUT raising `onPlayerError` (hardware decoders wedge
- *  on interlaced/corrupt H.264 restreams).
- *
- *  HARDWARE → [HW_STALL_MS] → SOFTWARE (same source) → [SW_STALL_MS] →
- *  SERVER (the backend deinterlaces + re-encodes; M6's only living feed
- *  defeats BOTH local decoders) → [SRV_STALL_MS] → error card.
- *
- *  Advancing a stage never demotes a source (a stall is a local decode
- *  problem): a false positive only costs efficiency. A wrongly-demoted
- *  source was the historical regression. */
-private enum class DecodeStage { Hardware, Software, Server }
-
+/*
+ * Decode escalation ladder for a silent no-start ([DecodeStage]). ExoPlayer can sit in
+ * BUFFERING forever WITHOUT raising `onPlayerError` (hardware decoders wedge on interlaced or
+ * corrupt H.264 restreams): HARDWARE, then SOFTWARE (same source), then SERVER (the backend
+ * deinterlaces and re-encodes; M6's only living feed defeats both local decoders), then the
+ * error card. Advancing a stage never demotes a source (a stall is a local decode problem):
+ * a wrongly-demoted source was the historical regression.
+ */
 private const val HW_STALL_MS = 12_000L
 private const val SW_STALL_MS = 18_000L
 
 /** ffmpeg needs to probe the live input + emit its first segments. */
 private const val SRV_STALL_MS = 40_000L
-
-/** Persisted per-channel decode stage, so a channel that needed the ladder
- *  starts at its working stage on later opens, across restarts. Entries
- *  expire after [STAGE_TTL_MS]: these restreams vary with programming. */
-private const val STAGE_PREFS = "livetv_decode_stage"
-private const val STAGE_TTL_MS = 24L * 60 * 60 * 1_000
-
-private fun recallStage(context: Context, key: String): DecodeStage {
-    val raw = context.getSharedPreferences(STAGE_PREFS, Context.MODE_PRIVATE)
-        .getString(key, null) ?: return DecodeStage.Hardware
-    val (name, ts) = raw.split(':', limit = 2).let {
-        (it.getOrNull(0) ?: "") to (it.getOrNull(1)?.toLongOrNull() ?: 0L)
-    }
-    if (System.currentTimeMillis() - ts > STAGE_TTL_MS) return DecodeStage.Hardware
-    return runCatching { DecodeStage.valueOf(name) }.getOrDefault(DecodeStage.Hardware)
-}
-
-private fun persistStage(context: Context, key: String, stage: DecodeStage) {
-    context.getSharedPreferences(STAGE_PREFS, Context.MODE_PRIVATE).edit {
-        putString(key, "${stage.name}:${System.currentTimeMillis()}")
-    }
-}
 
 /**
  * Live channel playback. Deliberately NOT [WatchScreen] (torrent-coupled):
@@ -151,9 +126,11 @@ private fun persistStage(context: Context, key: String, stage: DecodeStage) {
  * cookie auth and the transparent 401 refresh.
  *
  * ↑/↓ (and the channel keys) zap through the country's list; OK opens the
- * actions (Try another source, Channels); Back closes them, then leaves. On a
- * playback error the backend demotes the source and the screen reloads, up
- * to [MAX_AUTO_RETRIES]; a silent stall walks the decode ladder.
+ * actions (Try another source, Channels); Back closes them, then leaves. A
+ * stream error (the proxy's HTTP error, a feed that does not parse or decode)
+ * has the backend demote the source and the screen reloads the next one, up to
+ * the channel's feed count ([rotationBudget]); the TV losing Iris reconnects
+ * with a backoff and blames no feed; a silent stall walks the decode ladder.
  */
 @Composable
 fun LiveTvWatchScreen(
@@ -164,7 +141,12 @@ fun LiveTvWatchScreen(
 ) {
     LockLandscape()
     val context = LocalContext.current
-    val vm = irisViewModel(container) { c, saved -> LiveWatchViewModel(c, country, initialChannelId, saved) }
+    val vm = irisViewModel(container) { c, saved ->
+        val app = context.applicationContext
+        LiveWatchViewModel(c, country, initialChannelId, saved) {
+            app.getSharedPreferences(LiveWatchViewModel.STAGE_PREFS, Context.MODE_PRIVATE)
+        }
+    }
     val serverUrl by vm.baseUrl.collectAsStateWithLifecycle()
     val channelsRead by vm.channels.collectAsStateWithLifecycle()
     val channels = channelsRead.valueOrNull.orEmpty()
@@ -178,6 +160,12 @@ fun LiveTvWatchScreen(
     // Player.Listener would otherwise capture a stale re-keyed state object
     // after a zap and count against the wrong channel.
     var autoRetryCount by remember { mutableIntStateOf(0) }
+    // The channel's feed count from its master (`x-iris-live-sources`), null until it says.
+    var sourcesHeader by remember { mutableStateOf<String?>(null) }
+    // Reconnects to Iris in a row (the backoff's step); a reconnect waiting is not a stall.
+    var reconnects by remember { mutableIntStateOf(0) }
+    var reconnecting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     // Bumped to re-prepare the current channel (Retry, the post-demotion reconnect).
     var retryNonce by remember { mutableIntStateOf(0) }
     // Has the current attempt started playing? Drives "Connecting…" and the stall ladder.
@@ -203,40 +191,61 @@ fun LiveTvWatchScreen(
     val player = remember { mutableStateOf<ExoPlayer?>(null) }
     val session = remember { mutableStateOf<MediaSession?>(null) }
 
-    // Primed from what the channel needed before.
-    var stage by remember { mutableStateOf(recallStage(context, "$country:${vm.channelId.value}")) }
+    // Null while the channel's kept stage is being read (off the main thread): nothing loads before.
+    var stage by remember { mutableStateOf<DecodeStage?>(null) }
     // The stage the CURRENT player was built for: renderers are fixed at construction.
     val playerStage = remember { mutableStateOf(DecodeStage.Hardware) }
+    LaunchedEffect(channelId, stage == null) {
+        if (stage == null) stage = vm.recallStage(channelId)
+    }
 
-    // A new channel: a fresh retry budget and its own stage, both set with the channel so the
-    // load below runs once, at the right stage.
+    // A new channel: a fresh budget and its own stage, both set with the channel so the load
+    // below runs once, at the right stage.
     val watch: (String) -> Unit = { id ->
         autoRetryCount = 0
-        stage = recallStage(context, "$country:$id")
+        reconnects = 0
+        reconnecting = false
+        sourcesHeader = null
+        stage = null
         vm.watch(id)
     }
     LaunchedEffect(playing) {
         if (!playing) return@LaunchedEffect
-        persistStage(context, "$country:$channelId", playerStage.value)
+        stage?.let { vm.keepStage(channelId, it) }
         // Glitches hours apart are not one failing feed: a feed that plays a while refills it.
         delay(RETRY_BUDGET_REFILL_MS)
         autoRetryCount = 0
+        reconnects = 0
     }
 
-    // Shared failure path (error listener + connect timeout): demote the dead
-    // source, WAIT for that POST, then reload the newly elected feed. Past the
-    // budget, the Retry card.
+    // The feed of [failed] is reported (the backend demotes it and elects the next one); once
+    // that POST answered, the channel reloads on the new feed from the hardware decoder.
+    fun reelect(failed: String) {
+        container.applicationScope.launch {
+            vm.reportFailure(failed)
+            vm.forgetStage(failed)
+            // A zap meanwhile: the new channel is not reloaded for the old one's failure.
+            Snapshot.withMutableSnapshot {
+                if (channelId == failed) {
+                    stage = DecodeStage.Hardware
+                    retryNonce++
+                }
+            }
+        }
+    }
+
+    // A stream error: rotate to the next feed within the budget; past it, the Retry card (the
+    // last feed is reported all the same).
     val onFail: (String) -> Unit = { message ->
         val failed = channelId
-        if (autoRetryCount < MAX_AUTO_RETRIES) {
+        if (autoRetryCount < rotationBudget(sourcesHeader)) {
             autoRetryCount++
+            reelect(failed)
+        } else {
             container.applicationScope.launch {
                 vm.reportFailure(failed)
-                // A zap meanwhile: the new channel is not reloaded for the old one's failure.
-                if (channelId == failed) retryNonce++
+                vm.forgetStage(failed)
             }
-        } else {
-            container.applicationScope.launch { vm.reportFailure(failed) }
             errorMessage = message
         }
     }
@@ -244,34 +253,32 @@ fun LiveTvWatchScreen(
     // "Try another source" (the web's escape hatch for a feed that plays
     // badly): report it, then start again on the next one with a fresh budget.
     val anotherSource: () -> Unit = {
-        val failed = channelId
         actionsShown = false
         autoRetryCount = 0
         errorMessage = null
-        container.applicationScope.launch {
-            vm.reportFailure(failed)
-            if (channelId == failed) retryNonce++
-        }
+        reelect(channelId)
     }
 
     // (Re)load on a channel change, Retry, or a stage advance.
     LaunchedEffect(channelId, serverUrl, retryNonce, stage, encrypted) {
         val url = serverUrl ?: return@LaunchedEffect
+        val at = stage ?: return@LaunchedEffect
         errorMessage = null
         playing = false
         outputLost = false
+        reconnecting = false
         if (encrypted) {
             player.value?.stop()
             return@LaunchedEffect
         }
         val base = serverBase(url)
-        val masterUrl = if (stage == DecodeStage.Server) {
+        val masterUrl = if (at == DecodeStage.Server) {
             "${base}api/livetv/$country/channels/$channelId/transcode/master.m3u8"
         } else {
             "${base}api/livetv/$country/channels/$channelId/master.m3u8"
         }
         val name = channels.firstOrNull { it.id == channelId }?.name ?: channelId
-        if (player.value != null && playerStage.value != stage) {
+        if (player.value != null && playerStage.value != at) {
             session.value?.release()
             session.value = null
             player.value?.release()
@@ -280,10 +287,10 @@ fun LiveTvWatchScreen(
         val p = player.value ?: buildPlayer(
             context,
             container.mediaOkHttpClient,
-            preferSoftwareVideo = stage == DecodeStage.Software,
+            preferSoftwareVideo = at == DecodeStage.Software,
         ).also {
             player.value = it
-            playerStage.value = stage
+            playerStage.value = at
             session.value = buildMediaSession(context, it, "live")
         }
         p.setMediaItem(buildMediaItem(masterUrl, name))
@@ -292,19 +299,21 @@ fun LiveTvWatchScreen(
     }
 
     // Stall escape hatch: re-armed per attempt, counted only while the screen is started and
-    // the picture reaches someone (a stop is not a stall: it would persist a stage for 24 h).
+    // the picture reaches someone (a stop is not a stall: it would persist a stage for 24 h),
+    // and never while a reconnect to Iris waits (the network, not the decoder).
     // A silent no-start walks the ladder; it never demotes the source nor burns the retry walk.
-    RepeatWhileStarted(listOf(channelId, retryNonce, serverUrl, stage, outputLost, encrypted)) {
-        if (outputLost || encrypted) return@RepeatWhileStarted
+    RepeatWhileStarted(listOf(channelId, retryNonce, serverUrl, stage, outputLost, encrypted, reconnecting)) {
+        val at = stage
+        if (outputLost || encrypted || reconnecting || at == null) return@RepeatWhileStarted
         delay(
-            when (stage) {
+            when (at) {
                 DecodeStage.Hardware -> HW_STALL_MS
                 DecodeStage.Software -> SW_STALL_MS
                 DecodeStage.Server -> SRV_STALL_MS
             },
         )
         if (!playing && errorMessage == null) {
-            when (stage) {
+            when (at) {
                 DecodeStage.Hardware -> stage = DecodeStage.Software
                 DecodeStage.Software -> stage = DecodeStage.Server
                 DecodeStage.Server ->
@@ -319,6 +328,7 @@ fun LiveTvWatchScreen(
     // before this effect runs.
     DisposableEffect(player.value) {
         val p = player.value ?: return@DisposableEffect onDispose {}
+        var pendingReconnect: Job? = null
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 when (liveErrorStep(error.errorCode, isEncryptedRefusal(error))) {
@@ -326,6 +336,17 @@ fun LiveTvWatchScreen(
                     LiveErrorStep.Rejoin -> {
                         p.seekToDefaultPosition()
                         p.prepare()
+                    }
+                    LiveErrorStep.Reconnect -> {
+                        val wait = reconnectDelayMs(reconnects++)
+                        reconnecting = true
+                        pendingReconnect?.cancel()
+                        pendingReconnect = scope.launch {
+                            delay(wait)
+                            reconnecting = false
+                            p.seekToDefaultPosition()
+                            p.prepare()
+                        }
                     }
                     LiveErrorStep.Rotate -> onFail(humanizePlaybackError(error).first)
                 }
@@ -343,9 +364,25 @@ fun LiveTvWatchScreen(
                 if (state == Player.STATE_READY) playing = true
             }
         }
+        // The master says how many feeds the channel has; its media playlists say nothing.
+        val loads = object : AnalyticsListener {
+            override fun onLoadCompleted(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData,
+            ) {
+                if (mediaLoadData.dataType != C.DATA_TYPE_MANIFEST) return
+                headerValue(loadEventInfo.responseHeaders, LIVE_SOURCES_HEADER)?.let { sourcesHeader = it }
+            }
+        }
         p.addListener(listener)
+        p.addAnalyticsListener(loads)
         if (p.isPlaying || p.playbackState == Player.STATE_READY) playing = true
-        onDispose { p.removeListener(listener) }
+        onDispose {
+            pendingReconnect?.cancel()
+            p.removeListener(listener)
+            p.removeAnalyticsListener(loads)
+        }
     }
 
     DisposableEffect(Unit) {
@@ -499,7 +536,12 @@ fun LiveTvWatchScreen(
         }
 
         if (errorMessage == null && !playing && !outputLost && !encrypted) {
-            ConnectingNote(attempt = listOf(channelId, retryNonce, stage), stage = stage, autoRetryCount = autoRetryCount)
+            ConnectingNote(
+                attempt = listOf(channelId, retryNonce, stage, reconnects),
+                stage = stage ?: DecodeStage.Hardware,
+                autoRetryCount = autoRetryCount,
+                reconnecting = reconnecting,
+            )
         }
 
         val error = errorMessage
@@ -518,6 +560,7 @@ fun LiveTvWatchScreen(
                 retryFocus = retryFocus,
                 onRetry = {
                     autoRetryCount = 0
+                    reconnects = 0
                     errorMessage = null
                     retryNonce++
                 },
@@ -525,6 +568,12 @@ fun LiveTvWatchScreen(
             )
         }
     }
+}
+
+private fun stageTitle(stage: DecodeStage): String = when (stage) {
+    DecodeStage.Hardware -> "Connecting…"
+    DecodeStage.Software -> "Slow start, retrying with the software decoder…"
+    DecodeStage.Server -> "Preparing a compatible stream on the server…"
 }
 
 /** The master answered 409: every feed of the channel is DRM-locked with no licence Iris can obtain. */
@@ -649,7 +698,7 @@ internal fun LiveBottomBar(
  * the elapsed seconds are the debugging story.
  */
 @Composable
-private fun ConnectingNote(attempt: Any, stage: DecodeStage, autoRetryCount: Int) {
+private fun ConnectingNote(attempt: Any, stage: DecodeStage, autoRetryCount: Int, reconnecting: Boolean) {
     var elapsedS by remember(attempt) { mutableIntStateOf(0) }
     LaunchedEffect(attempt) {
         while (true) {
@@ -657,11 +706,7 @@ private fun ConnectingNote(attempt: Any, stage: DecodeStage, autoRetryCount: Int
             elapsedS++
         }
     }
-    val title = when (stage) {
-        DecodeStage.Hardware -> "Connecting…"
-        DecodeStage.Software -> "Slow start, retrying with the software decoder…"
-        DecodeStage.Server -> "Preparing a compatible stream on the server…"
-    }
+    val title = if (reconnecting) "Iris can't be reached. Reconnecting…" else stageTitle(stage)
     val detail = buildString {
         append("${elapsedS}s")
         if (autoRetryCount > 0) append(" · source attempt ${autoRetryCount + 1}")

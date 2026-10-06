@@ -18,7 +18,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardActions
@@ -28,24 +29,24 @@ import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -60,6 +61,7 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.toBitmap
 import java.time.OffsetDateTime
+import kotlinx.coroutines.flow.first
 import studio.kahn.iris.tv.data.LiveChannel
 import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveNowNext
@@ -71,6 +73,7 @@ import studio.kahn.iris.tv.ui.components.ChipSize
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FocusColors
+import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.FocusSurface
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.Meter
@@ -80,6 +83,8 @@ import studio.kahn.iris.tv.ui.components.Pill
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.TextInput
+import studio.kahn.iris.tv.ui.components.focusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.format.timeLeft
 import studio.kahn.iris.tv.ui.state.Loadable
@@ -131,11 +136,12 @@ fun LiveTvContent(
     onOpen: (country: String, channelId: String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
-    focusedOnce: MutableState<Boolean> = remember { mutableStateOf(false) },
     initiallyPicking: Boolean = false,
 ) {
     val layout = IrisLayout.current
     var picking by remember { mutableStateOf(initiallyPicking) }
+    val cards = rememberFocusReturn()
+    val focus = remember(cards) { GridFocus(cards) }
     val current = ui.countries.firstOrNull { it.code == ui.country }
     Box(modifier.fillMaxSize().background(IrisColor.ground)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
@@ -168,9 +174,9 @@ fun LiveTvContent(
             val results = ui.results
             Box(Modifier.weight(1f)) {
                 if (results != null) {
-                    SearchResults(results, countryName, focusedOnce, onOpen, onRetry)
+                    SearchResults(results, countryName, focus, onOpen, onRetry)
                 } else {
-                    CountryChannels(ui, current?.name ?: ui.country?.uppercase().orEmpty(), clock, focusedOnce, onOpen, onRetry)
+                    CountryChannels(ui, current?.name ?: ui.country?.uppercase().orEmpty(), clock, focus, onOpen, onRetry)
                 }
             }
         }
@@ -182,6 +188,7 @@ fun LiveTvContent(
                 onDismiss = { picking = false },
                 onPick = {
                     picking = false
+                    focus.placing = true
                     onPickCountry(it.code)
                 },
             )
@@ -241,7 +248,7 @@ private fun CountryChannels(
     ui: LiveTvUi,
     name: String,
     clock: (OffsetDateTime) -> String,
-    focusedOnce: MutableState<Boolean>,
+    focus: GridFocus,
     onOpen: (String, String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -269,26 +276,24 @@ private fun CountryChannels(
                     sections = shown,
                     guide = ui.guide,
                     clock = clock,
-                    focusedOnce = focusedOnce,
+                    focus = focus,
                     onOpen = onOpen,
                     compact = !guided,
-                    head = {
-                        item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
-                            SectionTitle("Channels in $name", meta = plural(channels.size, "channel"))
-                        }
+                    head = buildList {
+                        add(GridHead("title") { SectionTitle("Channels in $name", meta = plural(channels.size, "channel")) })
                         if (sections.size > 1) {
-                            item(key = "filter", span = { GridItemSpan(maxLineSpan) }) {
-                                CategoryFilter(sections, channels.size, filtered) { category = it }
-                            }
+                            add(GridHead("filter") { CategoryFilter(sections, channels.size, filtered) { category = it } })
                         }
                         if (!guided && ui.guide.readAtMs > 0L) {
-                            item(key = "noguide", span = { GridItemSpan(maxLineSpan) }) {
-                                Text(
-                                    "No programme guide for this country: channels show without what is on.",
-                                    style = IrisType.meta,
-                                    color = IrisColor.inkMuted,
-                                )
-                            }
+                            add(
+                                GridHead("noguide") {
+                                    Text(
+                                        "No programme guide for this country: channels show without what is on.",
+                                        style = IrisType.meta,
+                                        color = IrisColor.inkMuted,
+                                    )
+                                },
+                            )
                         }
                     },
                 )
@@ -325,7 +330,7 @@ private fun CategoryFilter(sections: List<ChannelSection>, total: Int, selected:
 private fun SearchResults(
     results: Loadable<LiveResults>,
     countryName: (String) -> String,
-    focusedOnce: MutableState<Boolean>,
+    focus: GridFocus,
     onOpen: (String, String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -360,43 +365,79 @@ private fun SearchResults(
                     sections = sections,
                     guide = LiveGuide(),
                     clock = { "" },
-                    focusedOnce = focusedOnce,
+                    focus = focus,
                     onOpen = onOpen,
                     compact = true,
-                    head = {
-                        item(key = "title", span = { GridItemSpan(maxLineSpan) }) {
+                    head = listOf(
+                        GridHead("title") {
                             SectionTitle(
                                 "Channels matching “${r.query}” in every country",
                                 meta = "${plural(total, "channel")} in ${plural(r.byCountry.size, "country", "countries")}",
                             )
-                        }
-                    },
+                        },
+                    ),
                 )
             }
         }
     }
 }
 
+/** A full-width line above the channels (the title, the filter, a note). */
+private class GridHead(val key: String, val content: @Composable () -> Unit)
+
+/**
+ * Where the grid's focus goes: [cards] knows the channel left (kept across opening it and
+ * coming back); [placing] asks the grid to place the focus, on entering the screen (back from
+ * a channel too) and after a country is picked, never while the search field is typed in.
+ */
+@Stable
+private class GridFocus(val cards: FocusReturn) {
+    var placing by mutableStateOf(true)
+}
+
+private fun tileKey(t: ChannelTileUi) = "${t.country}:${t.channel.id}"
+
 @Composable
 private fun ChannelGrid(
     sections: List<Pair<String, List<ChannelTileUi>>>,
     guide: LiveGuide,
     clock: (OffsetDateTime) -> String,
-    focusedOnce: MutableState<Boolean>,
+    focus: GridFocus,
     onOpen: (String, String) -> Unit,
     compact: Boolean,
-    head: LazyGridScope.() -> Unit,
+    head: List<GridHead>,
 ) {
     val layout = IrisLayout.current
-    // The first channel takes the focus once, after it is placed (a bare
-    // effect can run before the lazy item exists); a remount for search
-    // results must not steal it from the search field.
-    val first = remember { FocusRequester() }
+    val grid = rememberLazyGridState()
+    // Each tile's item index: the heads, then per section its heading and its tiles.
+    val indexOf = remember(sections, head.size) {
+        var at = head.size
+        buildMap {
+            sections.forEach { (_, tiles) ->
+                at++
+                tiles.forEach { putIfAbsent(tileKey(it), at++) }
+            }
+        }
+    }
+    val firstKey = sections.firstOrNull()?.second?.firstOrNull()?.let(::tileKey)
+    // The channel left when it is still listed, else the first one; once it is placed (a bare
+    // request can run before the lazy item exists).
+    LaunchedEffect(focus.placing, indexOf) {
+        if (!focus.placing) return@LaunchedEffect
+        val key = focus.cards.last?.takeIf { it in indexOf } ?: firstKey ?: return@LaunchedEffect
+        val index = indexOf.getValue(key)
+        if (grid.layoutInfo.visibleItemsInfo.none { it.index == index }) grid.scrollToItem(index)
+        snapshotFlow { grid.layoutInfo.visibleItemsInfo.any { it.index == index } }.first { it }
+        withFrameNanos { }
+        if (focus.cards.focus(listOf(key))) focus.placing = false
+    }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(if (compact) 200.dp else 270.dp),
+        state = grid,
         modifier = Modifier
             .fillMaxSize()
-            .focusRestorer(first)
+            // Not while placing: the restorer would send that request to its own fallback.
+            .then(if (!focus.placing && firstKey != null) Modifier.focusRestorer(focus.cards.requester(firstKey)) else Modifier)
             .focusGroup(),
         contentPadding = PaddingValues(
             start = layout.safeHorizontal,
@@ -407,11 +448,10 @@ private fun ChannelGrid(
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3),
         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
     ) {
-        head()
-        sections.forEachIndexed { si, (title, tiles) ->
+        head.forEach { h -> item(key = h.key, span = { GridItemSpan(maxLineSpan) }) { h.content() } }
+        sections.forEach { (title, tiles) ->
             sectionHeader(title, tiles.size)
-            itemsIndexed(tiles, key = { _, t -> "${t.country}:$title:${t.channel.id}" }) { i, tile ->
-                val isFirst = si == 0 && i == 0
+            items(tiles, key = { t -> "${t.country}:$title:${t.channel.id}" }) { tile ->
                 ChannelCard(
                     tile = tile,
                     nowNext = guide.entries[tile.channel.id],
@@ -419,18 +459,7 @@ private fun ChannelGrid(
                     clock = clock,
                     guided = guide.entries.isNotEmpty(),
                     onClick = { onOpen(tile.country, tile.channel.id) },
-                    modifier = if (isFirst) {
-                        Modifier
-                            .focusRequester(first)
-                            .onGloballyPositioned {
-                                if (!focusedOnce.value) {
-                                    focusedOnce.value = true
-                                    runCatching { first.requestFocus() }
-                                }
-                            }
-                    } else {
-                        Modifier
-                    },
+                    modifier = Modifier.focusReturn(focus.cards, tileKey(tile)),
                 )
             }
         }

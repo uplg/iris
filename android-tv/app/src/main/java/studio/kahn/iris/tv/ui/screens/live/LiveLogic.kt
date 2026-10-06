@@ -15,21 +15,70 @@ import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.theme.IrisColor
 
 /** What a live playback error leads to. */
-enum class LiveErrorStep { Locked, Rejoin, Rotate }
+enum class LiveErrorStep { Locked, Rejoin, Reconnect, Rotate }
 
 /**
  * A DRM refusal locks the channel; falling behind the live window (a long rebuffer) is the
- * player's own lag, rejoined at the live edge without blaming the feed; anything else demotes
- * the feed and rotates to the next.
+ * player's own lag, rejoined at the live edge without blaming the feed; the TV losing Iris
+ * (the network between them) reconnects with a backoff, without blaming the feed either;
+ * anything else (an HTTP error from the proxy, a stream that does not parse or decode)
+ * demotes the feed and rotates to the next.
  */
 fun liveErrorStep(errorCode: Int, encryptedRefusal: Boolean): LiveErrorStep = when {
     encryptedRefusal -> LiveErrorStep.Locked
     errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> LiveErrorStep.Rejoin
+    errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+        errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> LiveErrorStep.Reconnect
     else -> LiveErrorStep.Rotate
 }
 
-/** A feed that played this long earned the channel its retry budget back. */
+/** A feed that played this long earned the channel its retry budget (and its reconnect backoff) back. */
 const val RETRY_BUDGET_REFILL_MS = 30_000L
+
+/** The wait before reconnect [attempt] (0-based): 1 s, 2 s, 4 s, 8 s, then every 16 s. */
+fun reconnectDelayMs(attempt: Int): Long = 1_000L shl attempt.coerceIn(0, 4)
+
+/**
+ * Rotations when the master does not say how many feeds the channel has. It must exceed the
+ * largest realistic fallback count, or the last feeds are unreachable: M6 has no official CDN
+ * left and is carried by four Vavoo feeds alone.
+ */
+const val DEFAULT_ROTATIONS = 6
+
+/** The web's floor (`MIN_AUTO_ROTATIONS`): one bad feed is not the channel. */
+private const val MIN_ROTATIONS = 2
+
+/** Header of the master playlist: how many feeds the channel has. */
+const val LIVE_SOURCES_HEADER = "x-iris-live-sources"
+
+/** Automatic rotations for a channel whose master said [sources] (the header's value, null when absent). */
+fun rotationBudget(sources: String?): Int =
+    sources?.trim()?.toIntOrNull()?.takeIf { it > 0 }?.coerceAtLeast(MIN_ROTATIONS) ?: DEFAULT_ROTATIONS
+
+/** [name]'s value among HTTP [headers], whatever its case. */
+fun headerValue(headers: Map<String, List<String>>, name: String): String? =
+    headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+/**
+ * How a channel is decoded: the device's hardware decoder, its software one, or the server
+ * transcoding the feed (deinterlaced, re-encoded). A silent no-start walks this ladder.
+ */
+enum class DecodeStage { Hardware, Software, Server }
+
+/** A channel's working stage expires after this: the restreams vary with programming. */
+const val STAGE_TTL_MS = 24L * 60 * 60 * 1_000
+
+/** A stage kept as `Name:epochMs`. */
+fun stageEntry(stage: DecodeStage, atMs: Long): String = "${stage.name}:$atMs"
+
+/** The stage [raw] keeps, [DecodeStage.Hardware] when there is none, it is unreadable or past [STAGE_TTL_MS]. */
+fun parseStage(raw: String?, nowMs: Long): DecodeStage {
+    if (raw == null) return DecodeStage.Hardware
+    val name = raw.substringBefore(':')
+    val at = raw.substringAfter(':', "").toLongOrNull() ?: return DecodeStage.Hardware
+    if (nowMs - at > STAGE_TTL_MS) return DecodeStage.Hardware
+    return DecodeStage.entries.firstOrNull { it.name == name } ?: DecodeStage.Hardware
+}
 
 /** 0..1 position of [nowMs] inside a programme, null outside its window (the web's `programmeProgress`). */
 fun programmeProgress(start: OffsetDateTime, stop: OffsetDateTime, nowMs: Long): Float? {

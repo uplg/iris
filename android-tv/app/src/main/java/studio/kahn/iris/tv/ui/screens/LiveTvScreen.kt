@@ -4,9 +4,7 @@ import android.content.Context
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.OffsetDateTime
@@ -38,9 +36,6 @@ fun LiveTvScreen(
     val query by vm.query.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
     val usual by vm.usual.collectAsStateWithLifecycle()
-    // Screen-scoped: the grid remounts when results swap in and out, and a
-    // grid-scoped flag stole the focus from the search field mid-typing.
-    val focusedOnce = rememberSaveable { mutableStateOf(false) }
     val format = remember(context) { DateFormat.getTimeFormat(context) }
     val clock = remember(format) { { t: OffsetDateTime -> format.format(Date.from(t.toInstant())) } }
     LiveTvContent(
@@ -51,6 +46,5 @@ fun LiveTvScreen(
         onPickCountry = vm::pickCountry,
         onOpen = onOpenChannel,
         onRetry = vm::retry,
-        focusedOnce = focusedOnce,
     )
 }

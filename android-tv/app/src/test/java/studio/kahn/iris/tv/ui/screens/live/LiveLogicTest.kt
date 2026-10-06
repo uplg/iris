@@ -19,6 +19,41 @@ class LiveLogicTest {
         assertEquals(LiveErrorStep.Locked, liveErrorStep(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, encryptedRefusal = true))
     }
 
+    @Test
+    fun losingIrisReconnectsWithoutBlamingTheFeed() {
+        assertEquals(LiveErrorStep.Reconnect, liveErrorStep(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, encryptedRefusal = false))
+        assertEquals(LiveErrorStep.Reconnect, liveErrorStep(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT, encryptedRefusal = false))
+        assertEquals("a feed that does not parse is the feed's fault", LiveErrorStep.Rotate, liveErrorStep(PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED, encryptedRefusal = false))
+        assertEquals(LiveErrorStep.Rotate, liveErrorStep(PlaybackException.ERROR_CODE_DECODING_FAILED, encryptedRefusal = false))
+    }
+
+    @Test
+    fun theReconnectBackoffDoublesUpToItsCap() {
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 16_000L, 16_000L), (0..6).map(::reconnectDelayMs))
+        assertEquals(1_000L, reconnectDelayMs(-1))
+    }
+
+    @Test
+    fun theRotationBudgetIsTheChannelsFeedCount() {
+        assertEquals(4, rotationBudget("4"))
+        assertEquals("the web's floor", 2, rotationBudget("1"))
+        assertEquals(DEFAULT_ROTATIONS, rotationBudget(null))
+        assertEquals(DEFAULT_ROTATIONS, rotationBudget("0"))
+        assertEquals(DEFAULT_ROTATIONS, rotationBudget("many"))
+        assertEquals("3", headerValue(mapOf("X-Iris-Live-Sources" to listOf("3")), LIVE_SOURCES_HEADER))
+        assertNull(headerValue(mapOf("content-type" to listOf("x")), LIVE_SOURCES_HEADER))
+    }
+
+    @Test
+    fun aKeptDecodeStageExpiresAfterADay() {
+        val now = 1_000_000_000L
+        assertEquals(DecodeStage.Server, parseStage(stageEntry(DecodeStage.Server, now - 60_000), now))
+        assertEquals(DecodeStage.Hardware, parseStage(stageEntry(DecodeStage.Server, now - STAGE_TTL_MS - 1), now))
+        assertEquals(DecodeStage.Hardware, parseStage(null, now))
+        assertEquals(DecodeStage.Hardware, parseStage("Server", now))
+        assertEquals(DecodeStage.Hardware, parseStage("Warp:$now", now))
+    }
+
     private val start = OffsetDateTime.parse("2026-10-06T20:00:00Z")
     private val stop = OffsetDateTime.parse("2026-10-06T21:00:00Z")
     private val clock = { t: OffsetDateTime -> String.format(Locale.ROOT, "%02d:%02d", t.hour, t.minute) }
