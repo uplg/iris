@@ -4,9 +4,10 @@
 //! holds an `Arc<Engine>` in app state and never touches `librqbit` types
 //! directly.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -166,6 +167,11 @@ pub struct Engine {
     /// announce parameters when we send the `stopped` it never sends.
     listen_port: u16,
     http: reqwest::Client,
+    /// Each torrent's file list in SCENE order, keyed by info hash. A
+    /// torrent's metadata never changes once known, and the SCENE sort parses
+    /// every filename, so snapshots reuse the sorted list instead of
+    /// rebuilding it on every lookup.
+    files: Mutex<HashMap<[u8; 20], Arc<[FileEntry]>>>,
 }
 
 impl Engine {
@@ -228,6 +234,7 @@ impl Engine {
             download_dir,
             listen_port,
             http,
+            files: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -268,7 +275,7 @@ impl Engine {
                 }),
             )
             .await?;
-        Self::wrap(res)
+        self.wrap(res)
     }
 
     pub async fn add_from_magnet(&self, magnet: &str) -> Result<IngestResult, EngineError> {
@@ -282,18 +289,18 @@ impl Engine {
                 }),
             )
             .await?;
-        Self::wrap(res)
+        self.wrap(res)
     }
 
-    fn wrap(res: AddTorrentResponse) -> Result<IngestResult, EngineError> {
+    fn wrap(&self, res: AddTorrentResponse) -> Result<IngestResult, EngineError> {
         match res {
             AddTorrentResponse::Added(_, h) => Ok(IngestResult {
                 already_managed: false,
-                snapshot: snapshot_of(&h),
+                snapshot: self.snapshot_of(&h),
             }),
             AddTorrentResponse::AlreadyManaged(_, h) => Ok(IngestResult {
                 already_managed: true,
-                snapshot: snapshot_of(&h),
+                snapshot: self.snapshot_of(&h),
             }),
             AddTorrentResponse::ListOnly(_) => Err(EngineError::Librqbit(anyhow::anyhow!(
                 "unexpected list-only response"
@@ -305,7 +312,7 @@ impl Engine {
         self.session.with_torrents(|iter| {
             let mut out = Vec::new();
             for (_, h) in iter {
-                out.push(snapshot_of(h));
+                out.push(self.snapshot_of(h));
             }
             out
         })
@@ -314,20 +321,116 @@ impl Engine {
     pub fn get_by_infohash(&self, infohash: &str) -> Option<TorrentSnapshot> {
         self.handle_by_infohash(infohash)
             .ok()
-            .map(|h| snapshot_of(&h))
+            .map(|h| self.snapshot_of(&h))
+    }
+
+    /// Relative path of one file inside a managed torrent, as shown to
+    /// users (season packs: which episode). `None` for an unknown torrent
+    /// or index.
+    pub fn file_name(&self, infohash: &str, file_idx: i64) -> Option<String> {
+        let idx = usize::try_from(file_idx).ok()?;
+        let handle = self.handle_by_infohash(infohash).ok()?;
+        self.sorted_files(&handle)
+            .iter()
+            .find(|f| f.index == idx)
+            .map(|f| f.path.clone())
+    }
+
+    /// Whether the session manages this torrent, without building a snapshot.
+    pub fn contains(&self, infohash: &str) -> bool {
+        self.handle_by_infohash(infohash).is_ok()
     }
 
     fn handle_by_infohash(&self, infohash: &str) -> Result<Handle, EngineError> {
-        let needle = infohash.to_ascii_lowercase();
+        let needle = decode_infohash(infohash).ok_or(EngineError::NotFound)?;
         let handle = self.session.with_torrents(|iter| {
             for (_, h) in iter {
-                if hex::encode(h.info_hash().0) == needle {
+                if h.info_hash().0 == needle {
                     return Some(h.clone());
                 }
             }
             None
         });
         handle.ok_or(EngineError::NotFound)
+    }
+
+    fn sorted_files(&self, handle: &Handle) -> Arc<[FileEntry]> {
+        let key = handle.info_hash().0;
+        if let Some(files) = self
+            .files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+        {
+            return Arc::clone(files);
+        }
+        let Ok(mut files) = handle.with_metadata(|m| {
+            m.file_infos
+                .iter()
+                .enumerate()
+                .map(|(idx, fi)| FileEntry {
+                    index: idx,
+                    path: fi.relative_filename.to_string_lossy().to_string(),
+                    size_bytes: fi.len,
+                })
+                .collect::<Vec<_>>()
+        }) else {
+            // Magnet still resolving its metadata: nothing to cache yet.
+            return Arc::from([]);
+        };
+        // SCENE-aware sort: TV packs come out in episode order rather
+        // than the .torrent file's encoded order (which a 2.0 GB S02E03
+        // out-of-order chunk would otherwise push to the top). The
+        // FileEntry.index field still holds the original librqbit
+        // position, so playback / file-by-index lookups stay correct —
+        // only the Vec order changes. All API consumers iterate by
+        // `.index` rather than position, so this is safe.
+        files.sort_by(|a, b| iris_media::filename::compare_video_files(&a.path, &b.path));
+        let files: Arc<[FileEntry]> = files.into();
+        self.files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, Arc::clone(&files));
+        files
+    }
+
+    fn snapshot_of(&self, handle: &Handle) -> TorrentSnapshot {
+        let stats = handle.stats();
+        let files = self.sorted_files(handle);
+        let total = if stats.total_bytes > 0 {
+            stats.total_bytes
+        } else {
+            files.iter().map(|f| f.size_bytes).sum()
+        };
+        let progress_pct = if total > 0 {
+            progress_pct(stats.progress_bytes, total)
+        } else {
+            0.0
+        };
+        let (down_bps, up_bps, peers) = match stats.live.as_ref() {
+            Some(l) => (
+                mbps_to_bps(l.download_speed.mbps),
+                mbps_to_bps(l.upload_speed.mbps),
+                l.snapshot.peer_stats.live,
+            ),
+            None => (0, 0, 0),
+        };
+        TorrentSnapshot {
+            infohash: hex::encode(handle.info_hash().0),
+            name: handle.name(),
+            total_size_bytes: total,
+            state: TorrentState::from_librqbit(stats.state),
+            progress_bytes: stats.progress_bytes,
+            progress_pct,
+            download_speed_bps: down_bps,
+            upload_speed_bps: up_bps,
+            uploaded_bytes: stats.uploaded_bytes,
+            peers,
+            files: files.to_vec(),
+            error: stats.error,
+            finished: stats.finished,
+            fetched_at: Utc::now(),
+        }
     }
 
     /// Stop a torrent's swarm activity without removing it: the files stay
@@ -354,6 +457,10 @@ impl Engine {
         self.session
             .delete(handle.id().into(), delete_files)
             .await?;
+        self.files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&handle.info_hash().0);
         Ok(())
     }
 
@@ -488,63 +595,11 @@ impl Engine {
     }
 }
 
-fn snapshot_of(handle: &Handle) -> TorrentSnapshot {
-    let stats = handle.stats();
-    let mut files = handle
-        .with_metadata(|m| {
-            m.file_infos
-                .iter()
-                .enumerate()
-                .map(|(idx, fi)| FileEntry {
-                    index: idx,
-                    path: fi.relative_filename.to_string_lossy().to_string(),
-                    size_bytes: fi.len,
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    // SCENE-aware sort: TV packs come out in episode order rather
-    // than the .torrent file's encoded order (which a 2.0 GB S02E03
-    // out-of-order chunk would otherwise push to the top). The
-    // FileEntry.index field still holds the original librqbit
-    // position, so playback / file-by-index lookups stay correct —
-    // only the Vec order changes. All API consumers iterate by
-    // `.index` rather than position, so this is safe.
-    files.sort_by(|a, b| iris_media::filename::compare_video_files(&a.path, &b.path));
-    let total = if stats.total_bytes > 0 {
-        stats.total_bytes
-    } else {
-        files.iter().map(|f| f.size_bytes).sum()
-    };
-    let progress_pct = if total > 0 {
-        progress_pct(stats.progress_bytes, total)
-    } else {
-        0.0
-    };
-    let (down_bps, up_bps, peers) = match stats.live.as_ref() {
-        Some(l) => (
-            mbps_to_bps(l.download_speed.mbps),
-            mbps_to_bps(l.upload_speed.mbps),
-            l.snapshot.peer_stats.live,
-        ),
-        None => (0, 0, 0),
-    };
-    TorrentSnapshot {
-        infohash: hex::encode(handle.info_hash().0),
-        name: handle.name(),
-        total_size_bytes: total,
-        state: TorrentState::from_librqbit(stats.state),
-        progress_bytes: stats.progress_bytes,
-        progress_pct,
-        download_speed_bps: down_bps,
-        upload_speed_bps: up_bps,
-        uploaded_bytes: stats.uploaded_bytes,
-        peers,
-        files,
-        error: stats.error,
-        finished: stats.finished,
-        fetched_at: Utc::now(),
-    }
+/// Parse a 40-character hex info hash, case-insensitively.
+fn decode_infohash(infohash: &str) -> Option<[u8; 20]> {
+    let mut out = [0_u8; 20];
+    hex::decode_to_slice(infohash, &mut out).ok()?;
+    Some(out)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -576,5 +631,27 @@ impl StreamHandle {
 
     pub fn into_reader(self) -> Pin<Box<dyn Streamable>> {
         self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_infohash;
+
+    #[test]
+    fn decodes_infohash_in_either_case() {
+        let lower = "0123456789abcdef0123456789abcdef01234567";
+        let upper = lower.to_ascii_uppercase();
+        let bytes = decode_infohash(lower).expect("valid hex");
+        assert_eq!(bytes[0], 0x01);
+        assert_eq!(bytes[19], 0x67);
+        assert_eq!(decode_infohash(&upper), Some(bytes));
+    }
+
+    #[test]
+    fn rejects_malformed_infohash() {
+        assert_eq!(decode_infohash("abc"), None);
+        assert_eq!(decode_infohash(&"zz".repeat(20)), None);
+        assert_eq!(decode_infohash(&"ab".repeat(21)), None);
     }
 }

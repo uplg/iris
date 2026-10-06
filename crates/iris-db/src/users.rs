@@ -155,17 +155,29 @@ pub async fn get_password_hash(
     Ok(row.map(|r| r.0))
 }
 
-pub async fn update_password_hash(
+/// Replace a user's password and end every one of their sessions, in one
+/// transaction: a new password never coexists with sessions opened under
+/// the old one.
+pub async fn set_password(
     pool: &SqlitePool,
     id: UserId,
     new_hash: &str,
 ) -> Result<bool, sqlx::Error> {
     let uuid: Uuid = id.into();
+    let mut tx = pool.begin().await?;
     let res = sqlx::query("UPDATE users SET password_hash = ?1 WHERE id = ?2")
         .bind(new_hash)
         .bind(uuid)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL",
+    )
+    .bind(Utc::now())
+    .bind(uuid)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(res.rows_affected() == 1)
 }
 
@@ -258,6 +270,25 @@ mod tests {
         .execute(pool)
         .await
         .expect("insert torrent");
+    }
+
+    #[tokio::test]
+    async fn set_password_ends_every_session() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool, "a@example.org").await;
+        let jti = Uuid::new_v4();
+        crate::refresh_tokens::insert(&pool, jti, user, Utc::now() + chrono::Duration::days(1))
+            .await
+            .unwrap();
+        assert!(crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
+
+        assert!(set_password(&pool, user, "new-hash").await.unwrap());
+
+        assert!(!crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
+        assert_eq!(
+            get_password_hash(&pool, user).await.unwrap().as_deref(),
+            Some("new-hash")
+        );
     }
 
     #[tokio::test]

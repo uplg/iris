@@ -129,11 +129,7 @@ async fn process_one_collection(
     };
     let title = parsed.title;
     let year_hint: Option<u32> = parsed.year.map(u32::from);
-    let kind_hint: Option<TmdbKind> = match c.kind.as_str() {
-        "movie" => Some(TmdbKind::Movie),
-        "tv" => Some(TmdbKind::Tv),
-        _ => None,
-    };
+    let kind_hint = TmdbKind::from_wire(&c.kind);
     if title.trim().len() < 2 {
         tracing::debug!(
             collection_id = %c.id,
@@ -153,7 +149,9 @@ async fn process_one_collection(
     // SCENE resolver does, so collection- and torrent-level tmdb_ids
     // can't disagree on year-disambiguated cases (Transformers 2007 vs
     // the 1986 animated series).
-    let hits = search_candidates(tmdb, &title, kind_hint, year_hint).await;
+    let Some(hits) = search_candidates(tmdb, &title, kind_hint, year_hint).await else {
+        return CollectionOutcome::Error;
+    };
     let Some(top) = pick_best(&hits, kind_hint, year_hint) else {
         tracing::debug!(
             collection_id = %c.id,

@@ -49,11 +49,10 @@ pub(crate) async fn tmdb_lookup(
     let client = state.tmdb().ok_or_else(|| {
         ApiError::BadRequest("TMDB enrichment is not configured (set [tmdb].api_key)".into())
     })?;
-    let kind_hint = match params.kind.as_deref() {
-        Some("tv") => Some(crate::tmdb::TmdbKind::Tv),
-        Some("movie") => Some(crate::tmdb::TmdbKind::Movie),
-        _ => None,
-    };
+    let kind_hint = params
+        .kind
+        .as_deref()
+        .and_then(crate::tmdb::TmdbKind::from_wire);
     client
         .lookup_with_kind(id, kind_hint)
         .await
@@ -87,7 +86,9 @@ pub(crate) async fn tmdb_search(
     let Some(client) = state.tmdb() else {
         return Ok(Json(Vec::new()));
     };
-    Ok(Json(client.multi_search(&params.q).await))
+    Ok(Json(
+        client.multi_search(&params.q).await.unwrap_or_default(),
+    ))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -132,11 +133,10 @@ pub(crate) async fn tmdb_resolve(
     let Some(client) = state.tmdb() else {
         return Ok(Json(None));
     };
-    let kind_hint = match params.kind.as_deref() {
-        Some("tv") => Some(crate::tmdb::TmdbKind::Tv),
-        Some("movie") => Some(crate::tmdb::TmdbKind::Movie),
-        _ => None,
-    };
+    let kind_hint = params
+        .kind
+        .as_deref()
+        .and_then(crate::tmdb::TmdbKind::from_wire);
     let resolved =
         crate::tmdb_resolve::resolve_release_name(state.db(), client, &params.title, kind_hint)
             .await;

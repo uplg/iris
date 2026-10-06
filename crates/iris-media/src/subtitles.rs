@@ -176,7 +176,7 @@ pub async fn stream_subtitle(
     mark_complete: bool,
 ) -> Result<SubtitleStream, SubtitleError> {
     if let Some(parent) = cache_path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        tokio::fs::create_dir_all(parent).await.ok();
     }
     let nonce = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = cache_path.with_extension(format!("{}.tmp.{nonce}", format.extension()));

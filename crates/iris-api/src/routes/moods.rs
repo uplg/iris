@@ -31,10 +31,10 @@ pub(crate) struct MoodQuery {
 }
 
 fn kind_of(q: &MoodQuery) -> TmdbKind {
-    match q.kind.as_deref() {
-        Some("tv") => TmdbKind::Tv,
-        _ => TmdbKind::Movie,
-    }
+    q.kind
+        .as_deref()
+        .and_then(TmdbKind::from_wire)
+        .unwrap_or(TmdbKind::Movie)
 }
 
 #[utoipa::path(

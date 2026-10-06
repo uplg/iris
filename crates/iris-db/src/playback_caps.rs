@@ -31,3 +31,16 @@ pub async fn insert(
     .await
     .map(|_| ())
 }
+
+/// Drop records older than `before`: the log is a rolling telemetry window.
+pub async fn prune(
+    pool: &SqlitePool,
+    before: chrono::DateTime<chrono::Utc>,
+) -> Result<u64, sqlx::Error> {
+    // `ts` is written by SQLite's own strftime, so compare in that format.
+    let res = sqlx::query("DELETE FROM playback_caps_log WHERE ts < ?1")
+        .bind(before.format("%Y-%m-%dT%H:%M:%.3fZ").to_string())
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}

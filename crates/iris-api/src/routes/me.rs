@@ -51,24 +51,16 @@ pub(crate) async fn change_password(
     user: AuthUser,
     Json(body): Json<ChangePasswordRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
-    if body.new_password.len() < 8 {
-        return Err(ApiError::BadRequest(
-            "new password too short (min 8 chars)".into(),
-        ));
-    }
+    crate::passwords::check_policy(&body.new_password)?;
     let current = iris_db::users::get_password_hash(state.db(), user.id)
         .await?
         .ok_or(ApiError::Unauthorized)?;
-    let ok = iris_auth::verify_password(&body.old_password, &current)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("verify: {e}")))?;
-    if !ok {
+    if !crate::passwords::verify(&body.old_password, &current).await? {
         return Err(ApiError::Unauthorized);
     }
-    let new_hash = iris_auth::hash_password(&body.new_password)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hash: {e}")))?;
-    iris_db::users::update_password_hash(state.db(), user.id, &new_hash).await?;
-    // Force every other session to log back in.
-    iris_db::refresh_tokens::revoke_all_for_user(state.db(), user.id).await?;
+    let new_hash = crate::passwords::hash(&body.new_password).await?;
+    // Every session, this one included, logs back in.
+    iris_db::users::set_password(state.db(), user.id, &new_hash).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -126,7 +118,14 @@ pub(crate) async fn change_display_name(
     user: AuthUser,
     Json(body): Json<ChangeDisplayNameRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
-    let trimmed = body.display_name.trim();
+    let trimmed = checked_display_name(&body.display_name)?;
+    let _ = iris_db::users::update_display_name(state.db(), user.id, trimmed).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// A display name as stored: trimmed, non-empty, at most 64 bytes.
+pub(crate) fn checked_display_name(raw: &str) -> ApiResult<&str> {
+    let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ApiError::BadRequest("display name cannot be empty".into()));
     }
@@ -135,8 +134,7 @@ pub(crate) async fn change_display_name(
             "display name too long (max 64)".into(),
         ));
     }
-    let _ = iris_db::users::update_display_name(state.db(), user.id, trimmed).await?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    Ok(trimmed)
 }
 
 // Wire shape: the bools are independent per-tile flags, not a state
@@ -241,75 +239,79 @@ pub(crate) async fn watchlist(
     // it joins through is shared, so we still surface the same
     // poster + display title for everyone.
     let follows = iris_db::follows::list_for_user(state.db(), user.id).await?;
-    let mut out = Vec::with_capacity(follows.len());
-    for f in follows {
-        // Each follow joins through its normalised name to a
-        // (maybe present, maybe verified) TV collection so the tile
-        // can borrow the canonical title + poster. Missing collection
-        // = the user has a follow but no episodes ingested yet —
-        // surface the follow's own name and let the poster slot stay
-        // empty.
-        let collection = iris_db::collections::find_by_parsed_title(
-            state.db(),
-            &f.normalized_name,
-            iris_db::collections::Kind::Tv,
-        )
-        .await
-        .unwrap_or(None);
-        let (display_title, tmdb_id, collection_id) = match collection {
-            Some(c) => (c.display_title, c.tmdb_id.or(f.tmdb_id), c.id),
-            // No collection yet → route the tile to a hypothetical
-            // collection path. The user will see the empty-state
-            // until first ingest; this stays consistent with the
-            // collection routing the rest of the UI uses.
-            None => (f.name.clone(), f.tmdb_id, f.id),
-        };
-        // Watchlist is TV-only by construction (we derive it from
-        // `series_follows`). Hint the TMDB namespace so the same
-        // numerical id can't collide with an unrelated movie.
-        let (poster_path, backdrop_path) = match (state.tmdb(), tmdb_id) {
-            (Some(client), Some(tid)) => {
-                #[allow(clippy::cast_sign_loss)]
-                let meta = client
-                    .lookup_with_kind(tid as u64, Some(crate::tmdb::TmdbKind::Tv))
-                    .await;
-                meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
-            }
-            _ => (None, None),
-        };
-        // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
-        // — visit-only kept badging episodes that were already out when
-        // the user watched, and badged the whole cache when they had
-        // never opened the page. (With no collection resolved,
-        // `collection_id` is the follow's id → lookup returns None.)
-        let last_watched =
-            iris_db::playback::last_watched_in_collection(state.db(), user.id, collection_id)
-                .await
-                .unwrap_or(None);
-        let engaged_at = match (f.last_visited_at, last_watched) {
-            (Some(v), Some(w)) => Some(v.max(w)),
-            (v, w) => v.or(w),
-        };
-        let new_count = iris_db::available_episodes::count_new_for_series(
-            state.db(),
-            &f.normalized_name,
-            engaged_at,
-        )
-        .await
-        .unwrap_or(0);
-        out.push(WatchlistItem {
-            id: collection_id,
-            normalized_name: f.normalized_name,
-            name: display_title,
-            tmdb_id,
-            poster_path,
-            backdrop_path,
-            new_count,
-            last_visited_at: f.last_visited_at,
-            created_at: f.created_at,
-        });
-    }
+    let out = crate::fanout::map_ordered(follows, |f| watchlist_item(&state, user.id, f)).await;
     Ok(Json(out))
+}
+
+async fn watchlist_item(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    f: iris_db::follows::FollowRow,
+) -> WatchlistItem {
+    // Each follow joins through its normalised name to a
+    // (maybe present, maybe verified) TV collection so the tile
+    // can borrow the canonical title + poster. Missing collection
+    // = the user has a follow but no episodes ingested yet —
+    // surface the follow's own name and let the poster slot stay
+    // empty.
+    let collection = iris_db::collections::find_by_parsed_title(
+        state.db(),
+        &f.normalized_name,
+        iris_db::collections::Kind::Tv,
+    )
+    .await
+    .unwrap_or(None);
+    let (display_title, tmdb_id, collection_id) = match collection {
+        Some(c) => (c.display_title, c.tmdb_id.or(f.tmdb_id), c.id),
+        // No collection yet → route the tile to a hypothetical
+        // collection path. The user will see the empty-state
+        // until first ingest; this stays consistent with the
+        // collection routing the rest of the UI uses.
+        None => (f.name.clone(), f.tmdb_id, f.id),
+    };
+    // Watchlist is TV-only by construction (we derive it from
+    // `series_follows`). Hint the TMDB namespace so the same
+    // numerical id can't collide with an unrelated movie.
+    let (poster_path, backdrop_path) = match (state.tmdb(), tmdb_id) {
+        (Some(client), Some(tid)) => {
+            let meta = client
+                .lookup_db_id(tid, Some(crate::tmdb::TmdbKind::Tv))
+                .await;
+            meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
+        }
+        _ => (None, None),
+    };
+    // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
+    // — visit-only kept badging episodes that were already out when
+    // the user watched, and badged the whole cache when they had
+    // never opened the page. (With no collection resolved,
+    // `collection_id` is the follow's id → lookup returns None.)
+    let last_watched =
+        iris_db::playback::last_watched_in_collection(state.db(), user_id, collection_id)
+            .await
+            .unwrap_or(None);
+    let engaged_at = match (f.last_visited_at, last_watched) {
+        (Some(v), Some(w)) => Some(v.max(w)),
+        (v, w) => v.or(w),
+    };
+    let new_count = iris_db::available_episodes::count_new_for_series(
+        state.db(),
+        &f.normalized_name,
+        engaged_at,
+    )
+    .await
+    .unwrap_or(0);
+    WatchlistItem {
+        id: collection_id,
+        normalized_name: f.normalized_name,
+        name: display_title,
+        tmdb_id,
+        poster_path,
+        backdrop_path,
+        new_count,
+        last_visited_at: f.last_visited_at,
+        created_at: f.created_at,
+    }
 }
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -369,24 +371,27 @@ pub(crate) async fn continue_watching(
     // active wins — then trim to the shelf size.
     let resume = iris_db::playback::continue_watching(state.db(), user.id, 24).await?;
     let candidates = iris_db::playback::continue_watching_next_up(state.db(), user.id, 24).await?;
-    let mut next_up = Vec::with_capacity(candidates.len());
-    for c in candidates {
+    let state_ref = &state;
+    let next_up: Vec<_> = crate::fanout::map_ordered(candidates, |c| async move {
         // Cross-season candidates need TMDB to confirm the completed episode
         // really was the season finale; a same-season (e+1) never does, so
         // don't spend the lookup on it (cached, but still a cold fetch once).
         let finale = if c.next_season == c.prev_season {
             None
         } else {
-            season_finale_episode(&state, c.row.tmdb_id, c.prev_season).await
+            season_finale_episode(state_ref, c.row.tmdb_id, c.prev_season).await
         };
-        if next_up_follows_watch_order(
+        next_up_follows_watch_order(
             (c.prev_season, c.prev_episode),
             (c.next_season, c.next_episode),
             finale,
-        ) {
-            next_up.push(c.row);
-        }
-    }
+        )
+        .then_some(c.row)
+    })
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
 
     let mut merged: Vec<iris_db::playback::ContinueWatchingRow> = Vec::new();
     // collection_id → index into `merged`, so a series appears once.
@@ -420,7 +425,7 @@ pub(crate) async fn continue_watching(
     // frees the collection slot so the TMDB frontier below can synthesise
     // its own tile for the series.
     merged.retain_mut(|r| {
-        if state.engine().get_by_infohash(&r.infohash).is_some() {
+        if state.engine().contains(&r.infohash) {
             return true;
         }
         if revive_dead_row(r, q.include_grabbable) {
@@ -442,13 +447,7 @@ pub(crate) async fn continue_watching(
     let out = merged
         .into_iter()
         .map(|r| {
-            let file_path = state.engine().get_by_infohash(&r.infohash).and_then(|s| {
-                let file_idx = usize::try_from(r.file_idx).ok()?;
-                s.files
-                    .into_iter()
-                    .find(|f| f.index == file_idx)
-                    .map(|f| f.path)
-            });
+            let file_path = state.engine().file_name(&r.infohash, r.file_idx);
             ContinueWatchingItem {
                 infohash: r.infohash,
                 torrent_name: r.torrent_name,
@@ -530,15 +529,16 @@ async fn append_grabbable_next_up(
     by_collection: &mut std::collections::HashMap<uuid::Uuid, usize>,
 ) -> ApiResult<()> {
     let frontiers = iris_db::playback::continue_watching_frontiers(state.db(), user_id, 24).await?;
-    for f in frontiers {
-        if by_collection.contains_key(&f.collection_id) {
-            continue;
-        }
-        let Some((season, episode)) =
-            next_aired_episode(state, f.tmdb_id, f.prev_season, f.prev_episode).await
-        else {
-            continue;
-        };
+    let mut seen = std::collections::HashSet::new();
+    let fresh = frontiers
+        .into_iter()
+        .filter(|f| !by_collection.contains_key(&f.collection_id) && seen.insert(f.collection_id));
+    let aired = crate::fanout::map_ordered(fresh, |f| async move {
+        let next = next_aired_episode(state, f.tmdb_id, f.prev_season, f.prev_episode).await;
+        next.map(|e| (f, e))
+    })
+    .await;
+    for (f, (season, episode)) in aired.into_iter().flatten() {
         by_collection.insert(f.collection_id, merged.len());
         merged.push(iris_db::playback::ContinueWatchingRow {
             infohash: String::new(),
@@ -783,13 +783,7 @@ pub(crate) async fn history(
     let out = rows
         .into_iter()
         .map(|r| {
-            let file_path = state.engine().get_by_infohash(&r.infohash).and_then(|s| {
-                let file_idx = usize::try_from(r.file_idx).ok()?;
-                s.files
-                    .into_iter()
-                    .find(|f| f.index == file_idx)
-                    .map(|f| f.path)
-            });
+            let file_path = state.engine().file_name(&r.infohash, r.file_idx);
             HistoryItem {
                 infohash: r.infohash,
                 torrent_name: r.torrent_name,

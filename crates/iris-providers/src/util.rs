@@ -100,6 +100,19 @@ pub(crate) fn parse_size(text: &str) -> Option<u64> {
     Some((num * mult).round() as u64)
 }
 
+/// Run a CPU-bound page parse on the blocking pool. A tracker page is a few
+/// hundred KB of HTML, and `scraper` builds the whole DOM: on an async worker
+/// that would stall every request scheduled alongside it.
+pub(crate) async fn parse_off_thread<T, F>(parse: F) -> Result<T, Error>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(parse)
+        .await
+        .map_err(|e| Error::Provider(format!("page parse task: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::extract_year;

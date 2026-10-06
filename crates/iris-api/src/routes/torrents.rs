@@ -604,7 +604,7 @@ async fn pre_engine_guards(
         crate::collection_assign::peek_movie_collection(state.db(), &preview.name, &files).await
         // Re-adding a release the engine already manages is a no-op
         // resume, not a new copy.
-        && state.engine().get_by_infohash(&preview.infohash).is_none()
+        && !state.engine().contains(&preview.infohash)
     {
         let copies = iris_db::torrents::list_in_collection(state.db(), col.id)
             .await?
@@ -1040,6 +1040,34 @@ pub struct TorrentView {
     pub snapshot: TorrentSnapshot,
 }
 
+impl TorrentView {
+    pub(crate) fn new(row: iris_db::torrents::TorrentRow, snapshot: TorrentSnapshot) -> Self {
+        Self {
+            tmdb_id: row.effective_tmdb_id(),
+            id: row.id,
+            added_by: row.added_by,
+            added_by_name: row.added_by_name,
+            added_at: row.added_at,
+            last_played_at: row.last_played_at,
+            source_provider: row.source_provider,
+            source_external_id: row.source_external_id,
+            tmdb_verified: row.tmdb_verified,
+            kind: row.kind.as_deref().and_then(MediaKind::from_wire),
+            collection_id: row.collection_id,
+            uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
+            downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
+            snapshot,
+        }
+    }
+
+    /// The view of a row whose torrent the engine still manages; `None` once
+    /// the engine has dropped it.
+    pub(crate) fn live(state: &AppState, row: iris_db::torrents::TorrentRow) -> Option<Self> {
+        let snapshot = state.engine().get_by_infohash(&row.infohash)?;
+        Some(Self::new(row, snapshot))
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/torrents",
@@ -1052,28 +1080,10 @@ pub(crate) async fn list(
     _user: AuthUser,
 ) -> ApiResult<Json<Vec<TorrentView>>> {
     let rows = iris_db::torrents::list_active(state.db()).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        if let Some(snapshot) = state.engine().get_by_infohash(&row.infohash) {
-            let tmdb_id = row.effective_tmdb_id();
-            out.push(TorrentView {
-                id: row.id,
-                added_by: row.added_by,
-                added_by_name: row.added_by_name,
-                added_at: row.added_at,
-                last_played_at: row.last_played_at,
-                source_provider: row.source_provider,
-                source_external_id: row.source_external_id,
-                tmdb_id,
-                tmdb_verified: row.tmdb_verified,
-                kind: row.kind.as_deref().and_then(MediaKind::from_wire),
-                collection_id: row.collection_id,
-                uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
-                downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
-                snapshot,
-            });
-        }
-    }
+    let out = rows
+        .into_iter()
+        .filter_map(|row| TorrentView::live(&state, row))
+        .collect();
     Ok(Json(out))
 }
 
@@ -1092,27 +1102,9 @@ pub(crate) async fn get_one(
     let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
         .await?
         .ok_or(ApiError::NotFound)?;
-    let snapshot = state
-        .engine()
-        .get_by_infohash(&row.infohash)
-        .ok_or(ApiError::NotFound)?;
-    let tmdb_id = row.effective_tmdb_id();
-    Ok(Json(TorrentView {
-        id: row.id,
-        added_by: row.added_by,
-        added_by_name: row.added_by_name,
-        added_at: row.added_at,
-        last_played_at: row.last_played_at,
-        source_provider: row.source_provider,
-        source_external_id: row.source_external_id,
-        tmdb_id,
-        tmdb_verified: row.tmdb_verified,
-        kind: row.kind.as_deref().and_then(MediaKind::from_wire),
-        collection_id: row.collection_id,
-        uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
-        downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
-        snapshot,
-    }))
+    TorrentView::live(&state, row)
+        .map(Json)
+        .ok_or(ApiError::NotFound)
 }
 
 #[utoipa::path(
@@ -1166,18 +1158,15 @@ pub(crate) async fn remove(
     // sweep on the cache dir, so it's enough to soft-delete the row and
     // let the next eviction tick clean up the leftovers.
     iris_db::torrents::soft_delete(state.db(), TorrentId::from(row.id)).await?;
-    if let Err(e) = iris_db::audit::record(
-        state.db(),
+    super::audit(
+        &state,
         user.id,
         "torrent.delete",
         "torrent",
         Some(&row.infohash),
         Some(&row.name),
     )
-    .await
-    {
-        tracing::warn!(error = %e, infohash = %row.infohash, "audit log write failed");
-    }
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 

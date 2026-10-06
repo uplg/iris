@@ -45,7 +45,13 @@ pub async fn iris_caps_layer(
             .get(header::USER_AGENT)
             .and_then(|h| h.to_str().ok())
             .map(str::to_owned);
-        let path = req.uri().path().to_owned();
+        // Mounted under `/api/torrents`: the nested router sees the path
+        // with that prefix stripped, the original URI keeps it.
+        let path = req
+            .extensions()
+            .get::<axum::extract::OriginalUri>()
+            .map_or_else(|| req.uri().path(), |u| u.path())
+            .to_owned();
         let pool = state.db().clone();
         let caps_for_log = caps.clone();
         tokio::spawn(async move {

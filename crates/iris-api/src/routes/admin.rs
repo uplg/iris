@@ -45,21 +45,6 @@ pub fn router() -> Router<AppState> {
         .route("/audit-log", get(audit_log))
 }
 
-/// Resolve the on-disk file name for `(infohash, file_idx)` from the live
-/// torrent snapshot. For season packs this disambiguates the episode being
-/// watched — the torrent name alone can't. Mirrors the lookup
-/// `me::continue_watching` does for the home shelf.
-fn resolve_file_path(state: &AppState, infohash: &str, file_idx: i64) -> Option<String> {
-    let idx = usize::try_from(file_idx).ok()?;
-    state
-        .engine()
-        .get_by_infohash(infohash)?
-        .files
-        .into_iter()
-        .find(|f| f.index == idx)
-        .map(|f| f.path)
-}
-
 /// One live "who's watching what" row for `GET /admin/active-sessions`.
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ActiveSessionView {
@@ -117,7 +102,7 @@ pub(crate) async fn active_sessions(
         out.push(ActiveSessionView {
             user_id: s.user_id,
             display_name,
-            file_path: resolve_file_path(&state, &s.infohash, s.file_idx),
+            file_path: state.engine().file_name(&s.infohash, s.file_idx),
             infohash: s.infohash,
             file_idx: s.file_idx,
             torrent_name: card.as_ref().map(|c| c.torrent_name.clone()),
@@ -188,7 +173,7 @@ pub(crate) async fn watch_history(
             .map(|r| WatchHistoryView {
                 user_id: r.user_id,
                 display_name: r.display_name,
-                file_path: resolve_file_path(&state, &r.infohash, r.file_idx),
+                file_path: state.engine().file_name(&r.infohash, r.file_idx),
                 infohash: r.infohash,
                 file_idx: r.file_idx,
                 torrent_name: r.torrent_name,
@@ -282,7 +267,7 @@ pub(crate) async fn user_history(
     Ok(Json(
         rows.into_iter()
             .map(|r| UserHistoryView {
-                file_path: resolve_file_path(&state, &r.infohash, r.file_idx),
+                file_path: state.engine().file_name(&r.infohash, r.file_idx),
                 infohash: r.infohash,
                 torrent_name: r.torrent_name,
                 tmdb_id: r.tmdb_id,
@@ -379,18 +364,15 @@ pub(crate) async fn delete_user(
     if !iris_db::users::delete(state.db(), user_id, admin.0.id).await? {
         return Err(ApiError::NotFound);
     }
-    if let Err(e) = iris_db::audit::record(
-        state.db(),
+    super::audit(
+        &state,
         admin.0.id,
         "user.delete",
         "user",
         Some(&id.to_string()),
         Some(&target.email),
     )
-    .await
-    {
-        tracing::warn!(error = %e, user_id = %id, "audit log write failed");
-    }
+    .await;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -419,31 +401,22 @@ pub(crate) async fn reset_user_password(
     Path(id): Path<Uuid>,
     Json(body): Json<ResetPasswordRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
-    if body.new_password.len() < 8 {
-        return Err(ApiError::BadRequest(
-            "new password too short (min 8 chars)".into(),
-        ));
-    }
+    crate::passwords::check_policy(&body.new_password)?;
     let user_id = iris_core::ids::UserId::from(id);
     let Some(target) = iris_db::users::find_by_id(state.db(), user_id).await? else {
         return Err(ApiError::NotFound);
     };
-    let hash = iris_auth::hash_password(&body.new_password)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("hash: {e}")))?;
-    iris_db::users::update_password_hash(state.db(), user_id, &hash).await?;
-    iris_db::refresh_tokens::revoke_all_for_user(state.db(), user_id).await?;
-    if let Err(e) = iris_db::audit::record(
-        state.db(),
+    let hash = crate::passwords::hash(&body.new_password).await?;
+    iris_db::users::set_password(state.db(), user_id, &hash).await?;
+    super::audit(
+        &state,
         admin.0.id,
         "user.password_reset",
         "user",
         Some(&id.to_string()),
         Some(&target.email),
     )
-    .await
-    {
-        tracing::warn!(error = %e, user_id = %id, "audit log write failed");
-    }
+    .await;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -475,32 +448,21 @@ pub(crate) async fn set_user_display_name(
     Path(id): Path<Uuid>,
     Json(body): Json<SetDisplayNameRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
-    let trimmed = body.display_name.trim();
-    if trimmed.is_empty() {
-        return Err(ApiError::BadRequest("display name cannot be empty".into()));
-    }
-    if trimmed.len() > 64 {
-        return Err(ApiError::BadRequest(
-            "display name too long (max 64)".into(),
-        ));
-    }
+    let trimmed = super::me::checked_display_name(&body.display_name)?;
     let user_id = iris_core::ids::UserId::from(id);
     let updated = iris_db::users::update_display_name(state.db(), user_id, trimmed).await?;
     if !updated {
         return Err(ApiError::NotFound);
     }
-    if let Err(e) = iris_db::audit::record(
-        state.db(),
+    super::audit(
+        &state,
         admin.0.id,
         "user.display_name_update",
         "user",
         Some(&id.to_string()),
         Some(trimmed),
     )
-    .await
-    {
-        tracing::warn!(error = %e, user_id = %id, "audit log write failed");
-    }
+    .await;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -529,8 +491,8 @@ pub(crate) async fn trigger_gc(
     let freed = report
         .used_bytes_before
         .saturating_sub(report.used_bytes_after);
-    if let Err(e) = iris_db::audit::record(
-        state.db(),
+    super::audit(
+        &state,
         admin.0.id,
         "gc.evict",
         "torrent",
@@ -540,10 +502,7 @@ pub(crate) async fn trigger_gc(
             report.evicted.len()
         )),
     )
-    .await
-    {
-        tracing::warn!(error = %e, "audit log write failed");
-    }
+    .await;
     Ok(Json(report))
 }
 
@@ -583,7 +542,9 @@ pub(crate) async fn storage_stats(
 ) -> ApiResult<Json<StorageStats>> {
     let cfg = &state.cfg().storage;
     let max = cfg.max_storage_gb.saturating_mul(1_073_741_824);
-    let used = dir_size_async(&cfg.download_dir).await.unwrap_or(0);
+    let used = iris_torrent::gc::dir_size(&cfg.download_dir)
+        .await
+        .unwrap_or(0);
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM torrents WHERE deleted_at IS NULL")
         .fetch_one(state.db())
         .await
@@ -605,29 +566,6 @@ pub(crate) async fn storage_stats(
         total_uploaded_bytes,
         total_downloaded_bytes,
     }))
-}
-
-async fn dir_size_async(path: &std::path::Path) -> std::io::Result<u64> {
-    let mut total = 0u64;
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(p) = stack.pop() {
-        let mut read = match tokio::fs::read_dir(&p).await {
-            Ok(r) => r,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-        };
-        while let Some(entry) = read.next_entry().await? {
-            let Ok(m) = entry.metadata().await else {
-                continue;
-            };
-            if m.is_dir() {
-                stack.push(entry.path());
-            } else {
-                total += m.len();
-            }
-        }
-    }
-    Ok(total)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -895,7 +833,7 @@ pub(crate) async fn diagnose_tmdb(
     if let (Some(tmdb), Some(p)) = (state.tmdb(), parsed.as_ref())
         && cleaned.len() >= 2
     {
-        let raw = tmdb.multi_search(&cleaned).await;
+        let raw = tmdb.multi_search(&cleaned).await.unwrap_or_default();
         for s in &raw {
             suggestions.push(TmdbDiagnoseSuggestion {
                 kind: format!("{:?}", s.kind).to_ascii_lowercase(),
@@ -978,18 +916,15 @@ pub(crate) async fn wipe_remux_job(
         .wipe(&key)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("remux wipe: {e}")))?;
-    if let Err(e) = iris_db::audit::record(
-        state.db(),
+    super::audit(
+        &state,
         admin.0.id,
         "remux.wipe",
         "remux_job",
         Some(&key),
         Some(&format!("{freed} bytes freed")),
     )
-    .await
-    {
-        tracing::warn!(error = %e, key = %key, "audit log write failed");
-    }
+    .await;
     Ok(Json(WipeRemuxResponse { freed_bytes: freed }))
 }
 

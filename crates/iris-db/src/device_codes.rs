@@ -96,12 +96,16 @@ pub async fn claim(
     Ok(res.rows_affected() == 1)
 }
 
+/// Drop expired codes: unclaimed ones at once, claimed ones a day later
+/// (their device may still be polling for the session it was linked to).
 pub async fn cleanup_expired(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let now = Utc::now();
     let res = sqlx::query(
         "DELETE FROM device_codes \
-         WHERE expires_at < ?1 AND claimed_at IS NULL",
+         WHERE (expires_at < ?1 AND claimed_at IS NULL) OR expires_at < ?2",
     )
-    .bind(Utc::now())
+    .bind(now)
+    .bind(now - chrono::Duration::days(1))
     .execute(pool)
     .await?;
     Ok(res.rows_affected())

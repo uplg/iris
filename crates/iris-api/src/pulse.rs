@@ -302,7 +302,7 @@ fn mood_filter(rule: GenreRule, kind: TmdbKind, today: chrono::NaiveDate) -> Dis
     };
     DiscoverFilter {
         // `|` = OR in TMDB's syntax, `,` = AND.
-        with_genres: join(rule.any, "%7C"),
+        with_genres: join(rule.any, "|"),
         without_genres: join(rule.none, ","),
         since: today - chrono::Duration::days(365 * years),
         min_votes,
@@ -640,7 +640,7 @@ mod tests {
 
         let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         let f = mood_filter(rule, TmdbKind::Movie, today);
-        assert_eq!(f.with_genres, "27%7C53");
+        assert_eq!(f.with_genres, "27|53");
         assert_eq!(f.without_genres, "16,10751,35");
 
         let ids: HashSet<&str> = MOODS.iter().map(|m| m.id).collect();

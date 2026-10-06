@@ -345,7 +345,15 @@ impl HdTorrents {
             .map_err(|e| Error::Provider(format!("hdtorrents join details url: {e}")))?;
         let body = self.authed_get_text(url).await?;
 
-        let Some(parsed) = parse_details_page(&self.id, &self.base_url, external_id, &body) else {
+        let (id, base, eid) = (
+            self.id.clone(),
+            self.base_url.clone(),
+            external_id.to_owned(),
+        );
+        let parsed =
+            crate::util::parse_off_thread(move || parse_details_page(&id, &base, &eid, &body))
+                .await?;
+        let Some(parsed) = parsed else {
             return Ok(None);
         };
         // The details page carries the signed download link too — prime
@@ -412,7 +420,9 @@ impl SearchProvider for HdTorrents {
     async fn search(&self, q: &SearchQuery) -> Result<ProviderPage> {
         let url = self.search_url(q)?;
         let body = self.authed_get_text(url).await?;
-        let results = parse_search_page(&self.id, &self.base_url, &body);
+        let (id, base) = (self.id.clone(), self.base_url.clone());
+        let results =
+            crate::util::parse_off_thread(move || parse_search_page(&id, &base, &body)).await?;
 
         {
             let mut cache = self.link_cache.lock().await;

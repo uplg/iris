@@ -163,10 +163,9 @@ pub(crate) async fn list(
     user: AuthUser,
 ) -> ApiResult<Json<Vec<FollowSummary>>> {
     let rows = iris_db::follows::list_for_user(state.db(), user.id).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(summarize(&state, &row).await);
-    }
+    let state = &state;
+    let out =
+        crate::fanout::map_ordered(rows, |row| async move { summarize(state, &row).await }).await;
     Ok(Json(out))
 }
 
@@ -196,10 +195,8 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
     // id collision with a movie can't serve a stranger's poster.
     let (poster_path, backdrop_path) = match (state.tmdb(), trusted_tmdb) {
         (Some(client), Some(tid)) => {
-            // tid is a positive i64 from the DB; u64 conversion is safe.
-            #[allow(clippy::cast_sign_loss)]
             let meta = client
-                .lookup_with_kind(tid as u64, Some(crate::tmdb::TmdbKind::Tv))
+                .lookup_db_id(tid, Some(crate::tmdb::TmdbKind::Tv))
                 .await;
             meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
         }

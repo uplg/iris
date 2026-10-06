@@ -64,11 +64,11 @@ pub async fn get(
     let row: Option<Row> = sqlx::query_as(
         "SELECT tmdb_id, title, year, poster_path, backdrop_path, overview, fetched_at \
          FROM tmdb_resolve_cache \
-         WHERE cleaned_name = ?1 AND (kind_hint IS ?2 OR kind_hint = ?2) \
+         WHERE cleaned_name = ?1 AND kind_hint = ?2 \
            AND fetched_at >= ?3",
     )
     .bind(cleaned_name)
-    .bind(kind_hint)
+    .bind(stored_hint(kind_hint))
     .bind(cutoff)
     .fetch_optional(pool)
     .await?;
@@ -81,6 +81,12 @@ pub async fn get(
         overview: r.5,
         fetched_at: r.6,
     }))
+}
+
+/// "No hint" is stored as `''`, not NULL: NULLs are distinct in SQLite
+/// keys, so a NULL hint would never hit the upsert's conflict target.
+fn stored_hint(kind_hint: Option<&str>) -> &str {
+    kind_hint.unwrap_or("")
 }
 
 /// Insert or replace the resolution row. Idempotent — overwrites any
@@ -107,7 +113,7 @@ pub async fn put(
            fetched_at = excluded.fetched_at",
     )
     .bind(cleaned_name)
-    .bind(kind_hint)
+    .bind(stored_hint(kind_hint))
     .bind(entry.tmdb_id)
     .bind(entry.title.as_deref())
     .bind(entry.year)
@@ -118,4 +124,60 @@ pub async fn put(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+    use sqlx::SqlitePool;
+
+    use super::{ResolveEntry, get, put};
+
+    async fn migrated_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory sqlite");
+        crate::migrate::run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    fn entry(tmdb_id: i64) -> ResolveEntry {
+        ResolveEntry {
+            tmdb_id: Some(tmdb_id),
+            title: Some("Severance".into()),
+            year: Some(2022),
+            poster_path: None,
+            backdrop_path: None,
+            overview: None,
+            fetched_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unhinted_put_replaces_instead_of_piling_up() {
+        let pool = migrated_pool().await;
+        put(&pool, "severance", None, &entry(1)).await.unwrap();
+        put(&pool, "severance", None, &entry(2)).await.unwrap();
+        let rows: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tmdb_resolve_cache")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows.0, 1);
+        let hit = get(&pool, "severance", None, Duration::days(1))
+            .await
+            .unwrap()
+            .expect("cached");
+        assert_eq!(hit.tmdb_id, Some(2));
+        // A hinted entry keeps its own slot.
+        put(&pool, "severance", Some("tv"), &entry(3))
+            .await
+            .unwrap();
+        let tv = get(&pool, "severance", Some("tv"), Duration::days(1))
+            .await
+            .unwrap()
+            .expect("cached");
+        assert_eq!(tv.tmdb_id, Some(3));
+    }
 }

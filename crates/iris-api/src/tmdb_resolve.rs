@@ -107,7 +107,9 @@ pub async fn resolve_cleaned(
         return ResolvedTitle::from_entry(&hit, kind_hint);
     }
 
-    let suggestions = search_candidates(tmdb, cleaned, kind_hint, year_hint).await;
+    // TMDB unreachable: answer nothing and cache nothing, so the next
+    // call retries instead of trusting a 30-day "no match".
+    let suggestions = search_candidates(tmdb, cleaned, kind_hint, year_hint).await?;
     let top = pick_best(&suggestions, kind_hint, year_hint);
     let entry = match top.as_ref() {
         Some(t) => ResolveEntry {
@@ -142,24 +144,28 @@ pub async fn resolve_cleaned(
 /// when the strict filter comes back empty (a release year can be
 /// off-by-one vs TMDB's primary release year), then falls back to the
 /// broad multi-search. Without a kind hint there's nothing to type the
-/// endpoint with, so it's straight to multi-search.
+/// endpoint with, so it's straight to multi-search. `None` when TMDB
+/// couldn't be asked.
 pub(crate) async fn search_candidates(
     tmdb: &TmdbClient,
     query: &str,
     kind_hint: Option<TmdbKind>,
     year_hint: Option<u32>,
-) -> Vec<TmdbSuggestion> {
+) -> Option<Vec<TmdbSuggestion>> {
     let Some(kind) = kind_hint else {
         return tmdb.multi_search(query).await;
     };
-    let mut hits = tmdb.search_typed(query, kind, year_hint).await;
-    if hits.is_empty() && year_hint.is_some() {
-        hits = tmdb.search_typed(query, kind, None).await;
+    let hits = tmdb.search_typed(query, kind, year_hint).await?;
+    if !hits.is_empty() {
+        return Some(hits);
     }
-    if hits.is_empty() {
-        hits = tmdb.multi_search(query).await;
+    if year_hint.is_some() {
+        let hits = tmdb.search_typed(query, kind, None).await?;
+        if !hits.is_empty() {
+            return Some(hits);
+        }
     }
-    hits
+    tmdb.multi_search(query).await
 }
 
 #[derive(Debug, Clone)]

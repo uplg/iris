@@ -265,7 +265,8 @@ pub struct EvictedEntry {
     pub freed_bytes: u64,
 }
 
-async fn dir_size(path: &Path) -> std::io::Result<u64> {
+/// Bytes under `path`, recursively. A missing directory counts as empty.
+pub async fn dir_size(path: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(p) = stack.pop() {

@@ -141,22 +141,34 @@ pub async fn revoke(pool: &SqlitePool, jti: Uuid) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Mark a refresh token as ROTATED: revoked, but flagged `rotated_at` so a
-/// near-simultaneous straggler refresh can be recognised and tolerated (see
-/// [`recently_rotated`]). Used by `/auth/refresh` in place of [`revoke`] —
-/// `revoke` (logout / device revoke) leaves `rotated_at` NULL so a session
-/// the user deliberately killed is never resurrected by the grace window.
-pub async fn mark_rotated(pool: &SqlitePool, jti: Uuid) -> Result<(), sqlx::Error> {
+/// Mark an active refresh token as ROTATED and return its device tagging,
+/// in one statement: of two near-simultaneous refreshes exactly one gets
+/// `Some`, the other falls through to [`recently_rotated`]. Rotated means
+/// revoked but flagged `rotated_at`, so a straggler can be recognised and
+/// tolerated. `revoke` (logout / device revoke) leaves `rotated_at` NULL so
+/// a session the user deliberately killed is never resurrected by the
+/// grace window. `None`: the token wasn't active.
+pub async fn mark_rotated(
+    pool: &SqlitePool,
+    jti: Uuid,
+) -> Result<Option<ActiveDeviceInfo>, sqlx::Error> {
     let now = Utc::now();
-    sqlx::query(
+    let row: Option<(Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
         "UPDATE refresh_tokens SET revoked_at = ?1, rotated_at = ?1 \
-         WHERE jti = ?2 AND revoked_at IS NULL",
+         WHERE jti = ?2 AND revoked_at IS NULL AND expires_at > ?1 \
+         RETURNING device_label, device_kind, expires_at",
     )
     .bind(now)
     .bind(jti)
-    .execute(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(())
+    Ok(
+        row.map(|(device_label, device_kind, expires_at)| ActiveDeviceInfo {
+            device_label,
+            device_kind,
+            expires_at,
+        }),
+    )
 }
 
 /// Device tagging carried on a token ROTATED within the grace window — the
@@ -192,16 +204,14 @@ pub async fn recently_rotated(
     }))
 }
 
-pub async fn revoke_all_for_user(pool: &SqlitePool, user_id: UserId) -> Result<(), sqlx::Error> {
-    let user: Uuid = user_id.into();
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL",
-    )
-    .bind(Utc::now())
-    .bind(user)
-    .execute(pool)
-    .await?;
-    Ok(())
+/// Delete sessions nobody can use any more: expired, or revoked/rotated
+/// long enough ago that the rotation grace window can't need them.
+pub async fn prune(pool: &SqlitePool, before: DateTime<Utc>) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < ?1 OR revoked_at < ?1")
+        .bind(before)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
 }
 
 #[cfg(test)]
@@ -218,6 +228,81 @@ mod tests {
             .expect("open in-memory sqlite");
         crate::migrate::run(&pool).await.expect("run migrations");
         pool
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_live_sessions_only() {
+        let pool = migrated_pool().await;
+        let user = crate::users::create(
+            &pool,
+            crate::users::NewUser {
+                email: "p@example.com".into(),
+                password_hash: "x".into(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let live = Uuid::new_v4();
+        let expired = Uuid::new_v4();
+        let revoked = Uuid::new_v4();
+        insert(&pool, live, user, Utc::now() + Duration::days(7))
+            .await
+            .unwrap();
+        insert(&pool, expired, user, Utc::now() - Duration::days(3))
+            .await
+            .unwrap();
+        insert(&pool, revoked, user, Utc::now() + Duration::days(7))
+            .await
+            .unwrap();
+        mark_rotated(&pool, revoked).await.unwrap();
+
+        // Rotated a moment ago: still inside any grace window, kept.
+        assert_eq!(
+            prune(&pool, Utc::now() - Duration::days(1)).await.unwrap(),
+            1
+        );
+        // A day on, the rotated one goes too.
+        assert_eq!(
+            prune(&pool, Utc::now() + Duration::days(1)).await.unwrap(),
+            1
+        );
+        assert!(is_active(&pool, live).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn only_one_of_two_rotations_wins() {
+        let pool = migrated_pool().await;
+        let user = crate::users::create(
+            &pool,
+            crate::users::NewUser {
+                email: "r@example.com".into(),
+                password_hash: "x".into(),
+                is_admin: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let jti = Uuid::new_v4();
+        insert_with_device(
+            &pool,
+            jti,
+            user,
+            Utc::now() + Duration::hours(1),
+            Some("TV"),
+            Some("android-tv"),
+        )
+        .await
+        .unwrap();
+        let first = mark_rotated(&pool, jti).await.unwrap();
+        let second = mark_rotated(&pool, jti).await.unwrap();
+        assert_eq!(
+            first.and_then(|i| i.device_kind).as_deref(),
+            Some("android-tv")
+        );
+        assert!(second.is_none());
     }
 
     /// The rotation grace contract: a token ROTATED (the happy path of

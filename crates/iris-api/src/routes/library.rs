@@ -114,31 +114,10 @@ pub(crate) async fn list_library(
 ) -> ApiResult<Json<LibraryResponse>> {
     if q.view.as_deref() == Some("torrents") {
         let rows = iris_db::torrents::list_active(state.db()).await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            if let Some(snapshot) = state.engine().get_by_infohash(&row.infohash) {
-                let tmdb_id = row.effective_tmdb_id();
-                out.push(TorrentView {
-                    id: row.id,
-                    added_by: row.added_by,
-                    added_by_name: row.added_by_name,
-                    added_at: row.added_at,
-                    last_played_at: row.last_played_at,
-                    source_provider: row.source_provider,
-                    source_external_id: row.source_external_id,
-                    tmdb_id,
-                    tmdb_verified: row.tmdb_verified,
-                    kind: row
-                        .kind
-                        .as_deref()
-                        .and_then(iris_core::search::MediaKind::from_wire),
-                    collection_id: row.collection_id,
-                    uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
-                    downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
-                    snapshot,
-                });
-            }
-        }
+        let out: Vec<TorrentView> = rows
+            .into_iter()
+            .filter_map(|row| TorrentView::live(&state, row))
+            .collect();
         let _ = user; // keep the auth gate, no per-user filtering yet
         let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
             .await
@@ -453,54 +432,56 @@ pub(crate) async fn collection_detail(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let torrent_rows = iris_db::torrents::list_in_collection(state.db(), id).await?;
-    let mut torrents = Vec::with_capacity(torrent_rows.len());
-    for row in &torrent_rows {
-        if let Some(snapshot) = state.engine().get_by_infohash(&row.infohash) {
-            torrents.push(TorrentView {
-                id: row.id,
-                added_by: row.added_by,
-                added_by_name: row.added_by_name.clone(),
-                added_at: row.added_at,
-                last_played_at: row.last_played_at,
-                source_provider: row.source_provider.clone(),
-                source_external_id: row.source_external_id.clone(),
-                tmdb_id: row.effective_tmdb_id(),
-                tmdb_verified: row.tmdb_verified,
-                kind: row
-                    .kind
-                    .as_deref()
-                    .and_then(iris_core::search::MediaKind::from_wire),
-                collection_id: row.collection_id,
-                uploaded_bytes_total: u64::try_from(row.uploaded_bytes_total).unwrap_or(0),
-                downloaded_bytes_total: u64::try_from(row.downloaded_bytes_total).unwrap_or(0),
-                snapshot,
-            });
-        }
-    }
+    let torrents: Vec<TorrentView> = iris_db::torrents::list_in_collection(state.db(), id)
+        .await?
+        .into_iter()
+        .filter_map(|row| TorrentView::live(&state, row))
+        .collect();
 
-    // "X new" cutoff = the user's last ENGAGEMENT: max(last page
-    // visit, last watch in the collection). Never engaged → None →
-    // the badge counts nothing.
-    let user_last_visited: Option<DateTime<Utc>> =
+    // Everything below only reads the collection: run the lookups at once.
+    let follow = async {
         match collection.parsed_title_normalized.as_deref() {
             Some(norm) => iris_db::follows::get_by_normalized(state.db(), user.id, norm)
                 .await
                 .ok()
-                .flatten()
-                .and_then(|f| f.last_visited_at),
+                .flatten(),
             None => None,
-        };
-    let user_last_watched = iris_db::playback::last_watched_in_collection(state.db(), user.id, id)
-        .await
-        .unwrap_or(None);
+        }
+    };
+    let last_watched = async {
+        iris_db::playback::last_watched_in_collection(state.db(), user.id, id)
+            .await
+            .unwrap_or(None)
+    };
+    // TMDB lookup for the hero poster — same gating as the Watchlist
+    // endpoint: only fires when a tmdb_id is attached. The collection's
+    // `kind` picks the namespace: `/tv/60573` vs `/movie/60573` are two
+    // unrelated entries.
+    let artwork = async {
+        match (state.tmdb(), collection.tmdb_id) {
+            (Some(client), Some(tid)) => client
+                .lookup_db_id(tid, crate::tmdb::TmdbKind::from_wire(&collection.kind))
+                .await
+                .map_or((None, None), |m| (m.poster_path, m.backdrop_path)),
+            _ => (None, None),
+        }
+    };
+    // Gone view first — its languages count as "owned" coverage below.
+    let (follow, user_last_watched, (poster_path, backdrop_path), (gone_releases, gone_episodes)) = tokio::join!(
+        follow,
+        last_watched,
+        artwork,
+        build_gone_view(&state, id, user.id)
+    );
+
+    // "X new" cutoff = the user's last ENGAGEMENT: max(last page
+    // visit, last watch in the collection). Never engaged → None →
+    // the badge counts nothing.
+    let user_last_visited = follow.as_ref().and_then(|f| f.last_visited_at);
     let user_engaged_at = match (user_last_visited, user_last_watched) {
         (Some(v), Some(w)) => Some(v.max(w)),
         (v, w) => v.or(w),
     };
-
-    // Gone view first — its languages count as "owned" coverage below.
-    let (gone_releases, gone_episodes) = build_gone_view(&state, id, user.id).await;
 
     let (episodes, available_episodes, season_packs, has_new_since_last_visit) =
         if collection.kind == "tv" {
@@ -520,35 +501,10 @@ pub(crate) async fn collection_detail(
     // user is already tracking this series. We deliberately don't
     // auto-create the follow row here: opening a collection page to
     // browse isn't a strong enough signal — auto-tracking belongs to
-    // the grab path. Without the row → no badge to bump, nothing to
-    // do. The collection-wide `last_visited_at` column stays unused
-    // (kept around for the v0.5 cleanup).
-    if let Some(norm) = collection.parsed_title_normalized.as_deref()
-        && let Ok(Some(row)) = iris_db::follows::get_by_normalized(state.db(), user.id, norm).await
-    {
+    // the grab path.
+    if let Some(row) = follow {
         let _ = iris_db::follows::mark_visited(state.db(), user.id, row.id).await;
     }
-
-    // TMDB lookup for the hero poster — same gating as the
-    // Watchlist endpoint: only fires when a tmdb_id is attached.
-    // Hand TMDB the collection's `kind` so it queries the right
-    // namespace: `/tv/60573` vs `/movie/60573` are two unrelated
-    // entries and a hint-less lookup serves whichever wins the
-    // fallback coin-flip (the entire reason `lookup_with_kind`
-    // exists).
-    let kind_hint = match collection.kind.as_str() {
-        "tv" => Some(crate::tmdb::TmdbKind::Tv),
-        "movie" => Some(crate::tmdb::TmdbKind::Movie),
-        _ => None,
-    };
-    let (poster_path, backdrop_path) = match (state.tmdb(), collection.tmdb_id) {
-        (Some(client), Some(tid)) => {
-            #[allow(clippy::cast_sign_loss)]
-            let meta = client.lookup_with_kind(tid as u64, kind_hint).await;
-            meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
-        }
-        _ => (None, None),
-    };
 
     let numbering = derive_numbering(&episodes, &gone_episodes, &available_episodes);
     Ok(Json(CollectionDetail {

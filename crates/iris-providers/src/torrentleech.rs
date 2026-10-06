@@ -374,7 +374,10 @@ impl TorrentLeech {
             .join(&format!("/torrent/{external_id}"))
             .map_err(|e| Error::Provider(format!("torrentleech join details url: {e}")))?;
         let body = self.authed_get_html(url).await?;
-        let Some(details) = parse_details_page(&self.id, external_id, &body) else {
+        let (id, eid) = (self.id.clone(), external_id.to_owned());
+        let parsed =
+            crate::util::parse_off_thread(move || parse_details_page(&id, &eid, &body)).await?;
+        let Some(details) = parsed else {
             return Ok(None);
         };
         self.details_cache.lock().await.insert(

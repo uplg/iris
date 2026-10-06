@@ -239,7 +239,8 @@ impl SearchProvider for NyaaProvider {
         let html = self
             .fetch(&format!("{}/view/{external_id}", self.base_url))
             .await?;
-        Ok(parse_view_page(&html, &self.id, external_id))
+        let (id, external_id) = (self.id.clone(), external_id.to_owned());
+        crate::util::parse_off_thread(move || parse_view_page(&html, &id, &external_id)).await
     }
 }
 

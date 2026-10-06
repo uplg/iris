@@ -1665,11 +1665,16 @@ impl LiveTvService {
             .bytes()
             .await
             .map_err(|e| LiveTvError::Upstream(e.to_string()))?;
-        // Guides are served gzipped-as-body; accept plain XML too.
-        let xml = epg::decode_gzip(&bytes)
-            .or_else(|_| String::from_utf8(bytes.to_vec()))
-            .map_err(|_| LiveTvError::Upstream("guide is neither gzip nor utf-8 xml".into()))?;
-        let index = epg::parse_xmltv(&xml, chrono::Utc::now());
+        // A full guide is tens of MB: gunzip + parse on the blocking pool.
+        let index = tokio::task::spawn_blocking(move || {
+            // Guides are served gzipped-as-body; accept plain XML too.
+            let xml = epg::decode_gzip(&bytes)
+                .or_else(|_| String::from_utf8(bytes.to_vec()))
+                .map_err(|_| LiveTvError::Upstream("guide is neither gzip nor utf-8 xml".into()))?;
+            Ok::<_, LiveTvError>(epg::parse_xmltv(&xml, chrono::Utc::now()))
+        })
+        .await
+        .map_err(|e| LiveTvError::Upstream(format!("guide parse task: {e}")))??;
         if index.is_empty() {
             return Err(LiveTvError::Upstream(
                 "guide parsed to zero programmes".into(),

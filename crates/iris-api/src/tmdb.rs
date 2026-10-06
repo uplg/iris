@@ -1,17 +1,19 @@
 //! TMDB metadata client + memory cache.
 //!
 //! We hit `themoviedb.org` for poster/backdrop/year/overview when a search
-//! result carries a `tmdb_id`. Lookups are cached forever in memory (and
-//! re-issued on restart — TMDB metadata is essentially static for a given
-//! id, so this is harmless).
+//! result carries a `tmdb_id`. Every response is cached in memory through a
+//! bounded [`TtlCache`]: TMDB metadata barely changes for a given id, so the
+//! TTLs are long, but the maps can't grow without bound and a failed fetch
+//! is retried rather than remembered.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 use utoipa::ToSchema;
+
+use crate::ttl_cache::TtlCache;
 
 #[derive(Clone)]
 pub struct TmdbClient {
@@ -26,42 +28,48 @@ struct Inner {
     /// namespaces and a flat-id cache served the wrong entry
     /// whenever the two namespaces collided (Silicon Valley TV id =
     /// some unrelated movie id, etc.).
-    typed_cache: RwLock<HashMap<(u64, Option<&'static str>), CacheEntry>>,
-    /// Separate cache for season episode lists, keyed by `(tmdb_id, season_number)`.
-    /// TMDB rarely retroactively edits aired episodes, so caching forever is fine —
-    /// the only mutation we'd miss is air-date corrections on unaired episodes,
-    /// and the notify scheduler bursts a fresh request anyway when it finds a
-    /// new episode (cache only matters for repeat reads within a single uptime).
-    seasons: RwLock<HashMap<(u64, u32), Vec<EpisodeMetadata>>>,
-    /// Lowercase-keyed cache for `multi_search` results. Search-page
-    /// rendering issues one lookup per unique cleaned title and many
-    /// of those repeat across pages / users — caching the raw upstream
-    /// response in-memory keeps TMDB calls bounded without paying a
-    /// DB round-trip on the hot path. Empty results are cached too so
-    /// "no hits" doesn't re-issue.
-    searches: RwLock<HashMap<String, Vec<TmdbSuggestion>>>,
-    /// Genre taxonomy per kind, keyed by `kind_marker`. Unlike the id
-    /// caches above this one carries a fetched-at stamp and expires
-    /// after `GENRE_CACHE_TTL`: the taxonomy is near-static but the
-    /// onboarding picker should still pick up the rare addition without
-    /// a process restart.
-    genres_cache: RwLock<HashMap<&'static str, (Instant, Vec<Genre>)>>,
-    /// Cache for the list endpoints (trending / discover / on the air), keyed
-    /// by path + query, expiring after `LIST_CACHE_TTL`.
-    discover_cache: RwLock<HashMap<String, (Instant, Vec<MediaMetadata>)>>,
+    typed_cache: TtlCache<(u64, Option<&'static str>), CacheEntry>,
+    /// Season episode lists, keyed by `(tmdb_id, season_number)`. Shorter
+    /// TTL than ids: air dates of upcoming episodes do get corrected.
+    seasons: TtlCache<(u64, u32), Vec<EpisodeMetadata>>,
+    /// Lowercase-keyed `multi_search` / `search_typed` results. The
+    /// typeahead and the SCENE resolver repeat the same queries across
+    /// pages and users; empty results are cached too so "no hits" doesn't
+    /// re-issue.
+    searches: TtlCache<String, Vec<TmdbSuggestion>>,
+    /// Genre taxonomy per kind. Near-static, refreshed daily so the
+    /// onboarding picker still picks up the rare addition.
+    genres: TtlCache<&'static str, Vec<Genre>>,
+    /// List endpoints (trending / discover / on the air), keyed by path +
+    /// query. Shorter than the pulse cycle so each pass sees fresh lists.
+    lists: TtlCache<String, Vec<MediaMetadata>>,
 }
 
-/// TTL for the cached TMDB genre taxonomy. The list changes maybe once
-/// a year; a daily refresh costs one request per kind and keeps the
-/// onboarding picker current.
-const GENRE_CACHE_TTL: Duration = Duration::from_hours(24);
+const ID_TTL: Duration = Duration::from_hours(24);
+const SEASON_TTL: Duration = Duration::from_hours(12);
+const SEARCH_TTL: Duration = Duration::from_hours(1);
+const GENRE_TTL: Duration = Duration::from_hours(24);
+const LIST_TTL: Duration = Duration::from_hours(2);
 
-/// TTL for cached list slices. Shorter than the pulse cycle so each pass
-/// sees fresh trending / release lists.
-const LIST_CACHE_TTL: Duration = Duration::from_hours(2);
+#[derive(Clone)]
+enum CacheEntry {
+    // Boxed: MediaMetadata is much larger than the empty NotFound variant.
+    Found(Box<MediaMetadata>),
+    /// TMDB answered 404 for both namespaces. Only a definitive answer is
+    /// cached this way; a network error caches nothing.
+    NotFound,
+}
+
+/// Why a TMDB request produced no value.
+enum Miss {
+    /// TMDB answered 404: the id or path doesn't exist.
+    NotFound,
+    /// Network error, refusal or unparsable body: worth retrying later.
+    Failed,
+}
 
 /// Filters for a mood's [`TmdbClient::discover`] query. Id lists are in
-/// TMDB syntax: `,` = AND, `|` (URL-encoded `%7C`) = OR.
+/// TMDB syntax: `,` = AND, `|` = OR (the query encoder escapes it).
 #[derive(Debug, Clone)]
 pub struct DiscoverFilter {
     pub with_genres: String,
@@ -71,18 +79,23 @@ pub struct DiscoverFilter {
     pub min_votes: u32,
 }
 
-#[derive(Clone)]
-enum CacheEntry {
-    // Boxed: MediaMetadata is much larger than the empty NotFound variant.
-    Found(Box<MediaMetadata>),
-    NotFound,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TmdbKind {
     Movie,
     Tv,
+}
+
+impl TmdbKind {
+    /// Parse the `"movie"` / `"tv"` wire form used by collections, query
+    /// params and TMDB's own `media_type`.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "movie" => Some(Self::Movie),
+            "tv" => Some(Self::Tv),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -165,12 +178,46 @@ impl TmdbClient {
             inner: Arc::new(Inner {
                 api_key,
                 http,
-                typed_cache: RwLock::new(HashMap::new()),
-                seasons: RwLock::new(HashMap::new()),
-                searches: RwLock::new(HashMap::new()),
-                genres_cache: RwLock::new(HashMap::new()),
-                discover_cache: RwLock::new(HashMap::new()),
+                typed_cache: TtlCache::new(ID_TTL, 4096),
+                seasons: TtlCache::new(SEASON_TTL, 2048),
+                searches: TtlCache::new(SEARCH_TTL, 2048),
+                genres: TtlCache::new(GENRE_TTL, 4),
+                lists: TtlCache::new(LIST_TTL, 256),
             }),
+        })
+    }
+
+    /// GET `https://api.themoviedb.org/3/{path}` with the API key added to
+    /// `query`. `what` names the call in logs; the URL never is (it carries
+    /// the key).
+    async fn get_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        what: &str,
+    ) -> Result<T, Miss> {
+        let res = self
+            .inner
+            .http
+            .get(format!("https://api.themoviedb.org/3/{path}"))
+            .query(&[("api_key", self.inner.api_key.as_str())])
+            .query(query)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, what, "tmdb request failed");
+                Miss::Failed
+            })?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(Miss::NotFound);
+        }
+        if !res.status().is_success() {
+            tracing::warn!(status = %res.status(), what, "tmdb request refused");
+            return Err(Miss::Failed);
+        }
+        res.json().await.map_err(|e| {
+            tracing::warn!(error = %e, what, "tmdb response unparsable");
+            Miss::Failed
         })
     }
 }
@@ -182,84 +229,67 @@ const fn kind_marker(k: TmdbKind) -> &'static str {
     }
 }
 
+/// Year of a TMDB `YYYY-MM-DD` date.
+fn year_of(date: Option<&str>) -> Option<u32> {
+    date?.split('-').next()?.parse().ok()
+}
+
+impl TmdbMultiResult {
+    /// The suggestion for this result, typed as `kind`.
+    fn into_suggestion(self, kind: TmdbKind) -> Option<TmdbSuggestion> {
+        let title = self.title.or(self.name)?;
+        let date = self.release_date.or(self.first_air_date);
+        Some(TmdbSuggestion {
+            kind,
+            tmdb_id: self.id,
+            title,
+            year: year_of(date.as_deref()),
+            overview: self.overview.filter(|s| !s.is_empty()),
+            poster_path: self.poster_path,
+        })
+    }
+}
+
 impl TmdbClient {
     /// Multi-search across movies + TV shows. Powers the search-page
     /// typeahead — the user types a few characters, we surface "did you
     /// mean X (2024)" suggestions tied to a TMDB id so a click runs an
     /// indexer search with the cleaned title (and optionally remembers
     /// the tmdb id for the eventual ingest). People results filtered out.
-    /// NOT cached — the typeahead is short-lived and `TanStack` Query
-    /// already debounces / caches client-side.
-    pub async fn multi_search(&self, query: &str) -> Vec<TmdbSuggestion> {
+    /// `None` when TMDB couldn't be asked (an empty list is a real answer).
+    pub async fn multi_search(&self, query: &str) -> Option<Vec<TmdbSuggestion>> {
         let trimmed = query.trim();
         if trimmed.is_empty() {
-            return Vec::new();
+            return Some(Vec::new());
         }
-        let cache_key = trimmed.to_lowercase();
-        if let Some(hit) = self.inner.searches.read().await.get(&cache_key).cloned() {
-            return hit;
-        }
-        let res = match self
-            .inner
-            .http
-            .get("https://api.themoviedb.org/3/search/multi")
-            .query(&[
-                ("api_key", self.inner.api_key.as_str()),
-                ("query", query),
-                ("include_adult", "false"),
-                ("page", "1"),
-            ])
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, query, "tmdb multi-search failed");
-                return Vec::new();
-            }
-        };
-        if !res.status().is_success() {
-            return Vec::new();
-        }
-        let raw: TmdbMultiRaw = match res.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, query, "tmdb multi-search parse failed");
-                return Vec::new();
-            }
-        };
-        let out: Vec<TmdbSuggestion> = raw
-            .results
-            .into_iter()
-            .filter_map(|r| {
-                let kind = match r.media_type.as_deref() {
-                    Some("movie") => TmdbKind::Movie,
-                    Some("tv") => TmdbKind::Tv,
-                    _ => return None, // skip people + unknowns
-                };
-                let title = r.title.or(r.name)?;
-                let date = r.release_date.or(r.first_air_date);
-                let year = date
-                    .as_deref()
-                    .and_then(|d| d.split('-').next())
-                    .and_then(|y| y.parse().ok());
-                Some(TmdbSuggestion {
-                    kind,
-                    tmdb_id: r.id,
-                    title,
-                    year,
-                    overview: r.overview.filter(|s| !s.is_empty()),
-                    poster_path: r.poster_path,
-                })
-            })
-            .take(10)
-            .collect();
         self.inner
             .searches
-            .write()
+            .get_or_fetch(trimmed.to_lowercase(), || async {
+                let raw: TmdbMultiRaw = self
+                    .get_json(
+                        "search/multi",
+                        &[
+                            ("query", trimmed),
+                            ("include_adult", "false"),
+                            ("page", "1"),
+                        ],
+                        "multi-search",
+                    )
+                    .await
+                    .ok()?;
+                Some(
+                    raw.results
+                        .into_iter()
+                        .filter_map(|r| {
+                            // People and unknown media types are skipped.
+                            let kind = r.media_type.as_deref().and_then(TmdbKind::from_wire)?;
+                            r.into_suggestion(kind)
+                        })
+                        .take(10)
+                        .collect(),
+                )
+            })
             .await
-            .insert(cache_key, out.clone());
-        out
     }
 
     /// Typed, year-targeted search. `/search/multi` ranks by raw
@@ -271,134 +301,83 @@ impl TmdbClient {
     /// returns year-correct candidates with the exact title ranked
     /// first. Used by the SCENE → TMDB resolver, which always knows the
     /// kind (decided at ingest) and usually the year (from the release
-    /// name). Shares the `multi_search` in-memory cache, namespaced by
-    /// kind + year so the keyspaces never collide.
+    /// name). Shares the `multi_search` cache, namespaced by kind + year
+    /// so the keyspaces never collide. `None` when TMDB couldn't be asked.
     pub async fn search_typed(
         &self,
         query: &str,
         kind: TmdbKind,
         year: Option<u32>,
-    ) -> Vec<TmdbSuggestion> {
+    ) -> Option<Vec<TmdbSuggestion>> {
         let trimmed = query.trim();
         if trimmed.is_empty() {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let marker = kind_marker(kind);
         let cache_key = format!("{marker}:{}:{}", year.unwrap_or(0), trimmed.to_lowercase());
-        if let Some(hit) = self.inner.searches.read().await.get(&cache_key).cloned() {
-            return hit;
-        }
-        // TMDB's canonical year filters for the typed search endpoints.
-        let year_param = match kind {
-            TmdbKind::Movie => "primary_release_year",
-            TmdbKind::Tv => "first_air_date_year",
-        };
-        let year_str = year.map(|y| y.to_string());
-        let mut params: Vec<(&str, &str)> = vec![
-            ("api_key", self.inner.api_key.as_str()),
-            ("query", query),
-            ("include_adult", "false"),
-            ("page", "1"),
-        ];
-        if let Some(y) = year_str.as_deref() {
-            params.push((year_param, y));
-        }
-        let url = format!("https://api.themoviedb.org/3/search/{marker}");
-        let res = match self.inner.http.get(&url).query(&params).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, query, marker, "tmdb typed-search failed");
-                return Vec::new();
-            }
-        };
-        if !res.status().is_success() {
-            return Vec::new();
-        }
-        let raw: TmdbMultiRaw = match res.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, query, marker, "tmdb typed-search parse failed");
-                return Vec::new();
-            }
-        };
-        // Typed endpoints omit `media_type` — the kind is the one we
-        // asked for, so stamp it directly rather than reading the field.
-        let out: Vec<TmdbSuggestion> = raw
-            .results
-            .into_iter()
-            .filter_map(|r| {
-                let title = r.title.or(r.name)?;
-                let date = r.release_date.or(r.first_air_date);
-                let year = date
-                    .as_deref()
-                    .and_then(|d| d.split('-').next())
-                    .and_then(|y| y.parse().ok());
-                Some(TmdbSuggestion {
-                    kind,
-                    tmdb_id: r.id,
-                    title,
-                    year,
-                    overview: r.overview.filter(|s| !s.is_empty()),
-                    poster_path: r.poster_path,
-                })
-            })
-            .take(10)
-            .collect();
         self.inner
             .searches
-            .write()
+            .get_or_fetch(cache_key, || async {
+                // TMDB's canonical year filters for the typed search endpoints.
+                let year_param = match kind {
+                    TmdbKind::Movie => "primary_release_year",
+                    TmdbKind::Tv => "first_air_date_year",
+                };
+                let year_str = year.map(|y| y.to_string());
+                let mut params = vec![
+                    ("query", trimmed),
+                    ("include_adult", "false"),
+                    ("page", "1"),
+                ];
+                if let Some(y) = year_str.as_deref() {
+                    params.push((year_param, y));
+                }
+                let raw: TmdbMultiRaw = self
+                    .get_json(&format!("search/{marker}"), &params, "typed-search")
+                    .await
+                    .ok()?;
+                // Typed endpoints omit `media_type` — the kind is the one we
+                // asked for, so stamp it directly rather than reading the field.
+                Some(
+                    raw.results
+                        .into_iter()
+                        .filter_map(|r| r.into_suggestion(kind))
+                        .take(10)
+                        .collect(),
+                )
+            })
             .await
-            .insert(cache_key, out.clone());
-        out
     }
 
     /// Fetch TMDB's canonical genre taxonomy for `kind` (movies or TV).
-    /// Powers the onboarding genre picker. Cached in-memory per kind for
-    /// `GENRE_CACHE_TTL`; returns an empty list on any error or when the
-    /// client is unconfigured (the caller renders an empty picker rather
-    /// than failing onboarding).
+    /// Powers the onboarding genre picker. Returns an empty list on any
+    /// error (the caller renders an empty picker rather than failing
+    /// onboarding).
     pub async fn genre_list(&self, kind: TmdbKind) -> Vec<Genre> {
         let marker = kind_marker(kind);
-        if let Some((fetched, genres)) = self.inner.genres_cache.read().await.get(marker).cloned()
-            && fetched.elapsed() < GENRE_CACHE_TTL
-        {
-            return genres;
-        }
-        let url = format!(
-            "https://api.themoviedb.org/3/genre/{marker}/list?api_key={}&language=en-US",
-            self.inner.api_key
-        );
-        let res = match self.inner.http.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, ?kind, "tmdb genre list fetch failed");
-                return Vec::new();
-            }
-        };
-        if !res.status().is_success() {
-            return Vec::new();
-        }
-        let raw: TmdbGenreListRaw = match res.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, ?kind, "tmdb genre list parse failed");
-                return Vec::new();
-            }
-        };
-        let genres: Vec<Genre> = raw
-            .genres
-            .into_iter()
-            .map(|g| Genre {
-                id: g.id,
-                name: g.name,
-            })
-            .collect();
         self.inner
-            .genres_cache
-            .write()
+            .genres
+            .get_or_fetch(marker, || async {
+                let raw: TmdbGenreListRaw = self
+                    .get_json(
+                        &format!("genre/{marker}/list"),
+                        &[("language", "en-US")],
+                        "genre list",
+                    )
+                    .await
+                    .ok()?;
+                Some(
+                    raw.genres
+                        .into_iter()
+                        .map(|g| Genre {
+                            id: g.id,
+                            name: g.name,
+                        })
+                        .collect(),
+                )
+            })
             .await
-            .insert(marker, (Instant::now(), genres.clone()));
-        genres
+            .unwrap_or_default()
     }
 
     /// `/trending/{movie,tv}/week` — TMDB's short-window activity
@@ -407,8 +386,10 @@ impl TmdbClient {
     /// also search francophone trackers by their local title.
     pub async fn trending(&self, kind: TmdbKind, page: u32) -> Vec<MediaMetadata> {
         let endpoint = kind_marker(kind);
+        let page = page.to_string();
         self.fetch_list(
-            format!("trending/{endpoint}/week?language=fr-FR&page={page}"),
+            &format!("trending/{endpoint}/week"),
+            &[("language", "fr-FR"), ("page", &page)],
             kind,
         )
         .await
@@ -423,12 +404,20 @@ impl TmdbClient {
         until: chrono::NaiveDate,
         page: u32,
     ) -> Vec<MediaMetadata> {
+        let (since, until, page) = (since.to_string(), until.to_string(), page.to_string());
         self.fetch_list(
-            format!(
-                "discover/movie?language=fr-FR&region=FR&with_release_type=4\
-                 &release_date.gte={since}&release_date.lte={until}\
-                 &sort_by=popularity.desc&include_adult=false&vote_count.gte=5&page={page}"
-            ),
+            "discover/movie",
+            &[
+                ("language", "fr-FR"),
+                ("region", "FR"),
+                ("with_release_type", "4"),
+                ("release_date.gte", &since),
+                ("release_date.lte", &until),
+                ("sort_by", "popularity.desc"),
+                ("include_adult", "false"),
+                ("vote_count.gte", "5"),
+                ("page", &page),
+            ],
             TmdbKind::Movie,
         )
         .await
@@ -436,8 +425,14 @@ impl TmdbClient {
 
     /// `/tv/on_the_air` — series with an episode airing in the next week.
     pub async fn on_the_air(&self, page: u32) -> Vec<MediaMetadata> {
+        let page = page.to_string();
         self.fetch_list(
-            format!("tv/on_the_air?language=fr-FR&timezone=Europe%2FParis&page={page}"),
+            "tv/on_the_air",
+            &[
+                ("language", "fr-FR"),
+                ("timezone", "Europe/Paris"),
+                ("page", &page),
+            ],
             TmdbKind::Tv,
         )
         .await
@@ -456,68 +451,50 @@ impl TmdbClient {
             TmdbKind::Movie => "primary_release_date.gte",
             TmdbKind::Tv => "first_air_date.gte",
         };
-        let mut query = format!(
-            "discover/{endpoint}?language=fr-FR&sort_by=popularity.desc&include_adult=false\
-             &vote_count.gte={}&{date_param}={}&page={page}",
-            filter.min_votes, filter.since
+        let (min_votes, since, page) = (
+            filter.min_votes.to_string(),
+            filter.since.to_string(),
+            page.to_string(),
         );
-        for (param, ids) in [
-            ("with_genres", &filter.with_genres),
-            ("without_genres", &filter.without_genres),
-        ] {
-            if !ids.is_empty() {
-                use std::fmt::Write as _;
-                let _ = write!(query, "&{param}={ids}");
-            }
+        let mut query = vec![
+            ("language", "fr-FR"),
+            ("sort_by", "popularity.desc"),
+            ("include_adult", "false"),
+            ("vote_count.gte", min_votes.as_str()),
+            (date_param, since.as_str()),
+            ("page", page.as_str()),
+        ];
+        if !filter.with_genres.is_empty() {
+            query.push(("with_genres", filter.with_genres.as_str()));
         }
-        self.fetch_list(query, kind).await
+        if !filter.without_genres.is_empty() {
+            query.push(("without_genres", filter.without_genres.as_str()));
+        }
+        self.fetch_list(&format!("discover/{endpoint}"), &query, kind)
+            .await
     }
 
-    /// Shared cached fetch for the paged `{ results: [...] }` list endpoints.
-    /// `path_and_query` is relative to `/3/` and doubles as the cache key.
-    /// Returns empty on any error.
-    async fn fetch_list(&self, path_and_query: String, kind: TmdbKind) -> Vec<MediaMetadata> {
-        if let Some((fetched, items)) = self
-            .inner
-            .discover_cache
-            .read()
-            .await
-            .get(&path_and_query)
-            .cloned()
-            && fetched.elapsed() < LIST_CACHE_TTL
-        {
-            return items;
-        }
-        let url = format!(
-            "https://api.themoviedb.org/3/{path_and_query}&api_key={}",
-            self.inner.api_key
-        );
-        let res = match self.inner.http.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, path_and_query, "tmdb list fetch failed");
-                return Vec::new();
-            }
-        };
-        if !res.status().is_success() {
-            tracing::warn!(status = %res.status(), path_and_query, "tmdb list fetch refused");
-            return Vec::new();
-        }
-        let raw: TmdbDiscoverRaw = match res.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, path_and_query, "tmdb list parse failed");
-                return Vec::new();
-            }
-        };
-        let items: Vec<MediaMetadata> =
-            raw.results.into_iter().map(|r| r.into_meta(kind)).collect();
+    /// Shared cached fetch for the paged `{ results: [...] }` list
+    /// endpoints. Path + query double as the cache key. Returns empty on
+    /// any error.
+    async fn fetch_list(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        kind: TmdbKind,
+    ) -> Vec<MediaMetadata> {
+        let key = std::iter::once(path.to_owned())
+            .chain(query.iter().map(|(k, v)| format!("{k}={v}")))
+            .collect::<Vec<_>>()
+            .join("&");
         self.inner
-            .discover_cache
-            .write()
+            .lists
+            .get_or_fetch(key, || async {
+                let raw: TmdbDiscoverRaw = self.get_json(path, query, "list").await.ok()?;
+                Some(raw.results.into_iter().map(|r| r.into_meta(kind)).collect())
+            })
             .await
-            .insert(path_and_query, (Instant::now(), items.clone()));
-        items
+            .unwrap_or_default()
     }
 
     /// List the episodes TMDB has on file for a given TV season. Used by the
@@ -527,51 +504,36 @@ impl TmdbClient {
     /// usefully distinguish "doesn't exist" from "TMDB is down" and treats
     /// both as "no expected episodes right now".
     pub async fn tv_season_episodes(&self, tmdb_id: u64, season: u32) -> Vec<EpisodeMetadata> {
-        let key = (tmdb_id, season);
-        if let Some(hit) = self.inner.seasons.read().await.get(&key).cloned() {
-            return hit;
-        }
-        let url = format!(
-            "https://api.themoviedb.org/3/tv/{tmdb_id}/season/{season}?api_key={}",
-            self.inner.api_key
-        );
-        let res = match self.inner.http.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, tmdb_id, season, "tmdb season fetch failed");
-                return Vec::new();
-            }
-        };
-        if !res.status().is_success() {
-            return Vec::new();
-        }
-        let raw: TmdbSeasonRaw = match res.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, tmdb_id, season, "tmdb season parse failed");
-                return Vec::new();
-            }
-        };
-        let episodes: Vec<EpisodeMetadata> = raw
-            .episodes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| EpisodeMetadata {
-                season: e.season_number.unwrap_or(season),
-                episode: e.episode_number,
-                name: e.name.filter(|s| !s.is_empty()),
-                overview: e.overview.filter(|s| !s.is_empty()),
-                air_date: e.air_date.filter(|s| !s.is_empty()),
-                runtime_minutes: e.runtime,
-                still_path: e.still_path,
-            })
-            .collect();
         self.inner
             .seasons
-            .write()
+            .get_or_fetch((tmdb_id, season), || async {
+                let raw: TmdbSeasonRaw = match self
+                    .get_json(&format!("tv/{tmdb_id}/season/{season}"), &[], "season")
+                    .await
+                {
+                    Ok(raw) => raw,
+                    // A season TMDB doesn't know is a definitive empty list.
+                    Err(Miss::NotFound) => return Some(Vec::new()),
+                    Err(Miss::Failed) => return None,
+                };
+                Some(
+                    raw.episodes
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|e| EpisodeMetadata {
+                            season: e.season_number.unwrap_or(season),
+                            episode: e.episode_number,
+                            name: e.name.filter(|s| !s.is_empty()),
+                            overview: e.overview.filter(|s| !s.is_empty()),
+                            air_date: e.air_date.filter(|s| !s.is_empty()),
+                            runtime_minutes: e.runtime,
+                            still_path: e.still_path,
+                        })
+                        .collect(),
+                )
+            })
             .await
-            .insert(key, episodes.clone());
-        episodes
+            .unwrap_or_default()
     }
 
     /// Look up `tmdb_id` as a movie, then as a TV show. Cached.
@@ -588,6 +550,16 @@ impl TmdbClient {
         self.lookup_with_kind(tmdb_id, None).await
     }
 
+    /// [`Self::lookup_with_kind`] for an id read from the database (`i64`).
+    pub async fn lookup_db_id(
+        &self,
+        tmdb_id: i64,
+        kind_hint: Option<TmdbKind>,
+    ) -> Option<MediaMetadata> {
+        let id = u64::try_from(tmdb_id).ok()?;
+        self.lookup_with_kind(id, kind_hint).await
+    }
+
     pub async fn lookup_with_kind(
         &self,
         tmdb_id: u64,
@@ -596,65 +568,41 @@ impl TmdbClient {
         // Cache key includes the kind so a /movie/X lookup doesn't
         // serve a stale /tv/X entry from a previous call.
         let cache_key = (tmdb_id, kind_hint.map(kind_marker));
-        if let Some(hit) = self.inner.typed_cache.read().await.get(&cache_key).cloned() {
-            return match hit {
-                CacheEntry::Found(m) => Some(*m),
-                CacheEntry::NotFound => None,
-            };
-        }
-        // Try the hinted kind first, fall back to the other one if
-        // nothing comes back. The fallback matters because some
-        // collections were misclassified by an older parser
-        // (`Silicon.Valley.S01.MULTI` → kind=movie, but the actual
-        // tmdb_id points at the TV show), and a strict-only lookup
-        // would 404 in that case and serve no poster at all.
-        let order: &[TmdbKind] = match kind_hint {
-            Some(TmdbKind::Tv) => &[TmdbKind::Tv, TmdbKind::Movie],
-            Some(TmdbKind::Movie) | None => &[TmdbKind::Movie, TmdbKind::Tv],
-        };
-        for &k in order {
-            if let Some(m) = self.fetch(tmdb_id, k).await {
-                self.inner
-                    .typed_cache
-                    .write()
-                    .await
-                    .insert(cache_key, CacheEntry::Found(Box::new(m.clone())));
-                return Some(m);
-            }
-        }
-        self.inner
+        let entry = self
+            .inner
             .typed_cache
-            .write()
-            .await
-            .insert(cache_key, CacheEntry::NotFound);
-        None
+            .get_or_fetch(cache_key, || async {
+                // Try the hinted kind first, fall back to the other one if
+                // nothing comes back. The fallback matters because some
+                // collections were misclassified by an older parser
+                // (`Silicon.Valley.S01.MULTI` → kind=movie, but the actual
+                // tmdb_id points at the TV show), and a strict-only lookup
+                // would 404 in that case and serve no poster at all.
+                let order: &[TmdbKind] = match kind_hint {
+                    Some(TmdbKind::Tv) => &[TmdbKind::Tv, TmdbKind::Movie],
+                    Some(TmdbKind::Movie) | None => &[TmdbKind::Movie, TmdbKind::Tv],
+                };
+                for &k in order {
+                    match self.fetch(tmdb_id, k).await {
+                        Ok(m) => return Some(CacheEntry::Found(Box::new(m))),
+                        Err(Miss::NotFound) => {}
+                        Err(Miss::Failed) => return None,
+                    }
+                }
+                Some(CacheEntry::NotFound)
+            })
+            .await?;
+        match entry {
+            CacheEntry::Found(m) => Some(*m),
+            CacheEntry::NotFound => None,
+        }
     }
 
-    async fn fetch(&self, tmdb_id: u64, kind: TmdbKind) -> Option<MediaMetadata> {
-        let endpoint = match kind {
-            TmdbKind::Movie => "movie",
-            TmdbKind::Tv => "tv",
-        };
-        let url = format!(
-            "https://api.themoviedb.org/3/{endpoint}/{tmdb_id}?api_key={}",
-            self.inner.api_key
-        );
-        let res = match self.inner.http.get(&url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, tmdb_id, ?kind, "tmdb fetch failed");
-                return None;
-            }
-        };
-        if !res.status().is_success() {
-            return None;
-        }
-        let raw: TmdbRaw = res.json().await.ok()?;
+    async fn fetch(&self, tmdb_id: u64, kind: TmdbKind) -> Result<MediaMetadata, Miss> {
+        let raw: TmdbRaw = self
+            .get_json(&format!("{}/{tmdb_id}", kind_marker(kind)), &[], "lookup")
+            .await?;
         let date = raw.release_date.or(raw.first_air_date);
-        let year = date
-            .as_deref()
-            .and_then(|d| d.split('-').next())
-            .and_then(|y| y.parse().ok());
         let title = raw.title.or(raw.name).unwrap_or_default();
         // Detail endpoints return full genre objects; keep both the names
         // (for display) and the ids (for catalogue filtering).
@@ -671,12 +619,12 @@ impl TmdbClient {
                 .as_ref()
                 .and_then(|v| v.first().copied())
         });
-        Some(MediaMetadata {
+        Ok(MediaMetadata {
             kind,
             tmdb_id,
             title,
             overview: raw.overview.filter(|s| !s.is_empty()),
-            year,
+            year: year_of(date.as_deref()),
             poster_path: raw.poster_path,
             backdrop_path: raw.backdrop_path,
             vote_score: raw.vote_average.map(|v| v / 10.0),
@@ -762,10 +710,7 @@ struct TmdbDiscoverResult {
 impl TmdbDiscoverResult {
     fn into_meta(self, kind: TmdbKind) -> MediaMetadata {
         let date = self.release_date.or(self.first_air_date);
-        let year = date
-            .as_deref()
-            .and_then(|d| d.split('-').next())
-            .and_then(|y| y.parse().ok());
+        let year = year_of(date.as_deref());
         let title = self.title.or(self.name).unwrap_or_default();
         MediaMetadata {
             kind,

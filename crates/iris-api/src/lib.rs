@@ -4,11 +4,14 @@ pub mod client_version;
 pub mod collection_assign;
 pub mod collections_scheduler;
 pub mod error;
+pub mod fanout;
 pub mod freshness_scheduler;
 pub mod live_tv;
+pub mod maintenance;
 pub mod middleware;
 pub mod observability;
 pub mod openapi;
+pub mod passwords;
 pub mod presence;
 pub mod pulse;
 pub mod ranking;
@@ -21,6 +24,7 @@ pub mod state;
 pub mod tmdb;
 pub mod tmdb_backfill;
 pub mod tmdb_resolve;
+pub mod ttl_cache;
 
 use std::path::{Path, PathBuf};
 
@@ -210,6 +214,7 @@ fn spawn_background_jobs(
     // clicks go through the fast path. No TMDB call. Never ingests
     // on its own.
     collections_scheduler::spawn(pool.clone(), provider_registry);
+    maintenance::spawn(pool.clone());
 
     // Discovery freshness scheduler: the tracker RSS rolling window. Polls
     // each provider's latest-releases feed one (provider × kind) slice per

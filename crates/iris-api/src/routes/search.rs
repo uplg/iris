@@ -180,74 +180,77 @@ async fn library_matches_for(state: &AppState, q: &SearchQuery) -> Vec<LibraryMa
             return Vec::new();
         }
     };
-    let mut out = Vec::new();
-    for c in summaries {
-        if let Some(kind) = q.kind {
-            let want = match kind {
-                MediaKind::Movie => "movie",
-                MediaKind::Tv => "tv",
-            };
-            if c.kind != want {
-                continue;
-            }
+    let wanted = summaries.into_iter().filter(|c| match q.kind {
+        Some(MediaKind::Movie) => c.kind == "movie",
+        Some(MediaKind::Tv) => c.kind == "tv",
+        None => true,
+    });
+    crate::fanout::map_ordered(wanted, |c| library_match(state, q, c))
+        .await
+        .into_iter()
+        .flatten()
+        .take(5)
+        .collect()
+}
+
+/// One library row for the query, or `None` when the collection can't
+/// answer it (an episode it doesn't own, a movie for an episode query).
+async fn library_match(
+    state: &AppState,
+    query: &SearchQuery,
+    summary: iris_db::collections::CollectionSummary,
+) -> Option<LibraryMatch> {
+    let mut hit = LibraryMatch {
+        collection_id: summary.id.to_string(),
+        display_title: summary.display_title,
+        kind: summary.kind.clone(),
+        tmdb_id: summary.tmdb_id,
+        is_anime: summary.is_anime,
+        torrent_count: summary.torrent_count,
+        episode_count: summary.episode_count,
+        representative_infohash: summary.representative_infohash,
+        episode_season: None,
+        episode_number: None,
+        episode_infohash: None,
+        episode_file_idx: None,
+        season_episode_count: None,
+    };
+    match (summary.kind.as_str(), query.season, query.episode) {
+        ("tv", season, Some(episode)) => {
+            let ef = iris_db::episode_files::find_owned_episode(
+                state.db(),
+                summary.id,
+                season.map(i64::from),
+                i64::from(episode),
+            )
+            .await
+            .ok()
+            .flatten()?;
+            hit.episode_season = Some(ef.season);
+            hit.episode_number = Some(ef.episode);
+            hit.episode_infohash = Some(ef.infohash);
+            hit.episode_file_idx = Some(ef.file_idx);
         }
-        let mut m = LibraryMatch {
-            collection_id: c.id.to_string(),
-            display_title: c.display_title,
-            kind: c.kind.clone(),
-            tmdb_id: c.tmdb_id,
-            is_anime: c.is_anime,
-            torrent_count: c.torrent_count,
-            episode_count: c.episode_count,
-            representative_infohash: c.representative_infohash,
-            episode_season: None,
-            episode_number: None,
-            episode_infohash: None,
-            episode_file_idx: None,
-            season_episode_count: None,
-        };
-        match (c.kind.as_str(), q.season, q.episode) {
-            ("tv", season, Some(episode)) => {
-                let hit = iris_db::episode_files::find_owned_episode(
-                    state.db(),
-                    c.id,
-                    season.map(i64::from),
-                    i64::from(episode),
-                )
-                .await
-                .ok()
-                .flatten();
-                let Some(ef) = hit else { continue };
-                m.episode_season = Some(ef.season);
-                m.episode_number = Some(ef.episode);
-                m.episode_infohash = Some(ef.infohash);
-                m.episode_file_idx = Some(ef.file_idx);
+        ("tv", Some(season), None) => {
+            let n = iris_db::episode_files::count_owned_in_season(
+                state.db(),
+                summary.id,
+                i64::from(season),
+            )
+            .await
+            .unwrap_or(0);
+            if n == 0 {
+                return None;
             }
-            ("tv", Some(season), None) => {
-                let n = iris_db::episode_files::count_owned_in_season(
-                    state.db(),
-                    c.id,
-                    i64::from(season),
-                )
-                .await
-                .unwrap_or(0);
-                if n == 0 {
-                    continue;
-                }
-                m.episode_season = Some(i64::from(season));
-                m.season_episode_count = Some(n);
-            }
-            ("tv", None, None) => {}
-            // A movie can't satisfy an episode-shaped query.
-            (_, s, e) if s.is_some() || e.is_some() => continue,
-            _ => {}
+            hit.episode_season = Some(i64::from(season));
+            hit.season_episode_count = Some(n);
         }
-        out.push(m);
-        if out.len() >= 5 {
-            break;
-        }
+        ("tv", None, None) => {}
+        // A movie can't satisfy an episode-shaped query.
+        (_, s, e) if s.is_some() || e.is_some() => return None,
+        _ => {}
     }
-    out
+    Some(hit)
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
