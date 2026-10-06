@@ -429,7 +429,10 @@ pub async fn continue_watching_next_up(
                 SELECT 1 FROM playback_progress p2 \
                 JOIN episode_files ef2 ON ef2.infohash = p2.infohash AND ef2.file_idx = p2.file_idx \
                 WHERE p2.user_id = ?1 AND ef2.collection_id = ef.collection_id \
-                  AND p2.last_watched_at > p.last_watched_at) \
+                  AND (p2.last_watched_at > p.last_watched_at \
+                       OR (p2.last_watched_at = p.last_watched_at \
+                           AND (ef2.season > ef.season \
+                                OR (ef2.season = ef.season AND ef2.episode > ef.episode))))) \
          ) latest \
          JOIN collections c ON c.id = latest.cid \
          JOIN episode_files nf ON nf.collection_id = latest.cid \
@@ -497,7 +500,10 @@ pub async fn continue_watching_frontiers(
                 SELECT 1 FROM playback_progress p2 \
                 JOIN episode_files ef2 ON ef2.infohash = p2.infohash AND ef2.file_idx = p2.file_idx \
                 WHERE p2.user_id = ?1 AND ef2.collection_id = ef.collection_id \
-                  AND p2.last_watched_at > p.last_watched_at) \
+                  AND (p2.last_watched_at > p.last_watched_at \
+                       OR (p2.last_watched_at = p.last_watched_at \
+                           AND (ef2.season > ef.season \
+                                OR (ef2.season = ef.season AND ef2.episode > ef.episode))))) \
          ) latest \
          JOIN collections c ON c.id = latest.cid AND c.kind = 'tv' \
          WHERE NOT EXISTS ( \
@@ -875,6 +881,51 @@ mod tests {
             subtitle_track_idx: None,
             completed,
         }
+    }
+
+    #[tokio::test]
+    async fn a_title_marked_watched_at_once_has_one_frontier_its_last_episode() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let show = crate::collections::find_or_create(
+            &pool,
+            "severance",
+            "Severance",
+            crate::collections::Kind::Tv,
+            false,
+        )
+        .await
+        .unwrap();
+        let mut files = Vec::new();
+        for episode in [3, 1, 2] {
+            let t = make_torrent(&pool, user, &format!("Severance.S01E0{episode}")).await;
+            crate::torrents::set_collection(&pool, &t.infohash, Some(show.id))
+                .await
+                .unwrap();
+            crate::episode_files::upsert(
+                &pool,
+                crate::episode_files::UpsertEpisodeFile {
+                    collection_id: show.id,
+                    season: 1,
+                    episode,
+                    infohash: t.infohash.clone(),
+                    file_idx: 0,
+                    derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+            files.push((t.infohash, 0));
+        }
+        mark_completed_many(&pool, user, &files).await.unwrap();
+
+        let frontiers = continue_watching_frontiers(&pool, user, 24).await.unwrap();
+        assert_eq!(frontiers.len(), 1, "tied timestamps no longer all survive");
+        assert_eq!(
+            (frontiers[0].prev_season, frontiers[0].prev_episode),
+            (1, 3)
+        );
     }
 
     #[tokio::test]
