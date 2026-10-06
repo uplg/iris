@@ -46,6 +46,8 @@ fun <T> ActionSheet(
     waits: (T) -> Boolean = { false },
     inFlight: (T) -> Boolean = { false },
     emptyText: String? = null,
+    /** Another action of the screen is in flight: the server actions wait (the screen runs one at a time). */
+    blocked: Boolean = false,
     details: @Composable ColumnScope.() -> Unit = {},
 ) {
     val first = remember { FocusRequester() }
@@ -68,12 +70,14 @@ fun <T> ActionSheet(
         Column(Modifier.padding(horizontal = IrisSpace.s4), verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
             details()
             if (actions.isEmpty() && emptyText != null) StatusLine(emptyText)
+            if (blocked && pending == null) StatusLine("Another action is still on its way to the server: wait for it to finish.", tone = StatusTone.Warn)
             Column(Modifier.padding(top = IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
                 actions.forEachIndexed { i, action ->
                     ActionButton(
                         label(action),
                         onClick = {
                             if (pending != null || actions.any(inFlight)) return@ActionButton
+                            if (blocked && waits(action)) return@ActionButton
                             if (waits(action)) {
                                 waiting = action
                                 seen = false

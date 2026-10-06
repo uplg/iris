@@ -9,6 +9,8 @@ import androidx.tvprovider.media.tv.Channel
 import androidx.tvprovider.media.tv.PreviewProgram
 import androidx.tvprovider.media.tv.TvContractCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.MainActivity
@@ -28,68 +30,70 @@ import studio.kahn.iris.tv.MainActivity
  *    fall back to a generic placeholder
  *
  * `sync()` is best-effort: every IO failure is swallowed so a flaky network
- * never breaks the home launcher experience.
+ * never breaks the home launcher experience. Every read happens before the
+ * channel is cleared (a sync cut short never leaves it half rebuilt), the
+ * TMDB reads side by side through [TmdbMetadataCache]. Cancellation
+ * propagates.
  */
 class ChannelsService(private val context: Context) {
 
+    private data class Program(val title: String, val description: String?, val posterUri: String?, val deepLink: String, val type: Int)
+
     suspend fun sync(container: AppContainer) {
         withContext(Dispatchers.IO) {
-            val url = runCatching { container.sessionStore.serverUrl.first() }.getOrNull()
-                ?: return@withContext
+            val url = container.sessionStore.serverUrl.first() ?: return@withContext
             val api: IrisApi = container.apiFor(url)
-            val library = runCatching { api.listTorrents() }.getOrDefault(emptyList())
-            val cw = runCatching { api.continueWatching() }.getOrDefault(emptyList())
-            if (library.isEmpty() && cw.isEmpty()) return@withContext
+            val library = async { bestEffort { api.listTorrents() }.orEmpty() }
+            val cw = async { bestEffort { api.continueWatching() }.orEmpty() }
+            // Pass the kind: TMDB's movie/tv id namespaces overlap, so an id-only lookup can
+            // resolve to an unrelated entry and paint the wrong poster on the launcher channel.
+            val watching = cw.await().take(10).map { item ->
+                async {
+                    val meta = item.tmdbId?.let { TmdbMetadataCache.get(api, it, item.kind?.value) }
+                    Program(
+                        title = item.filePath?.substringAfterLast('/') ?: item.torrentName,
+                        description = "Continue watching",
+                        posterUri = tmdbPosterUrl(meta?.posterPath),
+                        deepLink = "iris://watch/${item.infohash}/${item.fileIdx}",
+                        type = TvContractCompat.PreviewPrograms.TYPE_MOVIE,
+                    )
+                }
+            }
+            val owned = library.await().take(15).map { t ->
+                async {
+                    val meta = t.tmdbId?.let { TmdbMetadataCache.get(api, it, t.kind?.value) }
+                    val idx = t.files
+                        .filter { f -> isVideoPath(f.path) }
+                        .maxByOrNull { f -> f.sizeBytes }
+                        ?.index ?: 0
+                    Program(
+                        title = meta?.title ?: t.name ?: t.infohash.take(12),
+                        description = meta?.overview,
+                        posterUri = tmdbPosterUrl(meta?.posterPath),
+                        deepLink = "iris://watch/${t.infohash}/$idx",
+                        type = if (meta?.kind == TmdbKind.tv) TvContractCompat.PreviewPrograms.TYPE_TV_SERIES else TvContractCompat.PreviewPrograms.TYPE_MOVIE,
+                    )
+                }
+            }
+            val programs = (watching + owned).awaitAll()
+            if (programs.isEmpty()) return@withContext
 
             val channelId = ensureChannel()
             if (channelId < 0) return@withContext
             clearPrograms(channelId)
-
-            var weight = library.size + cw.size + 1
-            for (item in cw.take(10)) {
-                val poster = posterUriFor(api, item.tmdbId, item.kind?.value)
-                val (host, idx) = item.infohash to item.fileIdx
+            var weight = programs.size + 1
+            for (p in programs) {
                 insertProgram(
                     channelId = channelId,
-                    title = item.filePath?.substringAfterLast('/') ?: item.torrentName,
-                    description = "Continue watching",
-                    posterUri = poster,
-                    deepLink = "iris://watch/$host/$idx",
+                    title = p.title,
+                    description = p.description,
+                    posterUri = p.posterUri,
+                    deepLink = p.deepLink,
                     weight = weight--,
-                    type = TvContractCompat.PreviewPrograms.TYPE_MOVIE,
-                )
-            }
-            for (t in library.take(15)) {
-                val meta =
-                    t.tmdbId?.let { runCatching { api.tmdbMetadata(it, t.kind?.value) }.getOrNull() }
-                val poster = meta?.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
-                val idx = t.files
-                    .filter { f -> isVideoPath(f.path) }
-                    .maxByOrNull { f -> f.sizeBytes }
-                    ?.index ?: 0
-                insertProgram(
-                    channelId = channelId,
-                    title = meta?.title ?: t.name ?: t.infohash.take(12),
-                    description = meta?.overview,
-                    posterUri = poster,
-                    deepLink = "iris://watch/${t.infohash}/$idx",
-                    weight = weight--,
-                    type = if (meta?.kind == TmdbKind.tv)
-                        TvContractCompat.PreviewPrograms.TYPE_TV_SERIES
-                    else
-                        TvContractCompat.PreviewPrograms.TYPE_MOVIE,
+                    type = p.type,
                 )
             }
         }
-    }
-
-    private suspend fun posterUriFor(api: IrisApi, tmdbId: Long?, kind: String?): String? {
-        if (tmdbId == null) return null
-        // Pass the kind: TMDB's movie/tv id namespaces overlap, so an
-        // id-only lookup can resolve to an unrelated entry and paint the
-        // wrong poster on the launcher channel.
-        val meta = runCatching { api.tmdbMetadata(tmdbId, kind) }.getOrNull() ?: return null
-        return meta.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
     }
 
     /**

@@ -229,7 +229,7 @@ class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator 
                     // the "401 + Retry that never reconnects" trap. Drop the
                     // session so the nav root routes the TV back to device
                     // pairing instead of stranding the user.
-                    runBlocking { runCatching { sessionStore.clear() } }
+                    runBlocking { bestEffort { sessionStore.clear() } }
                     null
                 }
                 // 5xx / other: transient server-side, keep the session so the

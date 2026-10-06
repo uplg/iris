@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
@@ -85,6 +86,7 @@ import studio.kahn.iris.tv.ui.screens.settings.languageOptions
 import studio.kahn.iris.tv.ui.screens.settings.name
 import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
@@ -116,6 +118,8 @@ fun SettingsScreen(
     val app = LocalContext.current.applicationContext as Application
     val updater = irisViewModel(container) { c, _ -> UpdateViewModel(c, app) }
     val state by vm.state.collectAsStateWithLifecycle()
+    // The wait for a paired TV reads only while Settings is in front.
+    RepeatWhileStarted(state.waitingForDevice) { if (state.waitingForDevice) vm.waitForDeviceWhileStarted() }
     val update by updater.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(state.signedOut) { if (state.signedOut) onSignOut() }
@@ -233,6 +237,17 @@ fun SettingsContent(
     val railFocus = remember { FocusRequester() }
     var railFocused by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { runCatching { railFocus.requestFocus() } }
+    val sectionFocus = remember { FocusRequester() }
+    var dialogWasOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(state.dialog == null) {
+        if (state.dialog != null) {
+            dialogWasOpen = true
+        } else if (dialogWasOpen) {
+            dialogWasOpen = false
+            withFrameNanos { }
+            runCatching { sectionFocus.requestFocus() }
+        }
+    }
     BackHandler(enabled = state.dialog == null) {
         if (railFocused) onBack() else railFocus.requestFocus()
     }
@@ -273,6 +288,10 @@ fun SettingsContent(
                     Column(
                         Modifier
                             .weight(1f)
+                            // A dialog or a panel closing gives the focus back to its opener.
+                            .focusRequester(sectionFocus)
+                            .focusRestorer()
+                            .focusGroup()
                             .verticalScroll(rememberScrollState())
                             .padding(IrisSpace.s1),
                         verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),

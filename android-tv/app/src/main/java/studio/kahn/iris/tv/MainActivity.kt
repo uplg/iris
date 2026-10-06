@@ -13,6 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.ui.IrisRoot
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
 import studio.kahn.iris.tv.ui.nav.LaunchTarget
@@ -42,9 +43,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val container = (application as IrisApp).container
         if (savedInstanceState == null) launch.value = intent.launchTarget()
-        lifecycleScope.launch {
-            runCatching { container.channels.sync(container) }
-        }
+        lifecycleScope.launch { bestEffort { container.channels.sync(container) } }
         setContent {
             IrisTheme {
                 // null until the stored session is read, so the first screen is
@@ -64,6 +63,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Leaving for the launcher: its row shows what was just watched (singleTask: onCreate is rare).
+    override fun onStop() {
+        super.onStop()
+        val container = (application as IrisApp).container
+        container.applicationScope.launch { bestEffort { container.channels.sync(container) } }
     }
 
     // singleTask: a Watch Next pick or a voice search while Iris is open lands here.

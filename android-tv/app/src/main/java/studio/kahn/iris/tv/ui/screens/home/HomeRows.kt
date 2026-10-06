@@ -31,6 +31,7 @@ import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.CardRow
 import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
+import studio.kahn.iris.tv.ui.components.focusReturn
 import studio.kahn.iris.tv.ui.components.PosterCard
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.Spinner
@@ -59,6 +60,12 @@ class CardFocus(private val cards: FocusReturn) {
         private set
 
     fun requester(key: String): FocusRequester = cards.requester(key)
+
+    /** Tags a card: focus comes back to it from a menu, another screen, the player. */
+    fun modifier(key: String): Modifier = Modifier.focusReturn(cards, key)
+
+    /** Focuses the card focused last (back on this screen); false when it is not composed. */
+    fun focusLast(): Boolean = cards.focusLast()
 
     fun open(card: CardModel, eyebrow: String, row: List<CardModel>) {
         menu = OpenMenu(card, eyebrow, row.map { it.key })
@@ -115,6 +122,7 @@ fun CardMenuHost(
             busyLabel = { it.busyLabel },
             waits = { it in SERVER_ACTIONS },
             inFlight = { busy != null && busy == busyKeyOf(menu.card.key, it) },
+            blocked = busy != null && menu.card.menu.none { busyKeyOf(menu.card.key, it) == busy },
             onAction = { onCardAction(menu.card.key, it) },
             onDismiss = focus::dismiss,
         )
@@ -132,7 +140,7 @@ fun HomeCard(
     modifier: Modifier = Modifier,
     fillCell: Boolean = false,
 ) {
-    val m = modifier.focusRequester(focus.requester(card.key))
+    val m = modifier.then(focus.modifier(card.key))
     val click = { onAction(card.key, card.primary) }
     val long = onMenu.takeIf { card.menu.isNotEmpty() }
     if (still) {

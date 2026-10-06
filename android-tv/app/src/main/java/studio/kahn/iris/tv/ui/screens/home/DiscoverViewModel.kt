@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.CatalogCard
 import studio.kahn.iris.tv.data.DismissRequest
@@ -104,6 +105,13 @@ class DiscoverViewModel(
     )
     val state: StateFlow<DiscoverUiState> = data.map(::discoverUi)
         .stateIn(viewModelScope, SharingStarted.Eagerly, discoverUi(data.value))
+    private val actions = BusyActions(viewModelScope, oneAtATime = true)
+
+    init {
+        viewModelScope.launch {
+            actions.state.collect { a -> data.update { it.copy(busy = a.busyKey, notice = a.notice) } }
+        }
+    }
 
     private val eventChannel = Channel<DiscoverEvent>(Channel.BUFFERED)
     val events: Flow<DiscoverEvent> = eventChannel.receiveAsFlow()
@@ -166,18 +174,11 @@ class DiscoverViewModel(
 
     /** Hidden from every suggestion surface, on the server's word. */
     private fun dismiss(key: String, card: CatalogCard) {
-        if (data.value.busy != null) return
-        data.update { it.copy(busy = key, notice = null) }
-        viewModelScope.launch {
-            val notice = try {
-                container.api().dismissForYou(DismissRequest(card.catalogId))
-                readForYou()
-                data.value.mood?.let { readResults(it, data.value.kind) }
-                Notice("${card.title} hidden from your suggestions")
-            } catch (e: Exception) {
-                Notice(e.toUiError().message, StatusTone.Down)
-            }
-            data.update { it.copy(busy = null, notice = notice) }
+        actions.run(key) {
+            container.api().dismissForYou(DismissRequest(card.catalogId))
+            readForYou()
+            data.value.mood?.let { readResults(it, data.value.kind) }
+            Notice("${card.title} hidden from your suggestions")
         }
     }
 

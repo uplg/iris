@@ -19,6 +19,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -227,11 +235,21 @@ private fun DevicesSection(state: SettingsUiState, actions: SettingsActions, now
         if (count != null && count > 0) "Devices · $count" else "Devices",
         "Pair an Android TV, or another Iris app, by entering the code it shows.",
     ) {
+        val pairFocus = remember { FocusRequester() }
+        var stopFocused by remember { mutableStateOf(false) }
+        // "Stop waiting" goes once the wait ends: the focus it had moves to the pair button.
+        LaunchedEffect(state.waitingForDevice) {
+            if (!state.waitingForDevice && stopFocused) {
+                stopFocused = false
+                runCatching { pairFocus.requestFocus() }
+            }
+        }
         ActionButton(
             "Pair a TV with its code",
             { actions.onOpen(SettingsDialog.Pair) },
             icon = Icons.Rounded.Tv,
             style = ActionStyle.Secondary,
+            modifier = Modifier.focusRequester(pairFocus),
         )
         if (state.waitingForDevice) {
             Row(
@@ -246,7 +264,13 @@ private fun DevicesSection(state: SettingsUiState, actions: SettingsActions, now
                     color = IrisColor.ink,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                ActionButton("Stop waiting", actions.onStopWaiting, style = ActionStyle.Secondary, size = ActionSize.Small)
+                ActionButton(
+                    "Stop waiting",
+                    actions.onStopWaiting,
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Small,
+                    modifier = Modifier.onFocusChanged { if (it.hasFocus) stopFocused = true },
+                )
             }
         } else {
             NoticeLine(state.outcome.notice(SettingsSection.Devices))
@@ -343,11 +367,13 @@ private fun UpdateSection(update: UpdateUiState, actions: SettingsActions) {
         }
         UpdateProgress(update.progress)
         Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-            if (update.downloading) {
-                ActionButton("Cancel the download", actions.onCancelUpdate, style = ActionStyle.Secondary)
-            } else {
-                ActionButton("Download and install", actions.onDownloadUpdate, icon = Icons.Rounded.SystemUpdate)
-            }
+            // One button that changes: the focus stays on it from "Download" to "Cancel" and back.
+            ActionButton(
+                if (update.downloading) "Cancel the download" else "Download and install",
+                if (update.downloading) actions.onCancelUpdate else actions.onDownloadUpdate,
+                icon = if (update.downloading) null else Icons.Rounded.SystemUpdate,
+                style = if (update.downloading) ActionStyle.Secondary else ActionStyle.Primary,
+            )
             if (update.progress is AppUpdater.Progress.Ready) {
                 ActionButton("Reopen the installer", actions.onReopenInstaller, style = ActionStyle.Secondary)
             }
