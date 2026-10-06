@@ -1,7 +1,7 @@
 // What a watch is, said in words the same way on History and Admin: how far someone got,
 // what exactly they watched (days and lengths: `@iris/api/format`).
 
-import { clock, duration, episodeCode, fileName, percent, prettySceneName, sceneEpisode } from '@iris/api/format';
+import { clock, duration, episodeCode, fileName, kindLabel, percent, prettySceneName, sceneEpisode } from '@iris/api/format';
 import { watchedShare } from '#lib/watched.ts';
 
 /** How far a watch went: « Watched to the end », « 42% watched, stopped at 32:10 »,
@@ -36,7 +36,7 @@ export function progressShort(position: number, total: number | null | undefined
 }
 
 /** What a play is, as people name it: the title (the collection's, else the release's name
- * cleaned up), then what of it (« S2:E4 · Woe’s Hollow », « Episode 1156 », « Film · 2021 »). */
+ * cleaned up), then what of it (« S2:E4 · Woe’s Hollow », « Episode 1156 », « Movie · 2021 »). */
 export function playName(it: {
 	collection_title?: string | null;
 	torrent_name?: string | null;
@@ -57,6 +57,6 @@ export function playName(it: {
 			? `Episode ${it.absolute_episode}`
 			: (episodeCode(it.season, it.episode) ?? (named && named.episode > 0 ? episodeCode(named.season, named.episode) : null));
 	if (code) return { title, detail: [code, it.episode_title].filter(Boolean).join(' · ') };
-	if (it.kind === 'movie') return { title, detail: typeof it.year === 'number' ? `Film · ${it.year}` : 'Film' };
+	if (it.kind === 'movie') return { title, detail: [kindLabel(it.kind), it.year].filter(Boolean).join(' · ') };
 	return { title, detail: null };
 }

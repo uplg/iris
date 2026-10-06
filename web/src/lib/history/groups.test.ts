@@ -23,7 +23,7 @@ describe('groupHistory', () => {
 		]);
 		expect(groups.map((g) => [g.title, g.items.length, g.solo])).toEqual([
 			['Severance', 2, false],
-			['Dune.2021.mkv', 1, true]
+			['Dune (2021)', 1, true]
 		]);
 	});
 

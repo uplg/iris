@@ -55,8 +55,8 @@ describe('a play, named as people name it', () => {
 		expect(playName({ collection_title: 'One Piece', kind: 'tv', absolute_episode: 1156, season: 21, episode: 3 }).detail).toBe(
 			'Episode 1156'
 		);
-		expect(playName({ collection_title: 'Dune', kind: 'movie', year: 2021 })).toEqual({ title: 'Dune', detail: 'Film · 2021' });
-		expect(playName({ collection_title: 'Dune', kind: 'movie' }).detail).toBe('Film');
+		expect(playName({ collection_title: 'Dune', kind: 'movie', year: 2021 })).toEqual({ title: 'Dune', detail: 'Movie · 2021' });
+		expect(playName({ collection_title: 'Dune', kind: 'movie' }).detail).toBe('Movie');
 	});
 
 	it('no title: the release name cleaned up; a pack file still names its episode', () => {

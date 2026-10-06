@@ -4,7 +4,7 @@
 	// story, then what to do: resume where the person stopped (or start), keep it on the
 	// watchlist (a series), mark it watched or not.
 	import { follows, library, me, type CollectionDetail, type ContinueWatchingItem, type TmdbMetadata } from '@iris/api/client';
-	import { clock, duration, plural } from '@iris/api/format';
+	import { clock, duration, kindLabel, plural } from '@iris/api/format';
 	import { queryClient } from '#lib/query.ts';
 	import { KEYS } from '#lib/queries.ts';
 	import { allWatched } from '#lib/watched.ts';
@@ -27,7 +27,7 @@
 
 	const series = $derived(c.kind === 'tv');
 	const eyebrow = $derived(
-		[series ? 'Series' : 'Movie', meta?.year, meta?.genres.length ? meta.genres.slice(0, 3).join(', ') : null].filter(Boolean).join(' · ')
+		[kindLabel(c.kind, c.is_anime), meta?.year, meta?.genres.length ? meta.genres.slice(0, 3).join(', ') : null].filter(Boolean).join(' · ')
 	);
 
 	const facts = $derived.by(() => {

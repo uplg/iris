@@ -8,6 +8,7 @@ import {
 	duration,
 	episodeCode,
 	fileName,
+	kindLabel,
 	sceneEpisode,
 	formatSize,
 	percent,
@@ -33,7 +34,6 @@ export const releaseName = (name: string) => name.replace(VIDEO_RE, '');
 
 export type Kind = 'movie' | 'series' | 'anime';
 export const kindOf = (c: CollectionListItem): Kind => (c.is_anime ? 'anime' : c.kind === 'tv' ? 'series' : 'movie');
-const KIND_WORD: Record<Kind, string> = { movie: 'Movie', series: 'Series', anime: 'Anime' };
 
 /** « 64 titles · 22 movies · 38 series · 4 anime »: what is on disk, ghosts left out. */
 export function titleCounts(items: CollectionListItem[]): string {
@@ -83,7 +83,8 @@ export function seasonOf(name: string | null | undefined): string | null {
 
 /** A title's line of facts: « Series · 4.2 GB ». */
 export function titleMeta(c: CollectionListItem): string {
-	return c.ghost ? KIND_WORD[kindOf(c)] : `${KIND_WORD[kindOf(c)]} · ${formatSize(c.total_size_bytes)}`;
+	const kind = kindLabel(c.kind, c.is_anime);
+	return c.ghost ? kind : `${kind} · ${formatSize(c.total_size_bytes)}`;
 }
 
 /** A title's state in words: on disk, downloading, needs a hand, or gone. */
