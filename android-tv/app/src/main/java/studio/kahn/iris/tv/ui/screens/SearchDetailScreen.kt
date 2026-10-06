@@ -51,8 +51,9 @@ import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.FramedBlock
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PanelOptions
 import studio.kahn.iris.tv.ui.components.SidePanel
@@ -149,15 +150,24 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
         runCatching { primary.requestFocus() }
     }
 
-    Box(
-        Modifier
+    FooterLayout(
+        footer = {
+            ScreenFooter(
+                listOf(
+                    KeyHint(Keys.OK, if (sheet.owned != null) "Play from disk" else "Download and play"),
+                    KeyHint(Keys.DOWN, "Read the details"),
+                    KeyHint(Keys.BACK, "To the releases"),
+                ),
+            )
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         Row(
             Modifier
                 .fillMaxSize()
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = HINTS_BAND),
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = footer),
             horizontalArrangement = Arrangement.spacedBy(if (narrow) IrisSpace.s8 else IrisSpace.s9),
         ) {
             Column(Modifier.width(if (narrow) 110.dp else IrisSize.posterAside), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
@@ -187,16 +197,6 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                 Details(state, sheet, narrow) { panel = it }
             }
         }
-        KeyHints(
-            hints = listOf(
-                KeyHint(Keys.OK, if (sheet.owned != null) "Play from disk" else "Download and play"),
-                KeyHint(Keys.DOWN, "Read the details"),
-                KeyHint(Keys.BACK, "To the releases"),
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp),
-        )
         when (panel) {
             ReleasePanel.Notes -> state.notes?.let { notes ->
                 SidePanel("Release notes from ${state.providerId}", onDismiss = { panel = null }, footer = "Written by the uploader") {
@@ -420,4 +420,3 @@ fun nfoChunks(nfo: String): List<AnnotatedString> =
 private const val NFO_LINES = 12
 
 /** The room the key hints take at the bottom (board: content ends 110 px above the edge). */
-private val HINTS_BAND = 55.dp

@@ -44,6 +44,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
@@ -53,6 +54,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
@@ -197,12 +199,13 @@ fun LibraryContent(
             .fillMaxSize()
             .background(IrisColor.ground),
     ) {
-        Column(
-            Modifier
+        FooterLayout(
+            footer = { LibraryHints(state, focusedIndex) },
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(top = if (standalone) layout.safeVertical else 0.dp)
                 .onFocusChanged { contentFocused = it.hasFocus },
-        ) {
+        ) { footer ->
             val heading: @Composable () -> Unit = {
                 PageHeading(
                     state = state,
@@ -217,6 +220,7 @@ fun LibraryContent(
                     state = state,
                     grid = grid,
                     heading = heading,
+                    footer = footer,
                     lastOpened = lastOpened,
                     focusedIndex = focusedIndex,
                     top = top,
@@ -229,6 +233,7 @@ fun LibraryContent(
                 LibraryView.Downloads -> DownloadsPane(
                     state = state,
                     list = list,
+                    footer = footer,
                     keys = keys,
                     heading = heading,
                     actions = actions.copy(onRelease = actions.onRelease.copy(onDelete = { deleting = it })),
@@ -236,7 +241,6 @@ fun LibraryContent(
                 )
             }
         }
-        LibraryHints(state, focusedIndex, Modifier.align(Alignment.BottomStart))
 
         when (panel) {
             Panel.None -> Unit
@@ -327,6 +331,7 @@ private fun TitlesPane(
     state: LibraryUiState,
     grid: LazyGridState,
     heading: @Composable () -> Unit,
+    footer: Dp,
     lastOpened: String?,
     focusedIndex: MutableIntState,
     top: FocusRequester,
@@ -344,7 +349,7 @@ private fun TitlesPane(
             Modifier
                 .fillMaxSize()
                 .padding(horizontal = layout.safeHorizontal)
-                .padding(top = IrisSpace.s1, bottom = FOOTER),
+                .padding(top = IrisSpace.s1, bottom = footer),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s6),
         ) {
             heading()
@@ -377,12 +382,14 @@ private fun TitlesPane(
         items = ui.cards,
         key = { it.id },
         state = grid,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = footer),
         contentPadding = PaddingValues(
             start = layout.safeHorizontal,
             end = layout.safeHorizontal,
             top = IrisSpace.s1,
-            bottom = FOOTER + IrisSpace.s6,
+            bottom = IrisSpace.s6,
         ),
         header = {
             item(key = "heading", span = { GridItemSpan(maxLineSpan) }) { heading() }
@@ -412,7 +419,6 @@ private fun TitlesPane(
 
 private const val HEADER_ITEMS = 2
 private const val FIND_KEY = "find"
-private val FOOTER = 46.dp
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -491,6 +497,7 @@ private fun DownloadsPane(
     list: LazyListState,
     keys: FocusKeys,
     heading: @Composable () -> Unit,
+    footer: Dp,
     actions: LibraryActions,
     onFind: () -> Unit,
 ) {
@@ -499,12 +506,14 @@ private fun DownloadsPane(
     val ui: DownloadsUi? = downloads.valueOrNull
     LazyColumn(
         state = list,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = footer),
         contentPadding = PaddingValues(
             start = layout.safeHorizontal,
             end = layout.safeHorizontal,
             top = IrisSpace.s1,
-            bottom = FOOTER + IrisSpace.s6,
+            bottom = IrisSpace.s6,
         ),
     ) {
         item(key = "heading") { heading() }

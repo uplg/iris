@@ -53,8 +53,9 @@ import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.Chip
 import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
@@ -161,12 +162,11 @@ fun HomeContent(
                 }
             }
         }
-        Column(Modifier.fillMaxSize()) {
+        FooterLayout(footer = { Footer(state.notice, state.updateAvailable) }, Modifier.fillMaxSize()) { footer ->
             LazyColumn(
                 Modifier
-                    .padding(top = LocalShellTopInset.current)
-                    .weight(1f)
-                    .fillMaxWidth(),
+                    .padding(top = LocalShellTopInset.current, bottom = footer)
+                    .fillMaxSize(),
                 state = list,
                 contentPadding = PaddingValues(bottom = IrisSpace.s7),
                 verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
@@ -242,7 +242,6 @@ fun HomeContent(
                     }
                 }
             }
-            Footer(state.notice, state.updateAvailable)
         }
     }
     CardMenuHost(
@@ -401,24 +400,12 @@ private fun RightNow(facts: Loadable<List<String>>) {
 
 @Composable
 private fun Footer(notice: Notice?, updateAvailable: Boolean) {
-    val layout = IrisLayout.current
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = IrisSpace.s2, bottom = FOOTER_BOTTOM),
-        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-    ) {
+    ScreenFooter(HOME_HINTS, trailing = if (updateAvailable) "An app update is waiting in Settings" else null) {
         if (notice != null) {
             StatusLine(notice.text, tone = notice.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         }
-        KeyHints(
-            hints = HOME_HINTS,
-            trailing = if (updateAvailable) "An app update is waiting in Settings" else null,
-        )
     }
 }
-
-private val FOOTER_BOTTOM = 15.dp
 
 private val HOME_HINTS = listOf(
     KeyHint(Keys.OK, "Play"),

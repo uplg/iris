@@ -29,8 +29,9 @@ import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.screens.home.CardAction
 import studio.kahn.iris.tv.ui.screens.home.CardMenuHost
@@ -118,17 +119,31 @@ fun DiscoverContent(
     }
     BackHandler(enabled = mood != null, onBack = onCloseMood)
 
-    Column(
-        Modifier
+    val footer: @Composable () -> Unit = {
+        ScreenFooter(
+            listOf(
+                KeyHint(Keys.OK, if (mood == null) "Open, find releases" else "Find releases"),
+                KeyHint(Keys.HOLD_OK, "Not interested"),
+                KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
+            ),
+        ) {
+            state.notice?.let {
+                StatusLine(it.text, tone = it.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            }
+        }
+    }
+    FooterLayout(
+        footer = footer,
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { bottom ->
         val moodCols = moodColumns()
         val posterCols = posterColumns()
         LazyColumn(
             Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxSize()
+                .padding(bottom = bottom),
             state = rememberLazyListState(),
             contentPadding = PaddingValues(bottom = IrisSpace.s7),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s7),
@@ -163,23 +178,6 @@ fun DiscoverContent(
                 )
             }
             forYouShelves(state.forYou, focus, onCardAction, onRetry)
-        }
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = IrisSpace.s2, bottom = 15.dp),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            state.notice?.let {
-                StatusLine(it.text, tone = it.tone, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            }
-            KeyHints(
-                listOf(
-                    KeyHint(Keys.OK, if (mood == null) "Open, find releases" else "Find releases"),
-                    KeyHint(Keys.HOLD_OK, "Not interested"),
-                    KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
-                ),
-            )
         }
     }
     CardMenuHost(

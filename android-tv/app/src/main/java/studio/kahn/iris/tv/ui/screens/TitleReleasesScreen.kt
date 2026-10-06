@@ -36,8 +36,9 @@ import studio.kahn.iris.tv.ui.components.Artwork
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PillChoice
 import studio.kahn.iris.tv.ui.components.SectionTitle
@@ -137,15 +138,24 @@ fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: Tit
     }
     val narrow = layout.width < 900.dp
 
-    Box(
-        Modifier
+    FooterLayout(
+        footer = {
+            ScreenFooter(
+                listOf(
+                    KeyHint(Keys.OK, "See the release"),
+                    KeyHint(Keys.HOLD_OK, "Download and play"),
+                    KeyHint(Keys.BACK, "To the search results"),
+                ),
+            )
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         Row(
             Modifier
                 .fillMaxSize()
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = 55.dp),
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = footer),
             horizontalArrangement = Arrangement.spacedBy(IrisSpace.s9),
         ) {
             Column(
@@ -207,16 +217,6 @@ fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: Tit
                 Body(state, grab, actions, restoreKey, restore) { restoreKey = it }
             }
         }
-        KeyHints(
-            hints = listOf(
-                KeyHint(Keys.OK, "See the release"),
-                KeyHint(Keys.HOLD_OK, "Download and play"),
-                KeyHint(Keys.BACK, "To the search results"),
-            ),
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp),
-        )
         GrabAsk(grab, onConfirm = actions.onConfirmGrab, onCancel = actions.onDismissGrab)
     }
 }

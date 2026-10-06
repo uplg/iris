@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
@@ -62,8 +63,9 @@ import studio.kahn.iris.tv.ui.components.Eyebrow
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.FramedBlock
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LanguageChip
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.Meter
@@ -190,13 +192,22 @@ fun CollectionContent(
     actions: CollectionActions,
     lastRow: String? = null,
 ) {
-    val layout = IrisLayout.current
     val page = state.page
-    Box(
-        Modifier
+    val hasEpisodes = page.valueOrNull?.episodes?.isNotEmpty() == true
+    FooterLayout(
+        footer = {
+            ScreenFooter(
+                buildList {
+                    add(KeyHint(Keys.OK, if (hasEpisodes) "Play or grab" else "Choose"))
+                    if (hasEpisodes) add(KeyHint(Keys.HOLD_OK, "Everything for an episode"))
+                    add(KeyHint(Keys.BACK, "To the top, then the library"))
+                },
+            ) { NoticeLine(state.notice) }
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         when (page) {
             Loadable.Loading -> LoadingState(label = "Loading the title…")
             is Loadable.Failed -> ErrorState(
@@ -205,27 +216,9 @@ fun CollectionContent(
                 title = if (page.error.status == 404) "This title is no longer in the library" else "Couldn't load this title",
             )
             is Loadable.Ready, is Loadable.Stale -> {
-                val p = page.valueOrNull ?: return@Box
-                TitlePage(p, state, actions, lastRow, page.errorOrNull)
+                val p = page.valueOrNull ?: return@FooterLayout
+                TitlePage(p, state, actions, lastRow, page.errorOrNull, footer)
             }
-        }
-        Column(
-            Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .background(IrisColor.ground)
-                .padding(horizontal = layout.safeHorizontal, vertical = IrisSpace.s4),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            NoticeLine(state.notice)
-            val hasEpisodes = page.valueOrNull?.episodes?.isNotEmpty() == true
-            KeyHints(
-                buildList {
-                    add(KeyHint(Keys.OK, if (hasEpisodes) "Play or grab" else "Choose"))
-                    if (hasEpisodes) add(KeyHint(Keys.HOLD_OK, "Everything for an episode"))
-                    add(KeyHint(Keys.BACK, "To the top, then the library"))
-                },
-            )
         }
     }
 }
@@ -242,6 +235,7 @@ private fun TitlePage(
     actions: CollectionActions,
     lastRow: String?,
     stale: studio.kahn.iris.tv.ui.state.UiError?,
+    footer: Dp,
 ) {
     val layout = IrisLayout.current
     val list = rememberLazyListState()
@@ -296,8 +290,9 @@ private fun TitlePage(
             state = list,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(top = IrisSpace.s1, bottom = 80.dp, start = IrisSpace.s2, end = IrisSpace.s2),
+                .fillMaxSize()
+                .padding(bottom = footer),
+            contentPadding = PaddingValues(top = IrisSpace.s1, bottom = IrisSpace.s4, start = IrisSpace.s2, end = IrisSpace.s2),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
         ) {
             item(key = "head") {

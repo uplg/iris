@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,8 +79,9 @@ import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FocusColors
 import studio.kahn.iris.tv.ui.components.FocusSurface
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PillChoice
 import studio.kahn.iris.tv.ui.components.PosterCard
@@ -284,26 +286,29 @@ fun SearchContent(
                 }
             },
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(horizontal = layout.safeHorizontal),
-        ) {
-            val fieldFocus = FieldFocus(field) { fieldFocused = it }
-            if (results) {
-                ResultsLayout(state, grab, actions, fieldFocus, restoreKey, restore, onFocused, Modifier.weight(1f))
-            } else {
-                ComposeLayout(state, onScreenKeyboard, actions, fieldFocus, restoreKey, restore, onFocused, now, Modifier.weight(1f))
+        FooterLayout(
+            footer = {
+                ScreenFooter(
+                    hints = hints(state, results),
+                    trailing = if (results) resultsTrailing(state) else null,
+                    framed = results,
+                )
+            },
+            modifier = Modifier.fillMaxSize(),
+        ) { footer ->
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = footer),
+            ) {
+                val fieldFocus = FieldFocus(field) { fieldFocused = it }
+                if (results) {
+                    ResultsLayout(state, grab, actions, fieldFocus, restoreKey, restore, onFocused, Modifier.weight(1f))
+                } else {
+                    ComposeLayout(state, onScreenKeyboard, actions, fieldFocus, restoreKey, restore, onFocused, now, Modifier.weight(1f))
+                }
             }
         }
-        KeyHints(
-            hints = hints(state, results),
-            trailing = if (results) resultsTrailing(state) else null,
-            framed = results,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .then(if (results) Modifier else Modifier.padding(start = layout.safeHorizontal, end = layout.safeHorizontal, bottom = 15.dp)),
-        )
         GrabAsk(grab, onConfirm = actions.onConfirmGrab, onCancel = actions.onDismissGrab)
     }
 }
@@ -380,11 +385,7 @@ private fun ComposeLayout(
     modifier: Modifier,
 ) {
     val layout = IrisLayout.current
-    Row(
-        modifier
-            .fillMaxWidth()
-            .padding(bottom = 46.dp),
-    ) {
+    Row(modifier.fillMaxWidth()) {
         Column(
             Modifier.width(if (onScreenKeyboard) KEYBOARD_WIDTH + 12.dp else minOf(300.dp, layout.contentWidth * 0.36f)),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
@@ -717,7 +718,7 @@ private fun ResultsBody(
     restore: FocusRequester,
     onFocused: (String) -> Unit,
 ) {
-    val bottom = 46.dp + IrisSpace.s3
+    val bottom = IrisSpace.s3
     when (val results = state.results) {
         null, Loadable.Loading -> LoadingState(Modifier.padding(bottom = bottom), "Asking the trackers…")
         is Loadable.Failed -> ErrorState(results.error.message, actions.onRetry, Modifier.padding(bottom = bottom), title = "The search failed")
@@ -780,7 +781,6 @@ private fun ResultsBody(
                             actions.onRetryMore,
                             Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 46.dp)
                                 .background(IrisColor.ground),
                         )
                     }

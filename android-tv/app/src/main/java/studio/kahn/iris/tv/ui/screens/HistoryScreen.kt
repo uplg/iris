@@ -41,8 +41,9 @@ import studio.kahn.iris.tv.ui.components.ChipSize
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.Meter
 import studio.kahn.iris.tv.ui.components.RowCard
@@ -129,19 +130,26 @@ fun HistoryContent(state: HistoryUiState, actions: HistoryActions) {
         snapshotFlow { list.layoutInfo.visibleItemsInfo.size > 1 }.first { it }
         runCatching { first.requestFocus() }
     }
-    Box(
-        Modifier
+    FooterLayout(
+        footer = {
+            ScreenFooter(listOf(KeyHint(Keys.OK, "Play, or download again"), KeyHint(Keys.BACK, "To the top, then back"))) {
+                NoticeLine(state.notice)
+            }
+        },
+        modifier = Modifier
             .fillMaxSize()
             .background(IrisColor.ground),
-    ) {
+    ) { footer ->
         LazyColumn(
             state = list,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = footer),
             contentPadding = PaddingValues(
                 start = layout.safeHorizontal,
                 end = layout.safeHorizontal,
                 top = layout.safeVertical,
-                bottom = 80.dp,
+                bottom = IrisSpace.s4,
             ),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
         ) {
@@ -173,17 +181,6 @@ fun HistoryContent(state: HistoryUiState, actions: HistoryActions) {
                     )
                 }
             }
-        }
-        Column(
-            Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth()
-                .background(IrisColor.ground)
-                .padding(horizontal = layout.safeHorizontal, vertical = IrisSpace.s4),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            NoticeLine(state.notice)
-            KeyHints(listOf(KeyHint(Keys.OK, "Play, or download again"), KeyHint(Keys.BACK, "To the top, then back")))
         }
     }
 }
