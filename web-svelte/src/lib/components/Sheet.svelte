@@ -1,0 +1,56 @@
+<script lang="ts">
+	// A form that needs room (a meal, a remote binding): a Bits UI Dialog drawn as a sheet, from
+	// the bottom on a phone, from the right on a wide screen (Material 3; app.css `.sheet`).
+	// Its title names what is edited; Escape, the overlay or the cross close it. A form changed
+	// and not saved (its `draft` is dirty) is not lost to a stray Escape or tap: closing asks first.
+	import type { Snippet } from 'svelte';
+	import { Dialog } from 'bits-ui';
+	import type { Draft } from '#lib/draft.svelte.ts';
+	import ConfirmDialog from './ConfirmDialog.svelte';
+	import Icon from './Icon.svelte';
+
+	interface Props {
+		open: boolean;
+		onclose: () => void;
+		title: string;
+		description?: string;
+		/** The form's draft: changed and not saved, closing asks first. */
+		draft?: Pick<Draft<unknown>, 'dirty'> | null;
+		children: Snippet;
+	}
+	let { open, onclose, title, description, draft, children }: Props = $props();
+	let asking = $state(false);
+
+	function close() {
+		if (draft?.dirty) asking = true;
+		else onclose();
+	}
+</script>
+
+<!-- controlled: closing goes through `close`, which may ask first -->
+<Dialog.Root bind:open={() => open, (next) => !next && close()}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="overlay" />
+		<Dialog.Content class="sheet">
+			<div class="handle" aria-hidden="true"></div>
+			<div class="dlg-head">
+				<div class="grow">
+					<Dialog.Title level={2} class="sheet-title">{title}</Dialog.Title>
+					{#if description}<Dialog.Description class="hint">{description}</Dialog.Description>{/if}
+				</div>
+				<Dialog.Close class="icon-btn" aria-label="Close"><Icon name="x" /></Dialog.Close>
+			</div>
+			<div class="sheet-body">
+				{#if open}{@render children()}{/if}
+			</div>
+			<ConfirmDialog
+				bind:open={asking}
+				title="Discard your changes?"
+				description="What you changed here will be lost."
+				action="Discard"
+				keep="Keep editing"
+				onconfirm={onclose}
+			/>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>

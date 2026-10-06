@@ -1,3 +1,4 @@
+/// <reference path="./globals.d.ts" />
 import type { components } from "./api-types";
 
 /** Wire types generated from the OpenAPI spec (`bun run gen-api`) — the Rust
@@ -6,6 +7,9 @@ import type { components } from "./api-types";
  *  under the existing names so call sites don't change; the rest stays
  *  hand-written until its endpoints are annotated in later waves. */
 export type User = components["schemas"]["UserResponse"];
+
+/** The longest name the server accepts (display names, passkey names), in bytes. */
+export const MAX_NAME = 64;
 
 export class ApiError extends Error {
   status: number;
@@ -173,6 +177,7 @@ export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, body?: unknown) => request<T>("POST", p, body),
   put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body),
+  patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
   delete: <T>(p: string) => request<T>("DELETE", p),
 };
 
@@ -287,7 +292,11 @@ export type SearchOpts = {
   sort_by?: SortField;
   order?: SortOrder;
   kind?: MediaKind;
+  /** Only the releases of this TMDB title (Titles view → a title's releases). */
+  tmdb_id?: number;
 };
+
+export type TitleCard = components["schemas"]["TitleCard"];
 
 export const search = {
   /** `signal` cancels a superseded search (next keystroke) so the tracker
@@ -299,8 +308,14 @@ export const search = {
     if (opts.sort_by) qs.set("sort_by", opts.sort_by);
     if (opts.order) qs.set("order", opts.order);
     if (opts.kind) qs.set("kind", opts.kind);
+    if (opts.tmdb_id) qs.set("tmdb_id", String(opts.tmdb_id));
     return request<AggregatedResults>("GET", `/search?${qs}`, undefined, { signal });
   },
+  /** What the query could mean on TMDB, library titles flagged (the Titles view). */
+  titles: (q: string, signal?: AbortSignal) =>
+    request<TitleCard[]>("GET", `/search/titles?${new URLSearchParams({ q })}`, undefined, {
+      signal,
+    }),
 };
 
 export type TmdbMetadata = components["schemas"]["MediaMetadata"];
@@ -480,9 +495,31 @@ export const me = {
   /** The user's preferred audio + subtitle language (applied across episodes
    *  / devices). */
   playbackPreferences: () => api.get<PlaybackPrefs>("/me/playback-preferences"),
-  /** Save preferred audio + subtitle language. Send the full current state. */
-  savePlaybackPreferences: (body: PlaybackPrefs) => api.put<void>("/me/playback-preferences", body),
+  /** One series' choice when it has its own, else the account-wide one. */
+  seriesPlaybackPreferences: (collectionId: string) =>
+    api.get<PlaybackPrefs>(
+      `/me/playback-preferences?${new URLSearchParams({ collection_id: collectionId })}`,
+    ),
+  /** Save preferred audio + subtitle language (full current state); with
+   *  `collection_id`, as that series' own choice. */
+  savePlaybackPreferences: (body: {
+    audio_language?: string | null;
+    subtitle_language?: string | null;
+    collection_id?: string;
+  }) => api.put<void>("/me/playback-preferences", body),
+  /** The home page's "right now" line. */
+  summary: () => api.get<HomeSummary>("/me/summary"),
+  recentSearches: () => api.get<RecentSearch[]>("/me/recent-searches"),
+  recordSearch: (query: string) => api.post<void>("/me/recent-searches", { query }),
+  /** Forget one search, or all of them without `query`. */
+  forgetSearches: (query?: string) =>
+    api.delete<void>(
+      query ? `/me/recent-searches?${new URLSearchParams({ q: query })}` : "/me/recent-searches",
+    ),
 };
+
+export type HomeSummary = components["schemas"]["HomeSummary"];
+export type RecentSearch = components["schemas"]["RecentSearchView"];
 
 export type FilePreview = components["schemas"]["TorrentFilePreview"];
 export type TorrentPreview = components["schemas"]["TorrentPreview"];

@@ -136,7 +136,8 @@ fn pick_static_cache_policy(path: &str) -> &'static str {
     // effectively immutable. Browsers can keep these forever; a new
     // deploy ships new hashed names referenced from a fresh
     // `index.html`.
-    if path.starts_with("/assets/") {
+    // SvelteKit's equivalent is `/_app/immutable/`.
+    if path.starts_with("/assets/") || path.starts_with("/_app/immutable/") {
         return "public, max-age=31536000, immutable";
     }
     // Vendored runtime blobs (libass-wasm / libav.js / hevc.js /
@@ -187,6 +188,20 @@ pub fn coop_coep_layers() -> (
 #[cfg(test)]
 mod tests {
     use super::parse_torrent_path;
+
+    #[test]
+    fn hashed_bundles_are_immutable() {
+        for path in ["/assets/index-abc.js", "/_app/immutable/chunks/x-1a2b.js"] {
+            assert_eq!(
+                super::pick_static_cache_policy(path),
+                "public, max-age=31536000, immutable"
+            );
+        }
+        assert_eq!(
+            super::pick_static_cache_policy("/_app/version.json"),
+            "no-cache, must-revalidate"
+        );
+    }
 
     #[test]
     fn parses_manifest_path() {

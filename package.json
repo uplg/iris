@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": [
     "web",
+    "web-svelte",
     "packages/*"
   ],
   "patchedDependencies": {
