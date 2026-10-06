@@ -125,7 +125,8 @@ fun PlayerChrome(
     val offersNext = NextEpisodeRule.offersNext(next, header.isMovie, playback.nearEnd, playback.ended)
     val tracks = playback.tracks
     val route = playback.route
-    val menu = remember(tracks, probe, route) { trackMenu(tracks, probe, route) }
+    val forced = playback.forcedText
+    val menu = remember(tracks, probe, route, forced) { trackMenu(tracks, probe, route, forced) }
     var prepareAsked by remember { mutableStateOf(false) }
     var prepareOpen by remember { mutableStateOf(false) }
     LaunchedEffect(playback.nearEnd, playback.ended, episodeContext) {

@@ -40,7 +40,7 @@ const val SUBTITLES_OFF = "s:off"
  * names come from the probe when the counts agree, else from Media3's format.
  * Tracks the device cannot play are left out, as the native menu did.
  */
-fun trackMenu(tracks: Tracks, probe: MediaProbe?, route: PlayRoute): TrackMenu {
+fun trackMenu(tracks: Tracks, probe: MediaProbe?, route: PlayRoute, forced: ForcedTextTracks? = null): TrackMenu {
     val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
     val subGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
     if (audioGroups.isEmpty() && subGroups.isEmpty()) return TrackMenu.Empty
@@ -54,7 +54,7 @@ fun trackMenu(tracks: Tracks, probe: MediaProbe?, route: PlayRoute): TrackMenu {
         ?.takeIf { it.size == subGroups.size }
     val subInfos = subGroups.mapIndexed { i, g ->
         probedSubs?.get(i)?.let { SubtitleTrackInfo(it.language, it.title, it.forced, it.textBased) }
-            ?: g.getTrackFormat(0).subtitleInfo()
+            ?: g.getTrackFormat(0).subtitleInfo(forced)
     }
     val audioNames = TrackNaming.audioLabels(audioInfos)
     val subNames = TrackNaming.subtitleLabels(subInfos)
@@ -101,10 +101,10 @@ private fun Format.audioInfo() = AudioTrackInfo(
     codec = sampleMimeType?.let(::mimeWord) ?: "audio",
 )
 
-private fun Format.subtitleInfo() = SubtitleTrackInfo(
+private fun Format.subtitleInfo(forced: ForcedTextTracks?) = SubtitleTrackInfo(
     language = language,
     title = label,
-    forced = selectionFlags and C.SELECTION_FLAG_FORCED != 0 || ForcedTextTracks.isForced(id),
+    forced = selectionFlags and C.SELECTION_FLAG_FORCED != 0 || forced?.isForced(id) == true,
     textBased = sampleMimeType != MimeTypes.APPLICATION_PGS && sampleMimeType != MimeTypes.TEXT_SSA,
 )
 

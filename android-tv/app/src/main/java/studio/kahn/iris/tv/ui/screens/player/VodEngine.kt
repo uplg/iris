@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.ForcedTextTracks
 import studio.kahn.iris.tv.data.IrisCaps
 import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.SeekHint
@@ -55,6 +56,7 @@ import studio.kahn.iris.tv.data.serverBase
 import studio.kahn.iris.tv.data.webVttSubtitle
 import studio.kahn.iris.tv.ui.components.buildMediaSession
 import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.state.Owned
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 
 /**
@@ -64,6 +66,9 @@ import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 @Stable
 class VodPlayback {
     var player: ExoPlayer? by mutableStateOf(null)
+        internal set
+    /** The text tracks [player] unflagged as forced (the track menu still says "Forced"). */
+    var forcedText: ForcedTextTracks? by mutableStateOf(null)
         internal set
     var route by mutableStateOf(PlayRoute.Direct)
         internal set
@@ -243,13 +248,18 @@ fun VodEngine(
 
     // `preferPlatformAv1` only matters on the direct path: the server streams
     // carry H.264/HEVC, hardware-decoded under either renderer order.
+    val forcedText = remember(playUrl, av1HardwareFits) { ForcedTextTracks() }
     val player = remember(playUrl, av1HardwareFits) {
-        buildPlayer(
-            context,
-            container.mediaOkHttpClient,
-            preferPlatformAv1 = av1HardwareFits,
+        Owned(
+            buildPlayer(
+                context,
+                container.mediaOkHttpClient,
+                preferPlatformAv1 = av1HardwareFits,
+                forcedText = forcedText,
+            ),
+            ExoPlayer::release,
         )
-    }
+    }.value
 
     // The one way progress reaches the server; it outlives a rebuilt player (the remux fallback).
     val saver = remember(infohash, fileIdx) {
@@ -572,7 +582,6 @@ fun VodEngine(
             }
             saver.save(pos, durationOf(), playing = false)
             session.release()
-            player.release()
         }
     }
 
@@ -605,6 +614,7 @@ fun VodEngine(
 
     SideEffect {
         out.player = player
+        out.forcedText = forcedText
         out.route = route
         out.serverPrep = gateOnServerBuild
         out.serverReady = portionReady
