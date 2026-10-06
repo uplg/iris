@@ -34,6 +34,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import androidx.media3.common.util.Util
@@ -114,7 +117,6 @@ fun PlayerChrome(
     val episodeContext by vm.episodeContext.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
-    val sideRows by vm.sideRows.collectAsStateWithLifecycle()
     val sideTitle by vm.sideTitle.collectAsStateWithLifecycle()
     val probe = vm.setup.collectAsStateWithLifecycle().value?.probe
 
@@ -175,7 +177,7 @@ fun PlayerChrome(
         playback.filmDurationMs.takeIf { it > 0 } ?: player.duration.coerceAtLeast(0)
     }
     DisposableEffect(player) {
-        PlayerKeyRouter.handler = handler@{ event ->
+        val mine: (KeyEvent) -> Boolean = handler@{ event ->
             if (handleMediaKey(player, event)) {
                 chrome.peek()
                 return@handler true
@@ -183,7 +185,16 @@ fun PlayerChrome(
             if (!routerOn) return@handler false
             onRemoteKey(event, chrome, player, durationOf(), togglePlay) { engage() }
         }
-        onDispose { PlayerKeyRouter.handler = null }
+        PlayerKeyRouter.handler = mine
+        // The next episode's screen composes before this one leaves: never clear its handler.
+        onDispose { if (PlayerKeyRouter.handler === mine) PlayerKeyRouter.handler = null }
+    }
+    // Back from Home: the paused frame says where it is (the bar, "Play").
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) chrome.peek() }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 
     BackHandler(enabled = chrome.mode != ChromeMode.Hidden && chrome.panel == PlayerPanel.None) {
@@ -209,6 +220,7 @@ fun PlayerChrome(
             val progress = rememberProgressStateWithTickInterval(player, tickIntervalMs = 1_000)
             val facts by vm.facts.collectAsStateWithLifecycle()
             val clock by produceClock()
+            val sideRows by vm.sideRows.collectAsStateWithLifecycle()
             val sideLabel = sideTitle.takeIf { sideRows.size > 1 }
             PlayerControls(
                 title = PlayerTitle(header.title, header.episode, factsWithRoute(facts, playback.route)),
@@ -258,7 +270,7 @@ fun PlayerChrome(
             )
             PlayerPanel.Episodes -> EpisodesPanel(
                 title = sideTitle,
-                rows = sideRows,
+                rows = vm.sideRows.collectAsStateWithLifecycle().value,
                 busyKey = busy,
                 onPlay = { row -> onNavigateToFile(row.infohash, row.fileIdx) },
                 onGrab = { row -> vm.grab(row, onNavigateToFile) },
