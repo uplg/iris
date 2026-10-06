@@ -13,6 +13,7 @@
 pub mod c411;
 mod cache;
 pub mod hdtorrents;
+mod login_gate;
 pub mod nyaa;
 pub mod registry;
 pub mod tls;
