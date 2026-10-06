@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use quick_xml::Reader;
 use quick_xml::events::{BytesRef, Event};
 
@@ -76,10 +76,11 @@ impl EpgIndex {
 }
 
 /// Gunzip a fetched guide body to text, refusing more than `limit` bytes of
-/// output (a gzip bomb would otherwise exhaust memory).
+/// output (a gzip bomb would otherwise exhaust memory). Every member of a
+/// multi-member file is read (concatenated `.gz` parts, `pigz` output).
 pub fn decode_gzip(bytes: &[u8], limit: u64) -> std::io::Result<String> {
     let mut out = String::new();
-    flate2::read::GzDecoder::new(bytes)
+    flate2::read::MultiGzDecoder::new(bytes)
         .take(limit.saturating_add(1))
         .read_to_string(&mut out)?;
     if u64::try_from(out.len()).unwrap_or(u64::MAX) > limit {
@@ -259,17 +260,45 @@ fn programme_open(
     })
 }
 
-/// XMLTV timestamps: `20260705203000 +0200` (offset optional; naive times
-/// are taken as UTC, which is what the format's spec implies for absent
-/// offsets in practice).
+/// XMLTV timestamps: `20260705203000 +0200`, the offset also met glued to
+/// the time (`20260705203000+0200`), with a colon (`+02:00`) or absent, and
+/// the seconds sometimes left out (`202607052030 +0200`). Naive times are
+/// taken as UTC, which is what the format's spec implies for absent offsets
+/// in practice.
 fn parse_xmltv_time(s: &str) -> Option<DateTime<Utc>> {
     let s = s.trim();
-    if let Ok(dt) = DateTime::parse_from_str(s, "%Y%m%d%H%M%S %z") {
-        return Some(dt.with_timezone(&Utc));
+    let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+    let (stamp, offset) = s.split_at(digits);
+    let format = match digits {
+        14 => "%Y%m%d%H%M%S",
+        12 => "%Y%m%d%H%M",
+        _ => return None,
+    };
+    let naive = NaiveDateTime::parse_from_str(stamp, format).ok()?;
+    let offset = match offset.trim() {
+        "" | "Z" | "UTC" | "GMT" => return Some(naive.and_utc()),
+        offset => FixedOffset::east_opt(offset_seconds(offset)?)?,
+    };
+    naive
+        .and_local_timezone(offset)
+        .single()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// `+0200` / `-05:30` → seconds east of UTC.
+fn offset_seconds(offset: &str) -> Option<i32> {
+    let (sign, rest) = match offset.as_bytes().first()? {
+        b'+' => (1, &offset[1..]),
+        b'-' => (-1, &offset[1..]),
+        _ => return None,
+    };
+    let hhmm = rest.replacen(':', "", 1);
+    if hhmm.len() != 4 || !hhmm.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
-    NaiveDateTime::parse_from_str(s, "%Y%m%d%H%M%S")
-        .ok()
-        .map(|naive| naive.and_utc())
+    let hours: i32 = hhmm[..2].parse().ok()?;
+    let minutes: i32 = hhmm[2..].parse().ok()?;
+    Some(sign * (hours * 3600 + minutes * 60))
 }
 
 #[cfg(test)]
@@ -377,6 +406,41 @@ mod tests {
         // "now" three days after the guide's content → everything expired
         let index = parse_xmltv(GUIDE, ts("2026-07-09T00:00:00Z"));
         assert!(index.is_empty());
+    }
+
+    #[test]
+    fn xmltv_times_in_every_shape_met() {
+        let at = |s: &str| parse_xmltv_time(s);
+        let expected = Some(ts("2026-07-05T18:30:00Z"));
+        assert_eq!(at("20260705203000 +0200"), expected);
+        assert_eq!(at("20260705203000+0200"), expected, "glued offset");
+        assert_eq!(at("20260705203000 +02:00"), expected, "colon offset");
+        assert_eq!(at("202607052030 +0200"), expected, "no seconds");
+        assert_eq!(at("202607052030+0200"), expected);
+        assert_eq!(at("20260705183000"), expected, "naive is UTC");
+        assert_eq!(at("20260705183000 Z"), expected);
+        assert_eq!(at("20260705130000 -0530"), expected);
+        for bad in [
+            "",
+            "2026070520",
+            "20260705203000 +2",
+            "20260705203000 0200",
+            "2026-07-05",
+        ] {
+            assert_eq!(at(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_multi_member_gzip_reads_whole() {
+        let (head, tail) = GUIDE.split_at(GUIDE.len() / 2);
+        let mut gz = Vec::new();
+        for part in [head, tail] {
+            let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            enc.write_all(part.as_bytes()).unwrap();
+            gz.extend(enc.finish().unwrap());
+        }
+        assert_eq!(decode_gzip(&gz, 1 << 20).unwrap(), GUIDE);
     }
 
     #[test]
