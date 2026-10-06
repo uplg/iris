@@ -22,7 +22,6 @@
 //! # tv_categories    = "5000,5030,5040,5045,5070"
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -44,21 +43,14 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::util::{DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 /// Featured shelves are editorial — refreshes are slow. 30 min keeps
 /// the home page cheap without going stale on c411's daily cadence.
 const FEATURED_TTL: Duration = Duration::from_mins(30);
-/// `details()` reads the same payload while the user shops around the
-/// preview dialog. 60 s avoids hammering c411 when the user bounces
-/// between 5 torrents in 30 seconds, but stays fresh enough for
-/// seeders/leechers to be representative.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
-
 pub struct C411 {
     id: String,
     base_url: Url,
@@ -67,17 +59,12 @@ pub struct C411 {
     featured_cache: Mutex<Option<CachedFeatured>>,
     /// `infohash` -> `TorrentDetails` from c411's JSON API. Survives
     /// short windows of UI navigation without re-hitting the indexer.
-    details_cache: Mutex<HashMap<String, CachedDetails>>,
+    details_cache: DetailsCache,
 }
 
 struct CachedFeatured {
     movies: Vec<SearchResult>,
     series: Vec<SearchResult>,
-    fetched_at: Instant,
-}
-
-struct CachedDetails {
-    details: TorrentDetails,
     fetched_at: Instant,
 }
 
@@ -122,7 +109,7 @@ impl C411 {
             http,
             torznab,
             featured_cache: Mutex::new(None),
-            details_cache: Mutex::new(HashMap::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -134,13 +121,8 @@ impl C411 {
             // would 404 — surface as "no details" instead of an error.
             return Ok(None);
         }
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(infohash)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(infohash).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -180,13 +162,9 @@ impl C411 {
         })?;
 
         let details = raw.into_torrent_details(&self.id, infohash);
-        self.details_cache.lock().await.insert(
-            infohash.to_string(),
-            CachedDetails {
-                details: details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(infohash.to_string(), details.clone())
+            .await;
         Ok(Some(details))
     }
 

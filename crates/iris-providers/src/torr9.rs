@@ -25,7 +25,9 @@ use iris_core::search::{
     SortField, SortOrder, TorrentDetails, TorrentSource,
 };
 
+use crate::cache::DetailsCache;
 use crate::nfo;
+use crate::util::{BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
 use quick_xml::events::Event;
@@ -38,26 +40,15 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
-use crate::util::{extract_year, field_or_env, field_str};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 const DEFAULT_REFERER: &str = "https://torr9.net/";
 const DEFAULT_ORIGIN: &str = "https://torr9.net";
 /// Token TTL is 30 days; refresh proactively well before that.
 const TOKEN_REFRESH_AFTER: Duration = Duration::from_hours(600);
-/// Bencoded torrent files start with a dictionary marker.
-const BENCODE_DICT_MARKER: u8 = b'd';
 /// Featured carousels are curated server-side and refresh slowly. Caching
 /// 30 min keeps the discovery home cheap without going stale on the
 /// daily-ish editorial cadence.
 const FEATURED_TTL: Duration = Duration::from_mins(30);
-/// Torrent details get re-opened when the user shops around the search
-/// results. 60s avoids hammering the indexer when they bounce between
-/// 5 torrents in 30 seconds, but stays fresh enough for seeders/leechers
-/// to be representative.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
-
 pub struct Torr9 {
     id: String,
     base_url: Url,
@@ -71,7 +62,7 @@ pub struct Torr9 {
     token: Mutex<Option<CachedToken>>,
     featured_movies_cache: Mutex<Option<CachedFeatured>>,
     featured_series_cache: Mutex<Option<CachedFeatured>>,
-    details_cache: Mutex<std::collections::HashMap<String, CachedDetails>>,
+    details_cache: DetailsCache,
 }
 
 struct CachedToken {
@@ -81,11 +72,6 @@ struct CachedToken {
 
 struct CachedFeatured {
     items: Vec<SearchResult>,
-    fetched_at: Instant,
-}
-
-struct CachedDetails {
-    details: TorrentDetails,
     fetched_at: Instant,
 }
 
@@ -141,7 +127,7 @@ impl Torr9 {
             token: Mutex::new(None),
             featured_movies_cache: Mutex::new(None),
             featured_series_cache: Mutex::new(None),
-            details_cache: Mutex::new(std::collections::HashMap::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -456,13 +442,8 @@ impl SearchProvider for Torr9 {
         }
 
         // Cache hit?
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(external_id)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(external_id).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -509,13 +490,9 @@ impl SearchProvider for Torr9 {
         };
 
         // Store in cache for the next click.
-        self.details_cache.lock().await.insert(
-            external_id.to_string(),
-            CachedDetails {
-                details: details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(external_id.to_string(), details.clone())
+            .await;
 
         Ok(Some(details))
     }

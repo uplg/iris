@@ -1,6 +1,14 @@
 use iris_config::ProviderEntry;
 use iris_core::Error;
 
+/// Browser user agent sent by the scraping/JSON providers (some trackers
+/// sit behind a WAF that refuses non-browser agents).
+pub(crate) const DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
+
+/// First byte of a valid `.torrent` file (bencoded dictionary).
+pub(crate) const BENCODE_DICT_MARKER: u8 = b'd';
+
 /// Extract a string field from a provider entry, or fall back to the env var
 /// named by `<key>_env` if present. Useful for secrets that should not live
 /// in `providers.toml`.

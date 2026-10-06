@@ -26,7 +26,6 @@
 //! # user_agent = "…"
 //! ```
 
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,18 +44,11 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::FifoCache;
 use crate::nfo;
-use crate::util::{extract_year, field_or_env, field_str};
+use crate::util::{BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
 
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
 const DEFAULT_API_PATH: &str = "/api";
-/// First byte of a valid `.torrent` file (bencoded dictionary).
-const BENCODE_DICT_MARKER: u8 = b'd';
-/// FIFO cap on the `(external_id -> download_link)` map — see
-/// `LinkCache` for the eviction logic.
-const LINK_CACHE_CAP: usize = 4096;
-
 pub struct Unit3dProvider {
     id: String,
     base_url: Url,
@@ -74,34 +66,7 @@ pub struct Unit3dProvider {
     /// Torrent id (UNIT3D's numeric `id`) -> direct `.torrent` URL,
     /// captured from `attributes.download_link` in search responses.
     /// `resolve()` looks the URL up here and fetches the bytes.
-    link_cache: Mutex<LinkCache>,
-}
-
-struct LinkCache {
-    map: HashMap<String, String>,
-    order: VecDeque<String>,
-}
-
-impl LinkCache {
-    fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-    fn put(&mut self, key: String, value: String) {
-        if self.map.insert(key.clone(), value).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > LINK_CACHE_CAP {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        self.map.get(key).cloned()
-    }
+    link_cache: Mutex<FifoCache<String>>,
 }
 
 impl Unit3dProvider {
@@ -170,7 +135,7 @@ impl Unit3dProvider {
             movie_category_id,
             tv_category_id,
             http,
-            link_cache: Mutex::new(LinkCache::new()),
+            link_cache: Mutex::new(FifoCache::new()),
         }))
     }
 
@@ -1522,15 +1487,5 @@ mod tests {
         assert_eq!(d.category.as_deref(), Some("Films / WEB"));
         assert_eq!(d.times_completed, Some(3));
         assert!(d.uploaded_at.is_some());
-    }
-
-    #[test]
-    fn link_cache_evicts_fifo() {
-        let mut c = LinkCache::new();
-        for i in 0..(LINK_CACHE_CAP + 10) {
-            c.put(format!("k{i}"), format!("v{i}"));
-        }
-        assert!(c.get("k0").is_none());
-        assert!(c.get(&format!("k{}", LINK_CACHE_CAP + 9)).is_some());
     }
 }

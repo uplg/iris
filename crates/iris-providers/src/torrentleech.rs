@@ -46,9 +46,8 @@
 //! default_language = "english"
 //! ```
 
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
@@ -66,25 +65,16 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
-use crate::util::{extract_year, field_or_env, field_str, optional_field_or_env, parse_size};
-
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
-
-/// First byte of a valid `.torrent` file (bencoded dictionary).
-const BENCODE_DICT_MARKER: u8 = b'd';
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str,
+    optional_field_or_env, parse_size,
+};
 
 /// Body marker of a live session — the post-login page (and every
 /// logged-in page) carries the logout link.
 const LOGIN_OK_MARKER: &str = "/user/account/logout";
-
-/// Same cap as the Torznab / UNIT3D / hdtorrents link caches.
-const LINK_CACHE_CAP: usize = 4096;
-
-/// Same TTL as hdtorrents: long enough to absorb the preview-dialog +
-/// pre-grab double fetch, short enough that seeder counts stay honest.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
 
 /// Movie category ids: Cam, TS/TC, `DVDRip`/`DVDScreener`, `WEBRip`,
 /// `HDRip`, `BlurayRip`, DVD-R, Bluray, 4K, Boxsets, Documentaries,
@@ -133,33 +123,6 @@ fn category_kind(id: u32) -> Option<MediaKind> {
     }
 }
 
-struct LinkCache {
-    map: HashMap<String, String>,
-    order: VecDeque<String>,
-}
-
-impl LinkCache {
-    fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-    fn put(&mut self, key: String, value: String) {
-        if self.map.insert(key.clone(), value).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > LINK_CACHE_CAP {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        self.map.get(key).cloned()
-    }
-}
-
 pub struct TorrentLeech {
     id: String,
     base_url: Url,
@@ -180,16 +143,11 @@ pub struct TorrentLeech {
     logged_in: Mutex<bool>,
     /// Torrent fid -> signed RSS download URL captured from search rows
     /// (carries the real `{filename}` tail).
-    link_cache: Mutex<LinkCache>,
+    link_cache: Mutex<FifoCache<String>>,
     /// Torrent fid -> scraped detail view, TTL-bounded. The pre-grab
     /// dead-torrent check refetches details right after the preview
     /// dialog did; this absorbs the double fetch.
-    details_cache: Mutex<HashMap<String, CachedDetails>>,
-}
-
-struct CachedDetails {
-    details: TorrentDetails,
-    fetched_at: Instant,
+    details_cache: DetailsCache,
 }
 
 impl TorrentLeech {
@@ -225,8 +183,8 @@ impl TorrentLeech {
             rss_key,
             http,
             logged_in: Mutex::new(false),
-            link_cache: Mutex::new(LinkCache::new()),
-            details_cache: Mutex::new(HashMap::new()),
+            link_cache: Mutex::new(FifoCache::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -361,13 +319,8 @@ impl TorrentLeech {
         if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Ok(None);
         }
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(external_id)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(external_id).await {
+            return Ok(Some(d));
         }
         let url = self
             .base_url
@@ -380,13 +333,9 @@ impl TorrentLeech {
         let Some(details) = parsed else {
             return Ok(None);
         };
-        self.details_cache.lock().await.insert(
-            external_id.to_string(),
-            CachedDetails {
-                details: details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(external_id.to_string(), details.clone())
+            .await;
         Ok(Some(details))
     }
 
@@ -1064,6 +1013,8 @@ fn parse_added(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use iris_core::search::{SortField, SortOrder};
 

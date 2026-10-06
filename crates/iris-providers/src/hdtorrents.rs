@@ -31,9 +31,8 @@
 //! default_language = "english"
 //! ```
 
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use iris_config::ProviderEntry;
@@ -50,14 +49,11 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::SearchProvider;
+use crate::cache::{DetailsCache, FifoCache};
 use crate::nfo;
-use crate::util::{extract_year, field_or_env, field_str, parse_size};
-
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0";
-
-/// First byte of a valid `.torrent` file (bencoded dictionary).
-const BENCODE_DICT_MARKER: u8 = b'd';
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, parse_size,
+};
 
 /// Body marker of an expired/absent session — the site answers 200 with
 /// this string instead of a 401 (Prowlarr's `CheckIfLoginNeeded`).
@@ -66,14 +62,6 @@ const NOT_AUTHORIZED_MARKER: &str = "Error:You're not authorized";
 /// Body marker of a *successful* login response (the post-login meta
 /// refresh page). Its absence means we're still on the login form.
 const LOGIN_OK_MARKER: &str = "if your browser doesn't have javascript enabled";
-
-/// Same cap as the Torznab / UNIT3D link caches.
-const LINK_CACHE_CAP: usize = 4096;
-
-/// Same rationale as tr4ker/c411: the user shopping the preview dialog
-/// bounces between torrents; 60 s spares the tracker without letting
-/// the peer counts go meaningfully stale.
-const DETAILS_TTL: Duration = Duration::from_mins(1);
 
 /// Movie category ids (UHD Blu-ray, Blu-ray, UHD Remux, Remux, 1080p/i,
 /// 720p, 2160p). Deliberately excludes 63 "Movie/Audio Track".
@@ -125,33 +113,6 @@ fn category_kind(id: u32) -> Option<MediaKind> {
     }
 }
 
-struct LinkCache {
-    map: HashMap<String, String>,
-    order: VecDeque<String>,
-}
-
-impl LinkCache {
-    fn new() -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-    fn put(&mut self, key: String, value: String) {
-        if self.map.insert(key.clone(), value).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > LINK_CACHE_CAP {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        self.map.get(key).cloned()
-    }
-}
-
 pub struct HdTorrents {
     id: String,
     base_url: Url,
@@ -166,14 +127,9 @@ pub struct HdTorrents {
     logged_in: Mutex<bool>,
     /// Torrent id -> absolute `download.php` URL captured from search
     /// rows (carries the `f=<name>.torrent` filename parameter).
-    link_cache: Mutex<LinkCache>,
+    link_cache: Mutex<FifoCache<String>>,
     /// Infohash -> scraped `details.php` view.
-    details_cache: Mutex<HashMap<String, CachedDetails>>,
-}
-
-struct CachedDetails {
-    details: TorrentDetails,
-    fetched_at: Instant,
+    details_cache: DetailsCache,
 }
 
 impl HdTorrents {
@@ -206,8 +162,8 @@ impl HdTorrents {
             password,
             http,
             logged_in: Mutex::new(false),
-            link_cache: Mutex::new(LinkCache::new()),
-            details_cache: Mutex::new(HashMap::new()),
+            link_cache: Mutex::new(FifoCache::new()),
+            details_cache: DetailsCache::new(),
         }))
     }
 
@@ -330,13 +286,8 @@ impl HdTorrents {
         if external_id.is_empty() || !external_id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Ok(None);
         }
-        {
-            let cache = self.details_cache.lock().await;
-            if let Some(c) = cache.get(external_id)
-                && c.fetched_at.elapsed() < DETAILS_TTL
-            {
-                return Ok(Some(c.details.clone()));
-            }
+        if let Some(d) = self.details_cache.get(external_id).await {
+            return Ok(Some(d));
         }
 
         let url = self
@@ -365,13 +316,9 @@ impl HdTorrents {
                 .await
                 .put(external_id.to_string(), dl.clone());
         }
-        self.details_cache.lock().await.insert(
-            external_id.to_string(),
-            CachedDetails {
-                details: parsed.details.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
+        self.details_cache
+            .put(external_id.to_string(), parsed.details.clone())
+            .await;
         Ok(Some(parsed.details))
     }
 

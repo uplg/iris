@@ -11,6 +11,7 @@
 //! reimplementing the wire format (see [`c411`] for an example).
 
 pub mod c411;
+mod cache;
 pub mod hdtorrents;
 pub mod nyaa;
 pub mod registry;
