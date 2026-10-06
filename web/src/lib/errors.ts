@@ -18,6 +18,9 @@ const BY_CODE: Record<string, string> = {
 	client_outdated: 'Iris was updated. Reload the page to get the new version.'
 };
 
+/** The server says it does not exist (any more): a 404. */
+export const isGone = (e: unknown): boolean => e instanceof ApiError && e.status === 404;
+
 /** The sentence for `e`, whatever threw it. */
 export function errorText(e: unknown): string {
 	const code = e instanceof ApiError ? e.code : e instanceof DOMException ? e.name : undefined;

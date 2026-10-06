@@ -30,6 +30,8 @@ export const KEYS = {
 	torrentAll: ['torrent'],
 	torrent: (infohash: string) => ['torrent', infohash] as const,
 	episodeContext: (infohash: string, fileIdx: number) => ['episode-context', infohash, fileIdx] as const,
+	playStatus: (infohash: string, fileIdx: number) => ['play-status', infohash, fileIdx] as const,
+	probe: (infohash: string, fileIdx: number) => ['probe', infohash, fileIdx] as const,
 	summary: ['me', 'summary'],
 	continueWatching: ['continue-watching'],
 	watchlist: ['watchlist'],

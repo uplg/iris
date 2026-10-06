@@ -3,7 +3,7 @@
 // to prefer, and what to search for when a release is dead.
 
 import type { AvailableEpisodeEntry, CollectionEpisodeEntry, FileEntry, FileProgressEntry } from '@iris/api/client';
-import { episodeCode, formatSize, prettySceneName } from '@iris/api/format';
+import { episodeCode, fileName, formatSize, prettySceneName } from '@iris/api/format';
 
 export interface SideRow {
 	key: string;
@@ -134,7 +134,7 @@ export function sideRows(i: SideInput): SideRow[] {
 			key: `f:${f.index}`,
 			infohash: i.infohash,
 			fileIdx: f.index,
-			primary: f.path.split('/').pop() ?? f.path,
+			primary: fileName(f.path),
 			secondary: formatSize(f.size_bytes),
 			mono: true,
 			watched: !!prog?.completed,

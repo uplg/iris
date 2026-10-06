@@ -4,7 +4,7 @@
 
 import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iris/api/client';
 import { STORAGE } from '#lib/storage.ts';
-import { duration, episodeCode, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
+import { duration, episodeCode, fileName, formatSize, percent, plural, prettySceneName, speed, VIDEO_RE } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 import { watchWords } from '#lib/watched.ts';
 
@@ -181,7 +181,7 @@ export function releaseStatus(t: TorrentView): { tone: Tone; text: string } {
 
 /** What a release's delete removes, named: its files, the first few by name. */
 export function deleteDescription(t: TorrentView): string {
-	const names = t.files.map((f) => f.path.split('/').pop() ?? f.path);
+	const names = t.files.map((f) => fileName(f.path));
 	const shown = names.slice(0, 3).join(', ');
 	const more = names.length > 3 ? ` and ${names.length - 3} more` : '';
 	const files = names.length ? `${plural(names.length, 'file')} (${shown}${more})` : 'its files';

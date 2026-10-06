@@ -2,7 +2,7 @@
 	// A release's video files: each with its size, how much of it you watched, and a way to play
 	// (or resume) it and to save it.
 	import { torrents, type ContinueWatchingItem, type FileEntry } from '@iris/api/client';
-	import { formatSize, percent } from '@iris/api/format';
+	import { fileName, formatSize, percent } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import { watchState } from './model.ts';
 
@@ -11,7 +11,7 @@
 
 <ul class="plain-list files">
 	{#each files as f (f.index)}
-		{@const name = f.path.split('/').pop() ?? f.path}
+		{@const name = fileName(f.path)}
 		{@const w = watchState(watched?.get(f.index))}
 		{@const resume = w.pct !== null && w.pct > 0 && !w.done}
 		<li class="file">

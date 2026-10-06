@@ -7,8 +7,7 @@
 	// announced (§ 4).
 	import type { Snippet } from 'svelte';
 	import type { Loadable } from '#lib/query.ts';
-	import { ApiError } from '@iris/api/client';
-	import { errorText } from '#lib/errors.ts';
+	import { errorText, isGone } from '#lib/errors.ts';
 	import { refocus, sectionHeading } from '#lib/focus.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Icon from './Icon.svelte';
@@ -30,7 +29,7 @@
 	let { value, empty = false, emptyText, emptyHint, missing, skeletons = 0, children }: Props = $props();
 	const g = new Gesture();
 	let box = $state<HTMLElement>();
-	const gone = $derived(!!missing && value.failed && value.error instanceof ApiError && value.error.status === 404);
+	const gone = $derived(!!missing && value.failed && isGone(value.error));
 
 	function retry() {
 		return g.run(

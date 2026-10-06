@@ -11,7 +11,7 @@
 	import { Dialog } from 'bits-ui';
 	import { untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
-	import { ApiError, follows, library, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
+	import { follows, library, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
 	import {
 		duration as lengthWords,
 		episodeCode,
@@ -29,7 +29,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
-	import { errorText } from '#lib/errors.ts';
+	import { errorText, isGone } from '#lib/errors.ts';
 	import { stored, text as words } from '#lib/stored.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
@@ -94,7 +94,7 @@
 	const isTv = $derived(!!collectionId && data?.kind === 'tv');
 
 	const playStatusQ = createQuery(() => ({
-		queryKey: ['play-status', infohash, fileIdx],
+		queryKey: KEYS.playStatus(infohash, fileIdx),
 		queryFn: () => torrents.playStatus(infohash, fileIdx),
 		refetchInterval: (q) => playStatusInterval(q.state.data),
 		retry: 8,
@@ -105,7 +105,7 @@
 	// yet on disk » until it is there; polled on that answer past the retry budget, so a slow
 	// swarm self-heals instead of needing a reload
 	const probeQ = createQuery(() => ({
-		queryKey: ['probe', infohash, fileIdx],
+		queryKey: KEYS.probe(infohash, fileIdx),
 		queryFn: () => torrents.probe(infohash, fileIdx),
 		retry: (count: number, e: Error) => notOnDisk(e) && count < 30,
 		retryDelay: 2000,
@@ -276,8 +276,8 @@
 			() => {
 				regrabbed = true;
 				void qc.invalidateQueries({ queryKey: KEYS.torrent(infohash) });
-				void qc.invalidateQueries({ queryKey: ['play-status', infohash, fileIdx] });
-				void qc.invalidateQueries({ queryKey: ['probe', infohash, fileIdx] });
+				void qc.invalidateQueries({ queryKey: KEYS.playStatus(infohash, fileIdx) });
+				void qc.invalidateQueries({ queryKey: KEYS.probe(infohash, fileIdx) });
 			},
 			'regrab',
 			{ inline: true }
@@ -392,7 +392,7 @@
 			: null
 	);
 	const notice = $derived(outage ? 'Iris is not answering. Reconnecting…' : playerError ? `The player stopped: ${playerError}` : null);
-	const gone = $derived(torrentQ.error instanceof ApiError && torrentQ.error.status === 404);
+	const gone = $derived(isGone(torrentQ.error));
 
 	const STATE_WORDS: Record<TorrentView['state'], string> = {
 		initializing: 'Starting',
