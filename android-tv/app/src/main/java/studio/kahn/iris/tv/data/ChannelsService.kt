@@ -49,7 +49,8 @@ class ChannelsService(private val context: Context) {
             // resolve to an unrelated entry and paint the wrong poster on the launcher channel.
             val watching = cw.await().take(10).map { item ->
                 async {
-                    val meta = item.tmdbId?.let { TmdbMetadataCache.get(api, it, item.kind?.value) }
+                    val meta = item.tmdbId?.takeIf { item.tmdbVerified }
+                        ?.let { TmdbMetadataCache.get(api, it, item.kind?.value) }
                     Program(
                         title = item.filePath?.substringAfterLast('/') ?: item.torrentName,
                         description = "Continue watching",
