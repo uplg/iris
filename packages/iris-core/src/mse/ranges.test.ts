@@ -8,8 +8,35 @@ import {
 	evictionSpan,
 	forwardGapTarget,
 	landsAt,
+	outsideWindow,
 	ranges
 } from './ranges';
+
+describe('outsideWindow', () => {
+	it('flushes what a seek left behind and far ahead, keeps the window', () => {
+		// buffered over the whole clip, then a seek to 60 with a 30 s / 20 s window
+		expect(outsideWindow(ranges([[0, 120]]), 60, 30, 20)).toEqual([
+			[0, 30],
+			[80, 120]
+		]);
+		// an island left ahead by a seek back
+		expect(
+			outsideWindow(
+				ranges([
+					[10, 40],
+					[90, 110]
+				]),
+				20,
+				30,
+				20
+			)
+		).toEqual([[40, 110]]);
+		// nothing outside the window, or under a second of it
+		expect(outsideWindow(ranges([[50, 70]]), 60, 30, 20)).toEqual([]);
+		expect(outsideWindow(ranges([[29.5, 80.5]]), 60, 30, 20)).toEqual([]);
+		expect(outsideWindow(ranges([]), 60, 30, 20)).toEqual([]);
+	});
+});
 
 describe('bufferedAhead', () => {
 	it('bridges fragments that did not coalesce into one range', () => {
