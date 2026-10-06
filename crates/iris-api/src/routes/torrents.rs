@@ -648,7 +648,7 @@ pub(crate) async fn ingest_core(
     // No torrent-level tmdb resolution: the collection's id is the single
     // source of truth, resolved from the collection's SCENE identity in
     // `collection_assign::resolve_collection_tmdb` once the torrent is assigned.
-    let row = super::torrents::record_ingest(
+    let row = match record_ingest(
         state,
         &result.snapshot,
         || "<unnamed>".into(),
@@ -656,7 +656,14 @@ pub(crate) async fn ingest_core(
         external_id,
         user_id,
     )
-    .await?;
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            discard_unrecorded(state, &result).await;
+            return Err(e.into());
+        }
+    };
 
     // Pre-warm the remuxer cache on a best-effort background task. By the
     // time the user clicks Play, the `.fmp4` file is already on disk — the
@@ -2566,6 +2573,27 @@ pub(crate) async fn record_ingest(
         },
     )
     .await
+}
+
+/// Take back an engine add whose grab failed before the torrent got its
+/// library row: with no row, GC, delete and the leech-slot guard can't see
+/// it, yet it downloads, seeds and comes back on every boot. A torrent the
+/// engine already managed is left alone.
+pub(crate) async fn discard_unrecorded(state: &AppState, result: &iris_torrent::IngestResult) {
+    if result.already_managed {
+        return;
+    }
+    if let Err(e) = state
+        .engine()
+        .delete_by_infohash(&result.snapshot.infohash, true)
+        .await
+    {
+        tracing::warn!(
+            infohash = %result.snapshot.infohash,
+            error = %e,
+            "grab: could not remove the torrent of a failed grab"
+        );
+    }
 }
 
 /// The torrent row for an (already lowercased) infohash, or 404.

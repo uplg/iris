@@ -1270,7 +1270,7 @@ pub(crate) async fn grab_episode_core(
     )
     .await?;
 
-    super::torrents::record_ingest(
+    if let Err(e) = super::torrents::record_ingest(
         state,
         &result.snapshot,
         || format!("{display_title} S{season:02}E{episode:02}"),
@@ -1278,7 +1278,11 @@ pub(crate) async fn grab_episode_core(
         pick.indexer_torrent_id.clone(),
         user_id,
     )
-    .await?;
+    .await
+    {
+        super::torrents::discard_unrecorded(state, &result).await;
+        return Err(e.into());
+    }
 
     // Prefer the leaf whose name designates the requested episode —
     // singleton releases usually repeat the SxxEyy marker in the video
@@ -1770,29 +1774,28 @@ async fn ingest_pack_and_pick_episode(
     // can't trust position alone — a multi-disc pack might have
     // `Disc1/Show.S01E04.mkv` ahead of `Disc2/Show.S01E12.mkv`
     // alphabetically without that matching the requested episode.
-    let file_idx =
-        find_leaf_for_episode(&result.snapshot.files, season, episode).ok_or_else(|| {
-            // The pack is already in the engine at this point; surface
-            // which leaf names defeated the SCENE parser so the 404 is
-            // diagnosable (bad pack naming vs genuinely absent episode).
-            let leaves: Vec<&str> = result
-                .snapshot
-                .files
-                .iter()
-                .map(|f| f.path.rsplit('/').next().unwrap_or(&f.path))
-                .collect();
-            tracing::warn!(
-                season,
-                episode,
-                provider = %pack.indexer_provider,
-                torrent_id = %pack.indexer_torrent_id,
-                ?leaves,
-                "grab: requested episode not found inside ingested season pack"
-            );
-            ApiError::NotFound
-        })?;
+    let Some(file_idx) = find_leaf_for_episode(&result.snapshot.files, season, episode) else {
+        // Surface which leaf names defeated the SCENE parser so the 404 is
+        // diagnosable (bad pack naming vs genuinely absent episode).
+        let leaves: Vec<&str> = result
+            .snapshot
+            .files
+            .iter()
+            .map(|f| f.path.rsplit('/').next().unwrap_or(&f.path))
+            .collect();
+        tracing::warn!(
+            season,
+            episode,
+            provider = %pack.indexer_provider,
+            torrent_id = %pack.indexer_torrent_id,
+            ?leaves,
+            "grab: requested episode not found inside ingested season pack"
+        );
+        super::torrents::discard_unrecorded(state, &result).await;
+        return Err(ApiError::NotFound);
+    };
 
-    super::torrents::record_ingest(
+    if let Err(e) = super::torrents::record_ingest(
         state,
         &result.snapshot,
         || format!("{display_title} S{season:02} pack"),
@@ -1800,7 +1803,11 @@ async fn ingest_pack_and_pick_episode(
         pack.indexer_torrent_id.clone(),
         user_id,
     )
-    .await?;
+    .await
+    {
+        super::torrents::discard_unrecorded(state, &result).await;
+        return Err(e.into());
+    }
 
     // Same finalisation as the singleton path — collection_assign
     // will SCENE-parse every file in the pack and create
