@@ -63,6 +63,20 @@ pub async fn find_by_device_id(
     .await
 }
 
+/// A code in whatever state, until the cleanup drops it.
+pub async fn find_by_code(
+    pool: &SqlitePool,
+    code: &str,
+) -> Result<Option<DeviceCode>, sqlx::Error> {
+    sqlx::query_as::<_, DeviceCode>(
+        "SELECT code, device_id, created_at, expires_at, claimed_at, claimed_by, label, kind, session_jti \
+         FROM device_codes WHERE code = ?1",
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn find_active_by_code(
     pool: &SqlitePool,
     code: &str,

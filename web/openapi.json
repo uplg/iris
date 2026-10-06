@@ -1735,6 +1735,41 @@
         }
       }
     },
+    "/api/me/devices/link/{code}": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Whether the device behind a code the caller linked has signed in. Read\nonly: issues nothing. Visible to whoever claimed the code, and admins.",
+        "operationId": "device_link_status",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The pairing code the caller linked",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the pairing stands",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such code, or not one the caller claimed"
+          }
+        }
+      }
+    },
     "/api/me/devices/{jti}": {
       "delete": {
         "tags": [
@@ -6287,6 +6322,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "LinkState": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "linked",
+          "expired"
+        ]
+      },
+      "LinkStatus": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/LinkState"
           }
         }
       },

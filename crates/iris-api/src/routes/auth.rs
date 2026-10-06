@@ -96,7 +96,10 @@ pub(crate) async fn register(
     crate::passwords::check_policy(&req.password)?;
     let email = normalize_email(&req.email);
     if !email.contains('@') || email.len() < 3 {
-        return Err(ApiError::BadRequest("invalid email".into()));
+        return Err(ApiError::Invalid {
+            code: "invalid_email",
+            message: "invalid email".into(),
+        });
     }
 
     let hashed_invite = hash_invitation_token(&req.invite_token);
@@ -115,13 +118,16 @@ pub(crate) async fn register(
 
     let invitation = iris_db::invitations::find_active_by_hash(&mut *tx, &hashed_invite)
         .await?
-        .ok_or_else(|| ApiError::BadRequest("invalid or expired invitation".into()))?;
+        .ok_or_else(|| ApiError::Invalid {
+            code: "invalid_invitation",
+            message: "invalid or expired invitation".into(),
+        })?;
 
     if iris_db::users::find_by_email(&mut *tx, &email)
         .await?
         .is_some()
     {
-        return Err(ApiError::Conflict("email already registered".into()));
+        return Err(email_taken());
     }
 
     let user = iris_db::users::create(
@@ -134,9 +140,7 @@ pub(crate) async fn register(
     )
     .await
     .map_err(|e| match e.as_database_error() {
-        Some(db) if db.is_unique_violation() => {
-            ApiError::Conflict("email already registered".into())
-        }
+        Some(db) if db.is_unique_violation() => email_taken(),
         _ => e.into(),
     })?;
 
@@ -144,13 +148,23 @@ pub(crate) async fn register(
         iris_db::invitations::consume(&mut *tx, InvitationId::from(invitation.id), user.id).await?;
     if !consumed {
         // Drop without commit → tx rolls back, the `users` insert is undone.
-        return Err(ApiError::Conflict("invitation already used".into()));
+        return Err(ApiError::Refused {
+            code: "invitation_used",
+            message: "invitation already used".into(),
+        });
     }
 
     tx.commit().await?;
 
     let jar = issue_session(&state, &jar, user.id, user.is_admin).await?;
     Ok((jar, Json(user.into())))
+}
+
+fn email_taken() -> ApiError {
+    ApiError::Refused {
+        code: "email_taken",
+        message: "email already registered".into(),
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -632,6 +646,72 @@ pub(crate) mod tests {
                 StatusCode::UNAUTHORIZED
             );
         }
+    }
+
+    #[tokio::test]
+    async fn registration_refusals_carry_their_codes() {
+        let (state, app, user, email) = app_with_member().await;
+        let invite = iris_auth::new_invitation_token();
+        iris_db::invitations::create(
+            state.db(),
+            iris_db::invitations::NewInvitation {
+                token_hash: invite.hash,
+                created_by: user,
+                expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+            },
+        )
+        .await
+        .unwrap();
+        let register = |token: &str, email: &str| {
+            let body =
+                json!({ "invite_token": token, "email": email, "password": "long enough secret" });
+            let app = app.clone();
+            async move { call(&app, "POST", "/api/auth/register", None, None, Some(body)).await }
+        };
+        for (token, address, status, code) in [
+            (
+                invite.plaintext.as_str(),
+                "nope",
+                StatusCode::BAD_REQUEST,
+                "invalid_email",
+            ),
+            (
+                "forged",
+                "bo@example.org",
+                StatusCode::BAD_REQUEST,
+                "invalid_invitation",
+            ),
+            (
+                invite.plaintext.as_str(),
+                email.as_str(),
+                StatusCode::CONFLICT,
+                "email_taken",
+            ),
+        ] {
+            let reply = register(token, address).await;
+            assert_eq!(
+                (reply.status, reply.json["error"].as_str()),
+                (status, Some(code))
+            );
+            assert!(
+                reply.json["message"]
+                    .as_str()
+                    .is_some_and(|m| !m.is_empty())
+            );
+        }
+        assert_eq!(
+            register(&invite.plaintext, "bo@example.org").await.status,
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn a_race_lost_invitation_is_a_coded_409() {
+        let res = axum::response::IntoResponse::into_response(crate::error::ApiError::Refused {
+            code: "invitation_used",
+            message: "invitation already used".into(),
+        });
+        assert_eq!(res.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
