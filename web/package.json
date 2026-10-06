@@ -15,6 +15,7 @@
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"test": "vitest run",
+		"e2e": "tsc -p e2e/tsconfig.json && playwright test -c e2e/playwright.config.ts",
 		"lint": "cd .. && web/node_modules/.bin/oxlint -c web/.oxlintrc.json --deny-warnings web packages",
 		"format": "cd .. && web/node_modules/.bin/oxfmt -c web/.oxfmtrc.json web packages",
 		"format:check": "cd .. && web/node_modules/.bin/oxfmt -c web/.oxfmtrc.json --check web packages",
@@ -26,6 +27,7 @@
 	},
 	"devDependencies": {
 		"@fontsource-variable/fraunces": "5.3.0",
+		"@playwright/test": "1.63.0",
 		"@sveltejs/adapter-static": "4.0.0",
 		"@sveltejs/kit": "3.0.1",
 		"@sveltejs/vite-plugin-svelte": "7.3.1",

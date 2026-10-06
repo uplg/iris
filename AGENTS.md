@@ -62,6 +62,7 @@ bun run build        # SvelteKit → web/build (the backend's web_dist)
 bun run check        # css tokens check, oxfmt, oxlint, svelte-check
 bun run test         # vitest: browser (components) + node (pure modules, packages)
 bun run format       # oxfmt over web + packages
+bun run e2e          # playback bench (web/e2e): Chrome/Firefox/WebKit vs a real backend, generated clips
 
 # Android TV (open android-tv/ in Android Studio Hedgehog+)
 # AGP 9 enables Kotlin automatically — no kotlin-android plugin
