@@ -6086,7 +6086,6 @@
         "type": "object",
         "required": [
           "id",
-          "created_by",
           "created_at",
           "expires_at"
         ],
@@ -6110,8 +6109,12 @@
             "format": "date-time"
           },
           "created_by": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`None` once the admin who made it is deleted."
           },
           "expires_at": {
             "type": "string",
