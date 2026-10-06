@@ -154,11 +154,16 @@ impl Vavoo {
             .ok()?;
         let items: Vec<ResolveItem> = resp.json().await.ok()?;
         let url = items.into_iter().find_map(|i| i.url)?;
-        self.resolved
-            .write()
-            .expect("poisoned")
-            .insert(id.to_string(), (url.clone(), Instant::now()));
+        self.remember(id, &url);
         Some(url)
+    }
+
+    /// Cache a resolution, dropping the expired ones: catalog ids rotate, so
+    /// the map would otherwise grow for the whole uptime.
+    fn remember(&self, id: &str, url: &str) {
+        let mut resolved = self.resolved.write().expect("poisoned");
+        resolved.retain(|_, (_, at)| at.elapsed() < RESOLVE_TTL);
+        resolved.insert(id.to_string(), (url.to_string(), Instant::now()));
     }
 
     /// Every playable channel of the given Vavoo groups, as playlist entries
@@ -359,6 +364,22 @@ mod tests {
         );
         assert_eq!(m6.len(), 1, "M6 quality variants should fold into one row");
         assert!(m6[0].sources.len() >= 2, "folded M6 should keep every feed");
+    }
+
+    #[test]
+    fn expired_resolutions_are_dropped() {
+        let v = Vavoo::default();
+        let long_ago = Instant::now()
+            .checked_sub(RESOLVE_TTL * 2)
+            .expect("monotonic clock past the TTL");
+        v.resolved
+            .write()
+            .unwrap()
+            .insert("old".into(), ("https://x/old.m3u8".into(), long_ago));
+        v.remember("new", "https://x/new.m3u8");
+        let resolved = v.resolved.read().unwrap();
+        assert!(!resolved.contains_key("old"));
+        assert!(resolved.contains_key("new"));
     }
 
     #[test]
