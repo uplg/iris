@@ -43,7 +43,6 @@ import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.format.allWatched
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.formatSize
-import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.markedWatchedWords
 import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.components.Notice

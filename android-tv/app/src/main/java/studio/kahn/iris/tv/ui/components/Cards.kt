@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.components
 
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -320,4 +321,26 @@ fun FramedBlock(
         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
         content = content,
     )
+}
+
+/**
+ * The one poster aside of a page (a title, a release, a title's releases): a line above it
+ * ([above], an eyebrow), the poster with its title in Cal Sans when the art is missing, then
+ * [below]. [compact] on a short or narrow screen: the smaller poster.
+ */
+@Composable
+fun PosterAside(
+    above: String,
+    title: String,
+    imageUrl: String?,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    below: @Composable ColumnScope.() -> Unit = {},
+) {
+    val poster = if (compact) IrisSize.posterAsideCompact else IrisSize.posterAside
+    Column(modifier.widthIn(min = poster), verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
+        Eyebrow(above)
+        Artwork(title = title, imageUrl = imageUrl, width = poster, titleStyle = IrisType.group)
+        below()
+    }
 }

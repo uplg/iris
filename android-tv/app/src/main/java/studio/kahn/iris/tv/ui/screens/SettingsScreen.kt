@@ -49,14 +49,13 @@ import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
-import studio.kahn.iris.tv.ui.components.PanelOption
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.TextInput
 import studio.kahn.iris.tv.ui.screens.settings.Busy
 import studio.kahn.iris.tv.ui.screens.settings.DialogField
-import studio.kahn.iris.tv.ui.screens.settings.FormDialog
+import studio.kahn.iris.tv.ui.components.FormDialog
 import studio.kahn.iris.tv.ui.screens.settings.PASSWORD_MIN
 import studio.kahn.iris.tv.ui.screens.settings.RailItem
 import studio.kahn.iris.tv.ui.screens.settings.SettingsActions

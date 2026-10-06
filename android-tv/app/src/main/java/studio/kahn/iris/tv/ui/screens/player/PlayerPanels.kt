@@ -1,7 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.player
 
 import studio.kahn.iris.tv.ui.format.languageChipWords
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
@@ -31,8 +29,6 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import java.util.UUID
 import studio.kahn.iris.tv.data.MediaKind
-import studio.kahn.iris.tv.ui.components.ActionButton
-import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.FocusColors
 import studio.kahn.iris.tv.ui.components.FocusSurface
 import studio.kahn.iris.tv.ui.components.KeyHint
@@ -43,8 +39,6 @@ import studio.kahn.iris.tv.ui.components.PanelLabel
 import studio.kahn.iris.tv.ui.components.PanelOption
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.Spinner
-import studio.kahn.iris.tv.ui.components.StatusLine
-import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.thisTitle
 import studio.kahn.iris.tv.ui.theme.IrisColor
@@ -212,34 +206,5 @@ private fun PanelKeyHints(hints: List<KeyHint>) {
     val layout = IrisLayout.current
     Box(Modifier.fillMaxSize().padding(start = layout.safeHorizontal, bottom = 20.dp), contentAlignment = Alignment.BottomStart) {
         KeyHints(hints, onStage = true, modifier = Modifier.fillMaxWidth(0.5f))
-    }
-}
-
-/** Over the stage when playback stopped on an error: the reason and the ways out. */
-@Composable
-fun PlayerErrorNotice(
-    message: String,
-    onRetry: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val retry = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { retry.requestFocus() } }
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            Modifier
-                .padding(IrisSpace.s8)
-                .widthIn(max = 460.dp)
-                .background(IrisColor.stageScrim, IrisShape.panel)
-                .padding(IrisSpace.s8),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s4),
-        ) {
-            StatusLine("The player stopped", tone = StatusTone.Down, style = IrisType.bodyStrong)
-            Text(message, style = IrisType.body, color = IrisColor.stageInk)
-            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-                ActionButton("Try again", onRetry, modifier = Modifier.focusRequester(retry))
-                ActionButton("Back", onBack, style = ActionStyle.Secondary)
-            }
-        }
     }
 }

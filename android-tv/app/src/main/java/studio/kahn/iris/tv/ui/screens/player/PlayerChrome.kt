@@ -2,6 +2,7 @@
 
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.components.StageErrorCard
 import studio.kahn.iris.tv.ui.format.clockTime
 import java.time.Instant
 import android.view.KeyEvent
@@ -289,7 +290,7 @@ fun PlayerChrome(
 
         val error = playback.error
         if (error != null) {
-            PlayerErrorNotice(error, onRetry = playback::retry, onBack = onBack)
+            StageErrorCard("The player stopped", error, onRetry = playback::retry, backLabel = "Back", onBack = onBack)
         }
         if (prepareOpen && next != null) {
             ConfirmDialog(

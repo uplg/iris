@@ -14,8 +14,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -66,10 +64,7 @@ private fun StepRow(step: Step) {
     Row(
         Modifier
             .heightIn(min = IrisSize.controlLarge)
-            .drawBehind {
-                val y = size.height - 0.5.dp.toPx()
-                drawLine(IrisColor.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
-            }
+            .bottomHairline()
             .semantics(mergeDescendants = true) {
                 stateDescription = when (step.state) {
                     StepState.Done -> "Done"

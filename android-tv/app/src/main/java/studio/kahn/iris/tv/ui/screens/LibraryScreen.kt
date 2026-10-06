@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.screens.library.DeleteReleaseDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
@@ -58,7 +59,6 @@ import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.KeyHint
-import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PanelLabel
@@ -307,11 +307,8 @@ fun LibraryContent(
             )
         }
         deleting?.let { row ->
-            ConfirmDialog(
-                eyebrow = "Delete ${row.title}",
-                title = "Delete ${row.release}?",
-                body = row.deleteBody,
-                confirmLabel = "Delete release",
+            DeleteReleaseDialog(
+                row = row,
                 onConfirm = {
                     deleting = null
                     actions.onRelease.onDelete(row)

@@ -3,6 +3,7 @@
 
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.StageErrorCard
 import studio.kahn.iris.tv.ui.format.clockTime
 import android.content.Context
 import android.content.pm.PackageManager
@@ -19,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
@@ -94,7 +94,6 @@ import studio.kahn.iris.tv.ui.screens.live.nowWords
 import studio.kahn.iris.tv.ui.screens.live.programmeProgress
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
-import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
@@ -544,25 +543,27 @@ fun LiveTvWatchScreen(
 
         val error = errorMessage
         if (encrypted) {
-            LiveErrorCard(
+            StageErrorCard(
                 title = "This channel can't be played",
                 message = ENCRYPTED_WORDS,
-                retryFocus = retryFocus,
                 onRetry = null,
-                onChannels = onBack,
+                backLabel = "Back to channels",
+                onBack = onBack,
+                focus = retryFocus,
             )
         } else if (error != null) {
-            LiveErrorCard(
+            StageErrorCard(
                 title = "Stream unavailable",
                 message = error,
-                retryFocus = retryFocus,
+                backLabel = "Back to channels",
+                onBack = onBack,
+                focus = retryFocus,
                 onRetry = {
                     autoRetryCount = 0
                     reconnects = 0
                     errorMessage = null
                     retryNonce++
                 },
-                onChannels = onBack,
             )
         }
     }
@@ -731,38 +732,6 @@ private fun CenterNote(title: String, detail: String) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
             Text(title, style = IrisType.body, color = IrisColor.stageInk, textAlign = TextAlign.Center)
             Text(detail, style = IrisType.meta, color = IrisColor.stageMuted, textAlign = TextAlign.Center)
-        }
-    }
-}
-
-@Composable
-private fun LiveErrorCard(
-    title: String,
-    message: String,
-    retryFocus: FocusRequester,
-    /** Null when trying again can't help: the focus goes to the way back. */
-    onRetry: (() -> Unit)?,
-    onChannels: () -> Unit,
-) {
-    Box(Modifier.fillMaxSize().background(IrisColor.overlay), contentAlignment = Alignment.Center) {
-        Column(
-            Modifier
-                .widthIn(max = 460.dp)
-                .padding(horizontal = IrisSpace.s8)
-                .background(IrisColor.stageScrim, IrisShape.panel)
-                .padding(IrisSpace.s8),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s4),
-        ) {
-            StatusLine(title, tone = StatusTone.Down, style = IrisType.bodyStrong)
-            Text(message, style = IrisType.body, color = IrisColor.stageMuted)
-            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
-                if (onRetry != null) {
-                    ActionButton("Retry", onRetry, icon = Icons.Rounded.Refresh, modifier = Modifier.focusRequester(retryFocus))
-                    ActionButton("Back to channels", onChannels, style = ActionStyle.Secondary)
-                } else {
-                    ActionButton("Back to channels", onChannels, modifier = Modifier.focusRequester(retryFocus))
-                }
-            }
         }
     }
 }

@@ -239,6 +239,12 @@ private fun RadioDot(selected: Boolean, color: Color) {
     )
 }
 
+/** The 1 dp line under a row or a step, inside its bounds. */
+fun Modifier.bottomHairline(): Modifier = drawBehind {
+    val y = size.height - 0.5.dp.toPx()
+    drawLine(IrisColor.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
+}
+
 /** The dimmed backdrop behind a centered dialog. */
 fun Modifier.dialogScrim(): Modifier = background(IrisColor.overlay)
 

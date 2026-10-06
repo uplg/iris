@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.PosterAside
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,21 +19,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.SearchResult
-import studio.kahn.iris.tv.ui.components.Artwork
 import studio.kahn.iris.tv.ui.components.EmptyState
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.KeyHint
@@ -153,7 +150,7 @@ fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: Tit
         withFrameNanos { }
         remembered.focus(listOfNotNull(remembered.last ?: first))
     }
-    val narrow = layout.width < 900.dp
+    val narrow = layout.narrow
 
     FooterLayout(
         footer = {
@@ -175,17 +172,13 @@ fun TitleReleasesContent(state: TitleReleasesUiState, grab: GrabUi, actions: Tit
                 .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = footer),
             horizontalArrangement = Arrangement.spacedBy(IrisSpace.s9),
         ) {
-            Column(
-                Modifier.width(if (narrow) 150.dp else 210.dp),
-                verticalArrangement = Arrangement.spacedBy(IrisSpace.s4),
+            PosterAside(
+                above = "Search · ${state.query}",
+                title = head.title,
+                imageUrl = head.posterUrl,
+                compact = narrow,
+                modifier = Modifier.width(if (narrow) IrisSize.posterAside else IrisSize.asideColumn),
             ) {
-                Text("Search · ${state.query}", style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Artwork(
-                    title = head.title,
-                    imageUrl = head.posterUrl,
-                    width = if (narrow) 110.dp else IrisSize.posterAside,
-                    modifier = Modifier,
-                )
                 Text(head.title, style = if (narrow) IrisType.panel else IrisType.title, color = IrisColor.ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 head.meta?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
                 if (head.inLibrary) StatusLine("In your library", tone = StatusTone.Ok)

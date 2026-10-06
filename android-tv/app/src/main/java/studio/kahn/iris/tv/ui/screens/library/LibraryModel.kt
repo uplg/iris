@@ -14,7 +14,6 @@ import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.WATCHED
-import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.formatSpeed

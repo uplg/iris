@@ -36,7 +36,6 @@ import studio.kahn.iris.tv.data.DismissRequest
 import studio.kahn.iris.tv.data.FeaturedResponse
 import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.HomeSummary
-import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse

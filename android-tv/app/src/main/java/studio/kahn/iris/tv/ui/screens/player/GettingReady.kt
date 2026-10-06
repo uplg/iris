@@ -3,7 +3,6 @@ package studio.kahn.iris.tv.ui.screens.player
 import studio.kahn.iris.tv.ui.screens.library.stalled
 import androidx.compose.runtime.Immutable
 import java.util.Locale
-import kotlin.math.roundToInt
 import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
