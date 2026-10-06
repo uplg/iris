@@ -4,6 +4,22 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+/// `SELECT … FROM … JOIN` prefix for every `TorrentRow` read, so the column
+/// list and its joins can't drift from the struct's `FromRow` fields. A macro
+/// so it stays a literal inside `concat!` (sqlx 0.9 only takes `&'static str`).
+macro_rules! select_torrent_rows {
+    () => {
+        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, \
+         t.source_external_id, t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, \
+         u.display_name AS added_by_name, t.added_at, t.finished_at, t.last_played_at, \
+         t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, \
+         t.downloaded_bytes_total, c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
+         FROM torrents t \
+         JOIN users u ON u.id = t.added_by \
+         LEFT JOIN collections c ON c.id = t.collection_id"
+    };
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct TorrentRow {
     pub id: Uuid,
@@ -143,19 +159,10 @@ pub async fn find_by_infohash(
     pool: &SqlitePool,
     infohash: &str,
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.infohash = ?1",
-    )
-    .bind(infohash)
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as::<_, TorrentRow>(concat!(select_torrent_rows!(), " WHERE t.infohash = ?1"))
+        .bind(infohash)
+        .fetch_optional(pool)
+        .await
 }
 
 /// The live torrent grabbed from this tracker release, when one is on disk:
@@ -165,17 +172,11 @@ pub async fn find_live_by_source(
     provider: &str,
     external_id: &str,
 ) -> Result<Option<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.source_provider = ?1 AND t.source_external_id = ?2 AND t.deleted_at IS NULL \
-         ORDER BY t.added_at DESC LIMIT 1",
-    )
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.source_provider = ?1 AND t.source_external_id = ?2 AND t.deleted_at IS NULL \
+         ORDER BY t.added_at DESC LIMIT 1"
+    ))
     .bind(provider)
     .bind(external_id)
     .fetch_optional(pool)
@@ -183,16 +184,10 @@ pub async fn find_live_by_source(
 }
 
 pub async fn list_active(pool: &SqlitePool) -> Result<Vec<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC",
-    )
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.deleted_at IS NULL ORDER BY t.added_at DESC"
+    ))
     .fetch_all(pool)
     .await
 }
@@ -420,17 +415,11 @@ pub async fn list_in_collection(
     pool: &SqlitePool,
     collection_id: Uuid,
 ) -> Result<Vec<TorrentRow>, sqlx::Error> {
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \
-         ORDER BY t.added_at",
-    )
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.collection_id = ?1 AND t.deleted_at IS NULL \
+         ORDER BY t.added_at"
+    ))
     .bind(collection_id)
     .fetch_all(pool)
     .await
@@ -448,22 +437,16 @@ pub async fn list_deleted_in_collection(
     user_id: UserId,
 ) -> Result<Vec<TorrentRow>, sqlx::Error> {
     let user: Uuid = user_id.into();
-    sqlx::query_as::<_, TorrentRow>(
-        "SELECT t.id, t.infohash, t.name, t.total_size_bytes, t.source_provider, t.source_external_id, \
-         t.tmdb_id, t.tmdb_verified, t.collection_id, t.added_by, u.display_name AS added_by_name, \
-         t.added_at, t.finished_at, t.last_played_at, t.last_seed_activity_at, t.deleted_at, t.uploaded_bytes_total, t.downloaded_bytes_total, \
-         c.kind AS kind, c.tmdb_id AS collection_tmdb_id \
-         FROM torrents t \
-         JOIN users u ON u.id = t.added_by \
-         LEFT JOIN collections c ON c.id = t.collection_id \
-         WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
+    sqlx::query_as::<_, TorrentRow>(concat!(
+        select_torrent_rows!(),
+        " WHERE t.collection_id = ?1 AND t.deleted_at IS NOT NULL \
            AND EXISTS (SELECT 1 FROM playback_progress pe \
                        WHERE pe.user_id = ?2 AND pe.infohash = t.infohash) \
            AND NOT EXISTS (SELECT 1 FROM gone_release_dismissed gd \
                            WHERE gd.user_id = ?2 AND gd.infohash = t.infohash \
                              AND gd.dismissed_at >= t.deleted_at) \
-         ORDER BY t.deleted_at DESC",
-    )
+         ORDER BY t.deleted_at DESC"
+    ))
     .bind(collection_id)
     .bind(user)
     .fetch_all(pool)
@@ -494,18 +477,7 @@ pub async fn dismiss_gone_release(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    /// Single-connection in-memory pool, migrated through the latest schema.
-    async fn migrated_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("open in-memory sqlite");
-        crate::migrate::run(&pool).await.expect("run migrations");
-        pool
-    }
+    use crate::test_support::migrated_pool;
 
     /// Re-grabbing an evicted torrent must reset `finished_at`: the payload
     /// is gone from disk, and endpoints (`play_asset` & co) trust
