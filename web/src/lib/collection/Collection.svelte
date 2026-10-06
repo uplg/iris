@@ -5,12 +5,12 @@
 	// nothing to choose here. Read again every few seconds while something downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { library, tmdbImage, type CollectionDetail, type TorrentView } from '@iris/api/client';
+	import { tmdbImage, type CollectionDetail, type TorrentView } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Poster from '#lib/components/Poster.svelte';
-	import { FAST, KEYS, moving, read } from '#lib/queries.ts';
+	import { FAST, moving, read } from '#lib/queries.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import Episodes from './Episodes.svelte';
 	import GoneReleases from './GoneReleases.svelte';
@@ -26,8 +26,7 @@
 
 	const q = createQuery(
 		() => ({
-			queryKey: KEYS.collection(id),
-			queryFn: () => library.collection(id),
+			...read.collection(id),
 			refetchInterval: (query: { state: { data?: CollectionDetail } }) => (query.state.data?.torrents.some(moving) ? FAST : false)
 		}),
 		() => queryClient

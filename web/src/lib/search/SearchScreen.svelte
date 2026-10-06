@@ -7,7 +7,7 @@
 	import { page } from '$app/state';
 	import { createInfiniteQuery, createQuery } from '@tanstack/svelte-query';
 	import { me, search, type AggregatedResults, type MediaKind, type SearchResult, type TmdbSuggestion } from '@iris/api/client';
-	import { LANGUAGE_TAGS, languageLabel, type LanguageTag } from '@iris/api/format';
+	import { LANGUAGE_TAGS, languageLabel, plural, type LanguageTag } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
@@ -259,8 +259,7 @@
 					</Loaded>
 					{#if unmatched}
 						<p class="hint">
-							{unmatched}
-							{unmatched === 1 ? 'release matches' : 'releases match'} no title.
+							{plural(unmatched, 'release matches', 'releases match')} no title.
 							<button class="link-btn" onclick={() => setView('list')}>See every release in the list</button>
 						</p>
 					{/if}
@@ -289,7 +288,7 @@
 				{#if results.hasNextPage && effective !== 'titles'}
 					<button class="btn more" {...pending(more.is('more'))} onclick={showMore}>
 						<Icon name="chevron-down" busy={more.is('more')} />{nextCount
-							? `Show ${nextCount} more ${nextCount === 1 ? 'release' : 'releases'}`
+							? `Show ${plural(nextCount, 'more release', 'more releases')}`
 							: 'Show more releases'}
 					</button>
 				{/if}

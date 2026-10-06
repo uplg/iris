@@ -78,6 +78,7 @@ export const read = {
 		queryFn: () => library.list('torrents'),
 		refetchInterval: (q: { state: { data?: LibraryResponse } }) => (somethingMoves(q.state.data) ? FAST : SLOW)
 	}),
+	collection: (id: string) => ({ queryKey: KEYS.collection(id), queryFn: () => library.collection(id) }),
 	summary: () => ({
 		queryKey: KEYS.summary,
 		queryFn: meApi.summary,

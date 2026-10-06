@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { follows, searchDetails, tmdbImage, torrents } from '@iris/api/client';
-	import { fileName, formatRelative, formatSize, kindWord, languageLabel, prettySceneName } from '@iris/api/format';
+	import { fileName, formatRelative, formatSize, kindWord, languageLabel, plural, prettySceneName } from '@iris/api/format';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS, read } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -106,7 +106,7 @@
 		const who = d?.uploader ?? hit?.uploader;
 		return [when, who ? `by ${who}` : null].filter(Boolean).join(' ');
 	});
-	const filesFact = $derived(p ? `${p.files.length} ${p.files.length === 1 ? 'file' : 'files'} · ${formatSize(p.total_size_bytes)}` : '');
+	const filesFact = $derived(p ? `${plural(p.files.length, 'file')} · ${formatSize(p.total_size_bytes)}` : '');
 
 	const isTv = $derived(kind === 'tv');
 	const followed = createQuery(

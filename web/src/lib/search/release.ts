@@ -137,9 +137,9 @@ export const failedTrackers = (meta: readonly ProviderResultMeta[]) => meta.filt
 export function summary(matches: number, releases: number, meta: readonly ProviderResultMeta[]): string {
 	const answered = meta.filter((p) => !p.error).length;
 	const parts: string[] = [];
-	if (matches) parts.push(`${matches} ${matches === 1 ? 'match' : 'matches'} in your library`);
-	const rel = `${releases} ${releases === 1 ? 'release' : 'releases'}`;
-	parts.push(answered ? `${rel} from ${answered} ${answered === 1 ? 'tracker' : 'trackers'}` : rel);
+	if (matches) parts.push(`${plural(matches, 'match', 'matches')} in your library`);
+	const rel = plural(releases, 'release');
+	parts.push(answered ? `${rel} from ${plural(answered, 'tracker')}` : rel);
 	const failed = failedTrackers(meta).map((p) => p.id);
 	if (failed.length) parts.push(`${failed.join(', ')} did not answer`);
 	return parts.join(' · ');
