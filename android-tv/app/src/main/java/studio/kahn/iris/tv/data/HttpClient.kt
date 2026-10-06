@@ -222,6 +222,10 @@ class IrisAuthenticator(private val sessionStore: SessionStore) : Authenticator 
                 return response.request.newBuilder().build()
             }
             val client = refreshClient ?: return null
+            // Nothing to refresh before the session has cookies (pairing seeds an empty one for
+            // the jar to fill): clearing it on this 401 would drop the poll's Set-Cookie later.
+            val session = runBlocking { sessionStore.session.first() }
+            if (session == null || session.cookies.isEmpty()) return null
             val baseUrl = runBlocking { sessionStore.serverUrl.first() } ?: return null
             val refreshUrl = serverBase(baseUrl) + "api/auth/refresh"
             val refreshReq = Request.Builder()
