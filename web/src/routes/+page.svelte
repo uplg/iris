@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Home: what to watch now (resume the last thing, else the library's freshest title, else
 	// the tracker's featured release), what Iris is doing right now, then the rows: Continue
-	// watching, the watchlist (fresh episodes first), the suggestions, the library. The search
+	// watching, the watchlist (fresh episodes first), the library, the suggestions. The search
 	// lives on its own page; moods on Discover.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { plural } from '@iris/api/format';
@@ -88,14 +88,6 @@
 		{#each watchlist.data ?? [] as item (item.id)}<WatchlistCard {item} downloading={downloads.get(item.id)} />{/each}
 	</Row>
 
-	{#each forYou.data?.shelves ?? [] as shelf (shelf.key)}
-		{#if shelf.items.length}
-			<Shelf title={shelf.title} href="/discover">
-				{#each shelf.items as card (card.catalog_id)}<CatalogCard {card} />{/each}
-			</Shelf>
-		{/if}
-	{/each}
-
 	<Row
 		title="Your library"
 		fact={collections.data?.length ? plural(collections.data.length, 'title') : undefined}
@@ -107,6 +99,14 @@
 		{#snippet emptyHint()}Start a <a href="/search">search</a> to add your first title.{/snippet}
 		{#each libraryRow as item (item.id)}<LibraryCard {item} downloading={downloads.get(item.id)} />{/each}
 	</Row>
+
+	{#each forYou.data?.shelves ?? [] as shelf (shelf.key)}
+		{#if shelf.items.length}
+			<Shelf title={shelf.title} href="/discover">
+				{#each shelf.items as card (card.catalog_id)}<CatalogCard {card} />{/each}
+			</Shelf>
+		{/if}
+	{/each}
 
 	<p class="tonight">
 		<Icon name="compass" />Not sure what to watch tonight? <a href="/discover">Pick a mood in Discover</a>

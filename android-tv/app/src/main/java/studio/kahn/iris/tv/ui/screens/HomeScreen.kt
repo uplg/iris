@@ -87,7 +87,7 @@ import studio.kahn.iris.tv.ui.components.NoticeLine
  * Home (TV.dc.html, web `routes/+page.svelte`): what to watch now (resume the last thing,
  * else the library's freshest title, else the tracker's featured release), what Iris is
  * doing right now, then the rows: Continue watching, the watchlist (fresh episodes first),
- * the suggestions, the library. The first-run preferences sheet opens over it when due.
+ * the library, the suggestions. The first-run preferences sheet opens over it when due.
  * The shell draws its header over the hero's still ([ShellBackdrop]); the rows start below
  * it ([LocalShellTopInset]).
  */
@@ -221,18 +221,6 @@ fun HomeContent(
                         onEmptyAction = onOpenSearch,
                     )
                 }
-                items(state.forYou, key = { it.key }, contentType = { "row" }) { shelf ->
-                    HomeRow(
-                        title = shelf.title,
-                        cards = Loadable.Ready(shelf.cards),
-                        focus = focus,
-                        still = false,
-                        onCardAction = onCardAction,
-                        onRetry = onRetry,
-                        onSeeAll = onOpenDiscover,
-                        hideEmpty = true,
-                    )
-                }
                 item(key = "library", contentType = "row") {
                     HomeRow(
                         title = "Your library",
@@ -247,6 +235,18 @@ fun HomeContent(
                         emptyHint = "Start a search to add your first title.",
                         emptyActionLabel = "Search",
                         onEmptyAction = onOpenSearch,
+                    )
+                }
+                items(state.forYou, key = { it.key }, contentType = { "row" }) { shelf ->
+                    HomeRow(
+                        title = shelf.title,
+                        cards = Loadable.Ready(shelf.cards),
+                        focus = focus,
+                        still = false,
+                        onCardAction = onCardAction,
+                        onRetry = onRetry,
+                        onSeeAll = onOpenDiscover,
+                        hideEmpty = true,
                     )
                 }
                 item(key = "tonight", contentType = "tonight") {
