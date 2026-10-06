@@ -13,6 +13,7 @@
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
 	import LivePlayer from './LivePlayer.svelte';
 	import { nextWords, nowWords, programmeProgress } from './live.ts';
+	import { channelNotice } from './guide.ts';
 
 	let { country, channelId }: { country: string; channelId: string } = $props();
 
@@ -46,7 +47,7 @@
 		back={{ href: `/live?country=${encodeURIComponent(country)}`, label: 'Back to channels' }}
 		title={name}
 		sub={now ? nowWords(now) : null}
-		facts={channel?.geo_blocked ? 'May be blocked in your country' : null}
+		facts={channel ? channelNotice(channel) : null}
 	/>
 {/snippet}
 
