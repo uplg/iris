@@ -17,6 +17,14 @@ describe('live tv', () => {
 		expect(liveTier(null, true)).toBe('F');
 	});
 
+	it('honours a forced live engine, not a VOD-only letter', () => {
+		expect(liveTier('vavoo', true, 'B')).toBe('B');
+		expect(liveTier('tuner', true, 'F')).toBe('F');
+		expect(liveTier(null, true, 'C')).toBe('C');
+		expect(liveTier('tuner', true, 'E')).toBe('C');
+		expect(liveTier(null, true, 'A')).toBe('F');
+	});
+
 	it('budgets rotations on the channel’s real source count', () => {
 		expect(sourceCount('4')).toBe(4);
 		expect(sourceCount(null)).toBe(MIN_AUTO_ROTATIONS);

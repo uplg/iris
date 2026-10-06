@@ -22,8 +22,18 @@ test('a live channel joins and plays at the live edge on Tier F', { tag: ['@chro
 
 test('live Tier B (`?tier=B`) is reachable from the web app', { tag: ['@chrome', '@firefox'] }, async ({ page, state, logs }) => {
 	test.skip(!state.livePath, 'the local live channel did not come up');
-	test.fail(true, 'known gap: LivePlayer ignores ?tier= (liveTier picks C for the tuner, F otherwise)');
 	await page.goto(`${state.livePath!}?tier=B`);
 	await expect(page.getByText('Live', { exact: true })).toBeVisible({ timeout: 60_000 });
 	await expect.poll(() => logs.has(/\[iris-core\] live cycle/), { timeout: 15_000 }).toBe(true);
+	expect(logs.has(/live tier B \(forced via \?tier=\)/)).toBe(true);
+	expect(logs.has(/Tier F mount/), 'Tier F mounted instead').toBe(false);
+	await expect.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 60_000 }).toBeGreaterThan(1);
+	const v1 = (await videoState(page))!;
+	await page.waitForTimeout(6000);
+	const v2 = (await videoState(page))!;
+	const rate = (v2.currentTime - v1.currentTime) / 6;
+	console.log(`[measure] live B ${test.info().project.name}: ${rate.toFixed(2)}x, buffered ${JSON.stringify(v2.buffered)}`);
+	expect(v2.paused).toBe(false);
+	expect(rate).toBeGreaterThan(0.8);
+	expect(v2.error).toBeNull();
 });
