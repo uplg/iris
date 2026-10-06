@@ -1,0 +1,22 @@
+<html><body><script>
+const SRC = "https://edge.cowedd4855ws.sbs/premium950/index.m3u8";
+(function() {
+  const btn = document.getElementById('unmute');
+  if (!btn) return;
+  const lift = function() {
+    const root = document.documentElement;
+    if (root.lastElementChild !== btn) root.appendChild(btn);
+  };
+  new MutationObserver(lift).observe(document.documentElement, { childList: true });
+  lift();
+})();
+const CHANNEL = "premium950";
+const MARK = "";
+if (MARK) {
+  const el = document.createElement('span');
+  el.className = 'lw-mark';
+  el.textContent = MARK;
+  document.documentElement.appendChild(el);
+}
+const P2P = false;
+</script></body></html>
