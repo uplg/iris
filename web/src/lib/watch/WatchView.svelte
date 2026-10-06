@@ -14,6 +14,7 @@
 	import { ApiError, follows, library, me, progress as progressApi, torrents, type TorrentView } from '@iris/api/client';
 	import { duration as lengthWords, episodeCode, fileName, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
 	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
+	import { irisFetch } from '@iris/core/stream-fetch';
 	import { fetchManifest, ManifestNotReadyError, pickTier, postSeekHint, rawStreamUrl, type DecodeTier } from '@iris/core/manifest-client';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
@@ -181,7 +182,7 @@
 	 * status under 500 means the server is up. */
 	async function backendReachable(): Promise<boolean> {
 		try {
-			const res = await fetch(rawStreamUrl(infohash, fileIdx), { method: 'HEAD', credentials: 'include' });
+			const res = await irisFetch(rawStreamUrl(infohash, fileIdx), { method: 'HEAD', credentials: 'include' });
 			return res.status < 500;
 		} catch {
 			return false;

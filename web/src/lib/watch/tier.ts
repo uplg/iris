@@ -2,9 +2,8 @@
 // a failure, where the stream comes from, when it is ready, what to resume from.
 
 import { hlsUrl, rawStreamUrl, type DecodeTier, type Manifest } from '@iris/core/manifest-client';
+import { isHevc } from '@iris/core/codec';
 import type { PlayStatus, ProgressView, TorrentView } from '@iris/api/client';
-
-const HEVC = /hevc|hev1|hvc1|h265|x265/i;
 
 /** `?tier=F` (A to F) pins the engine: a debug override for one code path. */
 export function forcedTier(search: string): DecodeTier | null {
@@ -31,13 +30,13 @@ export interface DemotionEnv {
  */
 export function nextDemotionTarget(from: DecodeTier, manifest: Manifest | undefined, env: DemotionEnv): DecodeTier {
 	const primary = manifest?.video[0];
-	const isHevc = primary !== undefined && HEVC.test(primary.codec);
+	const hevc = isHevc(primary?.codec);
 	if ((from === 'C' || from === 'D') && manifest) {
 		const h = primary?.height ?? 0;
 		const chromiumish = /Chrome|Edg/.test(env.userAgent) && !/Mobile/.test(env.userAgent);
-		if (isHevc && h > 0 && h <= 1080 && chromiumish && !env.demoted.has('E')) return 'E';
+		if (hevc && h > 0 && h <= 1080 && chromiumish && !env.demoted.has('E')) return 'E';
 	}
-	if (from === 'B' && isHevc && env.hevcNeedsIdrStart && !env.demoted.has('E')) return 'E';
+	if (from === 'B' && hevc && env.hevcNeedsIdrStart && !env.demoted.has('E')) return 'E';
 	return 'F';
 }
 
