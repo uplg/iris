@@ -1338,19 +1338,7 @@ fn find_leaf_for_episode(
 }
 
 fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
-    const VIDEO_EXTS: [&str; 10] = [
-        "mkv", "mp4", "webm", "m4v", "avi", "mov", "ts", "mts", "m2ts", "wmv",
-    ];
-    files
-        .iter()
-        .filter(|f| {
-            std::path::Path::new(&f.path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| VIDEO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
-        })
-        .max_by_key(|f| f.size_bytes)
-        .map_or(0, |f| f.index as i64)
+    iris_torrent::main_video_index(files).map_or(0, |i| i as i64)
 }
 
 /// Run the post-ingest plumbing: collection assignment (synchronous —

@@ -33,6 +33,59 @@ pub fn router() -> Router<AppState> {
             "/collections/{id}/grab/{season}/{episode}",
             axum::routing::post(grab_collection_episode),
         )
+        .route(
+            "/collections/{id}/watched",
+            axum::routing::post(mark_title_watched).delete(mark_title_unwatched),
+        )
+}
+
+/// Where the caller is in a title: the file watched last (with its episode
+/// when it has one) and how many of its episodes they finished. `None` on a
+/// title never started. Additive on every shape that carries it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TitleWatch {
+    pub infohash: String,
+    pub file_idx: i64,
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    pub position_seconds: f64,
+    pub duration_seconds: Option<f64>,
+    /// The file watched last was finished.
+    pub completed: bool,
+    pub last_watched_at: DateTime<Utc>,
+    /// Distinct episodes finished; a series is watched when this reaches
+    /// its `episode_count`.
+    pub watched_episodes: i64,
+}
+
+impl From<iris_db::playback::TitleWatchRow> for TitleWatch {
+    fn from(r: iris_db::playback::TitleWatchRow) -> Self {
+        Self {
+            infohash: r.infohash,
+            file_idx: r.file_idx,
+            season: r.season,
+            episode: r.episode,
+            position_seconds: r.position_seconds,
+            duration_seconds: r.duration_seconds,
+            completed: r.completed,
+            last_watched_at: r.last_watched_at,
+            watched_episodes: r.watched_episodes,
+        }
+    }
+}
+
+/// The caller's watch state for one title.
+pub(crate) async fn title_watch(
+    state: &AppState,
+    user_id: iris_core::ids::UserId,
+    collection_id: Uuid,
+) -> Option<TitleWatch> {
+    iris_db::playback::title_watches(state.db(), user_id, Some(collection_id))
+        .await
+        .ok()?
+        .into_iter()
+        .next()
+        .map(TitleWatch::from)
 }
 
 #[derive(Debug, Deserialize, Default, IntoParams)]
@@ -101,6 +154,9 @@ pub(crate) struct CollectionListItem {
     /// card. Additive — older clients ignore it.
     #[serde(default)]
     poster_path: Option<String>,
+    /// The caller's progress in this title. Additive.
+    #[serde(default)]
+    watch: Option<TitleWatch>,
 }
 
 /// A collection's TMDB poster and backdrop paths. `kind` (`"movie"` /
@@ -209,12 +265,26 @@ pub(crate) async fn list_library(
         representative_infohash: s.representative_infohash,
         ghost,
         poster_path: None,
+        watch: None,
     };
+    let mut watches: std::collections::HashMap<Uuid, TitleWatch> =
+        iris_db::playback::title_watches(state.db(), user.id, None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.collection_id, TitleWatch::from(r)))
+            .collect();
     let items = summaries
         .into_iter()
         .map(|s| to_item(s, false))
         .chain(ghosts.into_iter().map(|s| to_item(s, true)));
     let state = &state;
+    let items: Vec<_> = items
+        .map(|mut item| {
+            item.watch = watches.remove(&item.id);
+            item
+        })
+        .collect();
     let items = crate::fanout::map_ordered(items, |mut item| async move {
         item.poster_path = collection_artwork(state, item.tmdb_id, item.kind.as_wire())
             .await
@@ -300,6 +370,10 @@ pub(crate) struct CollectionDetail {
     /// The caller follows this series (its watchlist). Additive.
     #[serde(default)]
     on_watchlist: bool,
+    /// The series' watchlist key, what `POST /api/me/watchlist/remove` takes.
+    /// `None` for a title with no SCENE identity. Additive.
+    #[serde(default)]
+    normalized_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -610,6 +684,7 @@ pub(crate) async fn collection_detail(
         gone_episodes,
         episode_info,
         on_watchlist,
+        normalized_name: collection.parsed_title_normalized,
     }))
 }
 
@@ -1110,4 +1185,70 @@ pub(crate) async fn grab_collection_episode(
     )
     .await?;
     Ok(Json(resp))
+}
+
+/// The files a title plays: each episode on disk, or each copy's main video
+/// for a movie.
+async fn title_files(state: &AppState, collection_id: Uuid) -> ApiResult<Vec<(String, i64)>> {
+    let episodes = iris_db::episode_files::list_for_collection(state.db(), collection_id).await?;
+    if !episodes.is_empty() {
+        return Ok(episodes
+            .into_iter()
+            .map(|e| (e.infohash, e.file_idx))
+            .collect());
+    }
+    let torrents = iris_db::torrents::list_in_collection(state.db(), collection_id).await?;
+    Ok(torrents
+        .into_iter()
+        .filter_map(|t| {
+            let snap = state.engine().get_by_infohash(&t.infohash)?;
+            let idx = iris_torrent::main_video_index(&snap.files)?;
+            Some((t.infohash, i64::try_from(idx).ok()?))
+        })
+        .collect())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/library/collections/{id}/watched",
+    params(("id" = Uuid, Path)),
+    responses(
+        (status = 204, description = "Every file of the title marked watched for the caller"),
+        (status = 404, description = "Unknown collection"),
+    ),
+    tag = "library",
+)]
+pub(crate) async fn mark_title_watched(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<axum::http::StatusCode> {
+    iris_db::collections::get(state.db(), id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let files = title_files(&state, id).await?;
+    iris_db::playback::mark_completed_many(state.db(), user.id, &files).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/library/collections/{id}/watched",
+    params(("id" = Uuid, Path)),
+    responses(
+        (status = 204, description = "The caller's progress on the title forgotten"),
+        (status = 404, description = "Unknown collection"),
+    ),
+    tag = "library",
+)]
+pub(crate) async fn mark_title_unwatched(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<axum::http::StatusCode> {
+    iris_db::collections::get(state.db(), id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    iris_db::playback::delete_for_collection(state.db(), user.id, id).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }

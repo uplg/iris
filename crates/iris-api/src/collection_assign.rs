@@ -75,7 +75,7 @@ pub async fn assign_after_ingest(
     let parsed_name = filename::parse(name);
     let parsed_files: Vec<(usize, filename::Parsed)> = files
         .iter()
-        .filter(|(_, path)| is_main_video_file(path))
+        .filter(|(_, path)| iris_torrent::is_main_video(path))
         .filter_map(|(idx, path)| {
             let leaf = path.rsplit('/').next().unwrap_or(path);
             filename::parse(leaf).map(|p| (*idx, p))
@@ -299,25 +299,6 @@ async fn anilist_id_for(anilist: Option<&AniListClient>, title: &str) -> Option<
         .map(|m| m.anilist_id)
 }
 
-/// True when `path` is a real video file we'd want to play —
-/// excludes NFO / SRT / sample subdirectories. Matches the playable
-/// extensions used elsewhere (largest-video picker in
-/// `routes/follows.rs`); kept inline here to avoid pulling that
-/// module into our dependency graph.
-fn is_main_video_file(path: &str) -> bool {
-    const VIDEO_EXTS: [&str; 10] = [
-        "mkv", "mp4", "webm", "m4v", "avi", "mov", "ts", "mts", "m2ts", "wmv",
-    ];
-    let lower = path.to_ascii_lowercase();
-    if lower.contains("/sample/") || lower.contains(".sample.") {
-        return false;
-    }
-    let ext = std::path::Path::new(&lower)
-        .extension()
-        .and_then(|e| e.to_str());
-    ext.is_some_and(|e| VIDEO_EXTS.contains(&e))
-}
-
 fn guess_kind(
     parsed_name: Option<&filename::Parsed>,
     parsed_files: &[(usize, filename::Parsed)],
@@ -405,7 +386,7 @@ pub async fn peek_movie_collection(
     let parsed_name = filename::parse(name);
     let parsed_files: Vec<(usize, filename::Parsed)> = files
         .iter()
-        .filter(|(_, path)| is_main_video_file(path))
+        .filter(|(_, path)| iris_torrent::is_main_video(path))
         .filter_map(|(idx, path)| {
             let leaf = path.rsplit('/').next().unwrap_or(path);
             filename::parse(leaf).map(|p| (*idx, p))
@@ -460,7 +441,7 @@ async fn resolve_collection(
 async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(usize, String)]) {
     let mut fixed = 0u32;
     for (idx, path) in files {
-        if !is_main_video_file(path) {
+        if !iris_torrent::is_main_video(path) {
             continue;
         }
         let leaf = path.rsplit('/').next().unwrap_or(path);
@@ -807,7 +788,7 @@ impl AnimeHeal<'_> {
         // and re-derive them (with absolutes) under the new one.
         let _ = episode_files::delete_for_infohash(self.pool, self.infohash).await;
         for (file_idx, path) in self.files {
-            if !is_main_video_file(path) {
+            if !iris_torrent::is_main_video(path) {
                 continue;
             }
             let leaf = path.rsplit('/').next().unwrap_or(path);
@@ -851,7 +832,7 @@ impl AnimeHeal<'_> {
 /// numbers have converged (the SQL guard returns 0 rows affected).
 async fn backfill_episode_absolutes(pool: &SqlitePool, infohash: &str, files: &[(usize, String)]) {
     for (idx, path) in files {
-        if !is_main_video_file(path) {
+        if !iris_torrent::is_main_video(path) {
             continue;
         }
         let leaf = path.rsplit('/').next().unwrap_or(path);

@@ -66,6 +66,10 @@ pub struct LibraryMatch {
     /// themselves.
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// The caller's progress: on the episode asked for when the query named
+    /// one, else on the title. Additive.
+    #[serde(default)]
+    pub watch: Option<crate::routes::library::TitleWatch>,
 }
 
 /// `AggregatedResults` + the library rows. `flatten` keeps the wire
@@ -76,6 +80,27 @@ pub struct SearchResponse {
     #[serde(flatten)]
     pub agg: AggregatedResults,
     pub library_matches: Vec<LibraryMatch>,
+}
+
+/// A release page: the tracker's own details plus what Iris knows about the
+/// release, so the page stands alone (no search results needed). `flatten`
+/// keeps the wire shape of `TorrentDetails` for shipped clients.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ReleaseDetails {
+    #[serde(flatten)]
+    pub details: TorrentDetails,
+    /// The TMDB title the release name resolves to. Additive.
+    #[serde(default)]
+    pub title_match: Option<iris_core::search::TitleMatch>,
+    /// The title's poster, full URL. Additive.
+    #[serde(default)]
+    pub poster_url: Option<String>,
+    /// The torrent grabbed from this release, when it is on disk. Additive.
+    #[serde(default)]
+    pub library_infohash: Option<String>,
+    /// The file it plays (a movie's main video); `None` for a pack. Additive.
+    #[serde(default)]
+    pub library_file_idx: Option<i64>,
 }
 
 #[utoipa::path(
@@ -89,7 +114,7 @@ pub struct SearchResponse {
 )]
 pub(crate) async fn search(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Query(params): Query<SearchParams>,
 ) -> ApiResult<Json<SearchResponse>> {
     // SCENE-style parse of the raw query. `"Classroom of the Elite S04E11"`
@@ -163,7 +188,7 @@ pub(crate) async fn search(
             .retain(|r| r.title_match.as_ref().is_some_and(|m| m.tmdb_id == id));
     }
     agg.parsed_query = ranking::parsed_query_summary(&q);
-    let library_matches = library_matches_for(&state, &q).await;
+    let library_matches = library_matches_for(&state, &q, user.id).await;
     Ok(Json(SearchResponse {
         agg,
         library_matches,
@@ -195,13 +220,17 @@ async fn match_titles(state: &AppState, results: &mut [iris_core::search::Search
                 let path = m.as_ref()?.poster_path.as_deref()?;
                 Some(crate::tmdb::image_url(path, crate::tmdb::POSTER_SIZE))
             });
-        r.title_match = m.map(|m| iris_core::search::TitleMatch {
-            tmdb_id: m.tmdb_id,
-            kind: m.kind.into(),
-            title: m.title,
-            year: m.year,
-            poster_path: m.poster_path,
-        });
+        r.title_match = m.map(title_match_of);
+    }
+}
+
+fn title_match_of(m: crate::tmdb_resolve::ResolvedTitle) -> iris_core::search::TitleMatch {
+    iris_core::search::TitleMatch {
+        tmdb_id: m.tmdb_id,
+        kind: m.kind.into(),
+        title: m.title,
+        year: m.year,
+        poster_path: m.poster_path,
     }
 }
 
@@ -281,7 +310,11 @@ pub(crate) async fn titles(
 ///
 /// Best-effort: any DB error degrades to "no library rows" rather than
 /// failing the tracker search.
-async fn library_matches_for(state: &AppState, q: &SearchQuery) -> Vec<LibraryMatch> {
+async fn library_matches_for(
+    state: &AppState,
+    q: &SearchQuery,
+    user_id: iris_core::ids::UserId,
+) -> Vec<LibraryMatch> {
     let Some(key) = q.parsed_title.as_deref().filter(|k| k.len() >= 2) else {
         return Vec::new();
     };
@@ -297,7 +330,7 @@ async fn library_matches_for(state: &AppState, q: &SearchQuery) -> Vec<LibraryMa
         Some(MediaKind::Tv) => c.kind == "tv",
         None => true,
     });
-    crate::fanout::map_ordered(wanted, |c| library_match(state, q, c))
+    crate::fanout::map_ordered(wanted, |c| library_match(state, q, c, user_id))
         .await
         .into_iter()
         .flatten()
@@ -311,6 +344,7 @@ async fn library_match(
     state: &AppState,
     query: &SearchQuery,
     summary: iris_db::collections::CollectionSummary,
+    user_id: iris_core::ids::UserId,
 ) -> Option<LibraryMatch> {
     let mut hit = LibraryMatch {
         collection_id: summary.id.to_string(),
@@ -327,6 +361,7 @@ async fn library_match(
         episode_file_idx: None,
         season_episode_count: None,
         poster_path: None,
+        watch: None,
     };
     match (summary.kind.as_str(), query.season, query.episode) {
         ("tv", season, Some(episode)) => {
@@ -366,6 +401,26 @@ async fn library_match(
     hit.poster_path = crate::routes::library::collection_artwork(state, hit.tmdb_id, &hit.kind)
         .await
         .0;
+    hit.watch = match (&hit.episode_infohash, hit.episode_file_idx) {
+        (Some(infohash), Some(file_idx)) => {
+            iris_db::playback::get(state.db(), user_id, infohash, file_idx)
+                .await
+                .ok()
+                .flatten()
+                .map(|p| crate::routes::library::TitleWatch {
+                    infohash: p.infohash,
+                    file_idx: p.file_idx,
+                    season: hit.episode_season,
+                    episode: hit.episode_number,
+                    position_seconds: p.position_seconds,
+                    duration_seconds: p.duration_seconds,
+                    completed: p.completed,
+                    last_watched_at: p.last_watched_at,
+                    watched_episodes: i64::from(p.completed),
+                })
+        }
+        _ => crate::routes::library::title_watch(state, user_id, summary.id).await,
+    };
     Some(hit)
 }
 
@@ -385,7 +440,7 @@ pub struct DetailsParams {
     path = "/api/search/details",
     params(DetailsParams),
     responses(
-        (status = 200, description = "Normalised torrent detail view", body = TorrentDetails),
+        (status = 200, description = "Normalised torrent detail view", body = ReleaseDetails),
         (status = 400, description = "Unknown provider"),
         (status = 404, description = "Provider exposes no detail page for this id"),
     ),
@@ -395,7 +450,7 @@ pub(crate) async fn details(
     State(state): State<AppState>,
     _user: AuthUser,
     Query(params): Query<DetailsParams>,
-) -> ApiResult<Json<TorrentDetails>> {
+) -> ApiResult<Json<ReleaseDetails>> {
     let provider = state
         .providers()
         .get(&params.provider)
@@ -414,7 +469,7 @@ pub(crate) async fn details(
                     src,
                 ));
             }
-            Ok(Json(d))
+            Ok(Json(release_details(&state, d).await))
         }
         // Provider doesn't expose a details endpoint — surface as a 404
         // so the frontend can hide the preview button cleanly.
@@ -429,6 +484,47 @@ pub(crate) async fn details(
             tracing::warn!(provider = %params.provider, id = %params.id, error = %e, "details fetch failed");
             Err(ApiError::Internal(anyhow::anyhow!("details: {e}")))
         }
+    }
+}
+
+async fn release_details(state: &AppState, details: TorrentDetails) -> ReleaseDetails {
+    let matched = match state.tmdb() {
+        Some(tmdb) => {
+            crate::tmdb_resolve::resolve_release_name(state.db(), tmdb, &details.title, None).await
+        }
+        None => None,
+    };
+    let poster_url = matched
+        .as_ref()
+        .and_then(|m| m.poster_path.as_deref())
+        .map(|p| crate::tmdb::image_url(p, crate::tmdb::POSTER_SIZE));
+    let owned = iris_db::torrents::find_live_by_source(
+        state.db(),
+        &details.provider_id,
+        &details.external_id,
+    )
+    .await
+    .ok()
+    .flatten()
+    .filter(|t| state.engine().contains(&t.infohash));
+    let library_file_idx = owned.as_ref().and_then(|t| {
+        let snap = state.engine().get_by_infohash(&t.infohash)?;
+        let videos = snap
+            .files
+            .iter()
+            .filter(|f| iris_torrent::is_main_video(&f.path))
+            .count();
+        (videos == 1)
+            .then(|| iris_torrent::main_video_index(&snap.files))
+            .flatten()
+            .and_then(|i| i64::try_from(i).ok())
+    });
+    ReleaseDetails {
+        details,
+        title_match: matched.map(title_match_of),
+        poster_url,
+        library_infohash: owned.map(|t| t.infohash),
+        library_file_idx,
     }
 }
 

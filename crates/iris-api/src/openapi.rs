@@ -85,6 +85,8 @@ use utoipa::OpenApi;
         crate::routes::torrents::mark_watched,
         crate::routes::library::list_library,
         crate::routes::library::collection_detail,
+        crate::routes::library::mark_title_watched,
+        crate::routes::library::mark_title_unwatched,
         crate::routes::library::grab_collection_episode,
         crate::routes::follows::list,
         crate::routes::follows::create,

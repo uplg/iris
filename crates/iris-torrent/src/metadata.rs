@@ -39,6 +39,32 @@ const VIDEO_EXTS: &[&str] = &[
     "mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "mts", "m2ts", "wmv",
 ];
 
+/// A file a player can open, by its extension.
+#[must_use]
+pub fn is_video_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| VIDEO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// A video worth playing: not a sample (`Sample/`, `.sample.`).
+#[must_use]
+pub fn is_main_video(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    !lower.contains("/sample/") && !lower.contains(".sample.") && is_video_path(&lower)
+}
+
+/// The file a movie plays: its largest main video.
+#[must_use]
+pub fn main_video_index(files: &[crate::FileEntry]) -> Option<usize> {
+    files
+        .iter()
+        .filter(|f| is_main_video(&f.path))
+        .max_by_key(|f| f.size_bytes)
+        .map(|f| f.index)
+}
+
 /// `.rar`/`.zip`/`.7z` plus the classic split-volume tails: `.r00`…`.r99`
 /// and the hjsplit-style all-digit `.001`…`.999`.
 fn is_archive_ext(ext: &str) -> bool {

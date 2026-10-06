@@ -97,21 +97,7 @@ pub async fn mark_completed(
     infohash: &str,
     file_idx: i64,
 ) -> Result<(), sqlx::Error> {
-    let user: Uuid = user_id.into();
-    sqlx::query(
-        "INSERT INTO playback_progress \
-            (user_id, infohash, file_idx, position_seconds, completed, last_watched_at) \
-         VALUES (?1, ?2, ?3, 0, 1, ?4) \
-         ON CONFLICT(user_id, infohash, file_idx) DO UPDATE SET \
-            completed = 1, last_watched_at = excluded.last_watched_at",
-    )
-    .bind(user)
-    .bind(infohash)
-    .bind(file_idx)
-    .bind(Utc::now())
-    .execute(pool)
-    .await?;
-    Ok(())
+    mark_completed_many(pool, user_id, &[(infohash.to_owned(), file_idx)]).await
 }
 
 /// "Moved on to the next episode" ⇒ the previous one is done.
@@ -725,6 +711,105 @@ pub async fn watch_state_for_deleted_in_collection(
     .await
 }
 
+/// Where the caller is in one title: the file watched last (its episode when
+/// it has one) and how many of the title's episodes they finished.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TitleWatchRow {
+    pub collection_id: Uuid,
+    pub infohash: String,
+    pub file_idx: i64,
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    pub position_seconds: f64,
+    pub duration_seconds: Option<f64>,
+    pub completed: bool,
+    pub last_watched_at: DateTime<Utc>,
+    pub watched_episodes: i64,
+}
+
+/// The caller's watch state for every title they touched (`collection` =
+/// one title only), in one read: the library grid needs it per card.
+pub async fn title_watches(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection: Option<Uuid>,
+) -> Result<Vec<TitleWatchRow>, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    sqlx::query_as::<_, TitleWatchRow>(
+        "WITH latest AS ( \
+            SELECT t.collection_id, p.infohash, p.file_idx, ef.season, ef.episode, \
+                   p.position_seconds, p.duration_seconds, p.completed, p.last_watched_at, \
+                   ROW_NUMBER() OVER (PARTITION BY t.collection_id ORDER BY p.last_watched_at DESC) AS rn \
+            FROM playback_progress p \
+            JOIN torrents t ON t.infohash = p.infohash \
+            LEFT JOIN episode_files ef ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
+            WHERE p.user_id = ?1 AND t.collection_id IS NOT NULL \
+              AND (?2 IS NULL OR t.collection_id = ?2) \
+         ), finished AS ( \
+            SELECT ef.collection_id, COUNT(DISTINCT ef.season || ':' || ef.episode) AS n \
+            FROM playback_progress p \
+            JOIN episode_files ef ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
+            WHERE p.user_id = ?1 AND p.completed = 1 \
+              AND (?2 IS NULL OR ef.collection_id = ?2) \
+            GROUP BY ef.collection_id \
+         ) \
+         SELECT l.collection_id, l.infohash, l.file_idx, l.season, l.episode, \
+                l.position_seconds, l.duration_seconds, l.completed, l.last_watched_at, \
+                COALESCE(f.n, 0) AS watched_episodes \
+         FROM latest l LEFT JOIN finished f ON f.collection_id = l.collection_id \
+         WHERE l.rn = 1",
+    )
+    .bind(user)
+    .bind(collection)
+    .fetch_all(pool)
+    .await
+}
+
+/// Mark several files watched at once (a whole title), in one transaction.
+pub async fn mark_completed_many(
+    pool: &SqlitePool,
+    user_id: UserId,
+    files: &[(String, i64)],
+) -> Result<(), sqlx::Error> {
+    let user: Uuid = user_id.into();
+    let now = Utc::now();
+    let mut tx = pool.begin().await?;
+    for (infohash, file_idx) in files {
+        sqlx::query(
+            "INSERT INTO playback_progress \
+                (user_id, infohash, file_idx, position_seconds, completed, last_watched_at) \
+             VALUES (?1, ?2, ?3, 0, 1, ?4) \
+             ON CONFLICT(user_id, infohash, file_idx) DO UPDATE SET \
+                completed = 1, last_watched_at = excluded.last_watched_at",
+        )
+        .bind(user)
+        .bind(infohash)
+        .bind(file_idx)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+/// Forget the caller's progress on every file of a title ("mark unwatched").
+pub async fn delete_for_collection(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let user: Uuid = user_id.into();
+    let done = sqlx::query(
+        "DELETE FROM playback_progress WHERE user_id = ?1 AND infohash IN \
+            (SELECT infohash FROM torrents WHERE collection_id = ?2)",
+    )
+    .bind(user)
+    .bind(collection_id)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1205,5 +1290,80 @@ mod tests {
         assert_eq!(user_history(&pool, user_b, 10, 0).await.unwrap().len(), 1);
         assert_eq!(user_history(&pool, user_a, 2, 0).await.unwrap().len(), 2);
         assert_eq!(user_history(&pool, user_a, 2, 2).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn title_watch_reports_the_last_file_and_finished_episodes() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let show =
+            crate::collections::create_standalone(&pool, "Show", crate::collections::Kind::Tv)
+                .await
+                .unwrap();
+        crate::torrents::upsert(
+            &pool,
+            crate::torrents::NewTorrent {
+                infohash: "aa".into(),
+                name: "Show.S01".into(),
+                total_size_bytes: 1,
+                source_provider: None,
+                source_external_id: None,
+                added_by: user,
+            },
+        )
+        .await
+        .unwrap();
+        crate::torrents::set_collection(&pool, "aa", Some(show.id))
+            .await
+            .unwrap();
+        for e in 1..=3 {
+            crate::episode_files::upsert(
+                &pool,
+                crate::episode_files::UpsertEpisodeFile {
+                    collection_id: show.id,
+                    season: 1,
+                    episode: e,
+                    infohash: "aa".into(),
+                    file_idx: e,
+                    derived_from: crate::episode_files::DerivedFrom::SceneParse,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert!(title_watches(&pool, user, None).await.unwrap().is_empty());
+
+        mark_completed_many(&pool, user, &[("aa".into(), 1), ("aa".into(), 2)])
+            .await
+            .unwrap();
+        upsert(
+            &pool,
+            UpsertProgress {
+                user_id: user,
+                infohash: "aa".into(),
+                file_idx: 3,
+                position_seconds: 120.0,
+                duration_seconds: Some(1800.0),
+                audio_track_idx: None,
+                subtitle_track_idx: None,
+                completed: false,
+            },
+        )
+        .await
+        .unwrap();
+        let w = title_watches(&pool, user, Some(show.id)).await.unwrap();
+        assert_eq!(w.len(), 1);
+        assert_eq!(
+            (w[0].season, w[0].episode, w[0].completed),
+            (Some(1), Some(3), false)
+        );
+        assert_eq!(w[0].watched_episodes, 2);
+
+        assert_eq!(
+            delete_for_collection(&pool, user, show.id).await.unwrap(),
+            3
+        );
+        assert!(title_watches(&pool, user, None).await.unwrap().is_empty());
     }
 }

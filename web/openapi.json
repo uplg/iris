@@ -1011,6 +1011,58 @@
         }
       }
     },
+    "/api/library/collections/{id}/watched": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "mark_title_watched",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Every file of the title marked watched for the caller"
+          },
+          "404": {
+            "description": "Unknown collection"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "mark_title_unwatched",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The caller's progress on the title forgotten"
+          },
+          "404": {
+            "description": "Unknown collection"
+          }
+        }
+      }
+    },
     "/api/livetv/countries": {
       "get": {
         "tags": [
@@ -2755,7 +2807,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TorrentDetails"
+                  "$ref": "#/components/schemas/ReleaseDetails"
                 }
               }
             }
@@ -4398,6 +4450,13 @@
           "kind": {
             "$ref": "#/components/schemas/MediaKind"
           },
+          "normalized_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The series' watchlist key, what `POST /api/me/watchlist/remove` takes.\n`None` for a title with no SCENE identity. Additive."
+          },
           "numbering": {
             "type": "string",
             "description": "How the client should lay out episodes: `\"seasonal\"` (the\ndefault — season tabs) or `\"absolute\"` (one flat ordered\n\"Episode N\" list, for fleuve anime whose releases cram the\nabsolute number into a fake `S01`). Derived from the episode set,\nNOT from `is_anime`: a season-cut anime stays `\"seasonal\"`.\nAdditive — older clients ignore it and keep season tabs."
@@ -4499,6 +4558,17 @@
           "total_size_bytes": {
             "type": "integer",
             "format": "int64"
+          },
+          "watch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TitleWatch",
+                "description": "The caller's progress in this title. Additive."
+              }
+            ]
           }
         }
       },
@@ -5927,6 +5997,17 @@
           "torrent_count": {
             "type": "integer",
             "format": "int64"
+          },
+          "watch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TitleWatch",
+                "description": "The caller's progress: on the episode asked for when the query named\none, else on the title. Additive."
+              }
+            ]
           }
         }
       },
@@ -7277,6 +7358,52 @@
           }
         }
       },
+      "ReleaseDetails": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TorrentDetails"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "library_file_idx": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "The file it plays (a movie's main video); `None` for a pack. Additive."
+              },
+              "library_infohash": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The torrent grabbed from this release, when it is on disk. Additive."
+              },
+              "poster_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The title's poster, full URL. Additive."
+              },
+              "title_match": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TitleMatch",
+                    "description": "The TMDB title the release name resolves to. Additive."
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A release page: the tracker's own details plus what Iris knows about the\nrelease, so the page stands alone (no search results needed). `flatten`\nkeeps the wire shape of `TorrentDetails` for shipped clients."
+      },
       "RemoveWatchlistRequest": {
         "type": "object",
         "required": [
@@ -8004,6 +8131,65 @@
             ],
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "TitleWatch": {
+        "type": "object",
+        "description": "Where the caller is in a title: the file watched last (with its episode\nwhen it has one) and how many of its episodes they finished. `None` on a\ntitle never started. Additive on every shape that carries it.",
+        "required": [
+          "infohash",
+          "file_idx",
+          "position_seconds",
+          "completed",
+          "last_watched_at",
+          "watched_episodes"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "description": "The file watched last was finished."
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "last_watched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "position_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "watched_episodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct episodes finished; a series is watched when this reaches\nits `episode_count`."
           }
         }
       },
