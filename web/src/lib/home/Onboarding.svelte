@@ -26,7 +26,8 @@
 	const open = $derived(due && !later);
 
 	function save(keep: boolean, inline = true) {
-		const body: Preferences = { ...(keep ? choice : NO_PICKS), onboarding_completed: true };
+		// skipping keeps what the server already holds (picks made on the TV), only marks it done
+		const body: Preferences = { ...(keep ? choice : prefs.data ? picksOf(prefs.data) : NO_PICKS), onboarding_completed: true };
 		return g.run(
 			() => me.savePreferences(body),
 			(saved) => {
