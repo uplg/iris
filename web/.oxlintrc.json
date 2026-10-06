@@ -49,5 +49,15 @@
 			}
 		}
 	],
-	"ignorePatterns": ["src/lib/paraglide/**", "build/**", ".svelte-kit/**", ".vitest/**", "coverage/**", "static/**"]
+	"ignorePatterns": [
+		"src/lib/paraglide/**",
+		"build/**",
+		".svelte-kit/**",
+		".vitest/**",
+		"coverage/**",
+		"static/**",
+		"e2e/.media/**",
+		"e2e/.results/**",
+		"e2e/.report/**"
+	]
 }
