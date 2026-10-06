@@ -192,6 +192,47 @@ pub(crate) async fn verified_poster(
         .0
 }
 
+/// What TMDB says of a watch row once its match is `verified` (nothing
+/// otherwise: no name rather than a wrong one): its poster, its year, the
+/// episode's name for a series.
+#[derive(Debug, Default)]
+pub(crate) struct WatchFacts {
+    pub(crate) poster_path: Option<String>,
+    pub(crate) year: Option<u32>,
+    pub(crate) episode_title: Option<String>,
+}
+
+pub(crate) async fn watch_facts(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    verified: bool,
+    kind: Option<&str>,
+    season: Option<i64>,
+    episode: Option<i64>,
+) -> WatchFacts {
+    let (Some(client), Some(tid), true) = (state.tmdb(), tmdb_id, verified) else {
+        return WatchFacts::default();
+    };
+    let (meta, episode_title) = tokio::join!(
+        client.lookup_db_id(
+            tid,
+            crate::tmdb::TmdbKind::from_wire(kind.unwrap_or_default())
+        ),
+        async {
+            if kind == Some("tv") {
+                episode_name(state, tmdb_id, season, episode).await
+            } else {
+                None
+            }
+        }
+    );
+    WatchFacts {
+        poster_path: meta.as_ref().and_then(|m| m.poster_path.clone()),
+        year: meta.and_then(|m| m.year),
+        episode_title,
+    }
+}
+
 /// TMDB's name for one episode, when the series and the episode are known.
 pub(crate) async fn episode_name(
     state: &AppState,
