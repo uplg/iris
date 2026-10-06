@@ -62,4 +62,28 @@ describe('drawLoop', () => {
 		loop.kick();
 		expect(pending).toHaveLength(0);
 	});
+
+	it('sleeps while paused with frames still queued, steps once per arriving frame, wakes on play', () => {
+		const pending: Array<() => void> = [];
+		const raf = (cb: () => void) => pending.push(cb);
+		let steps = 0;
+		const loop = drawLoop(() => {
+			steps += 1;
+			return true;
+		}, raf);
+		loop.kick();
+		pending.shift()!();
+		expect(pending).toHaveLength(1);
+		loop.setPaused(true);
+		pending.shift()!();
+		expect(pending).toHaveLength(0);
+		loop.kick();
+		pending.shift()!();
+		expect(pending).toHaveLength(0);
+		expect(steps).toBe(3);
+		loop.setPaused(false);
+		expect(pending).toHaveLength(1);
+		pending.shift()!();
+		expect(pending).toHaveLength(1);
+	});
 });

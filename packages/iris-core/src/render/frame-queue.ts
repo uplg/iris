@@ -56,29 +56,38 @@ export class FrameQueue<F extends TimedFrame> {
 }
 
 /** A requestAnimationFrame loop that runs only while there is something to draw: woken by
- *  `kick()` when a frame arrives, asleep again once the queue is empty. */
+ *  `kick()` when a frame arrives, asleep again once the queue is empty. Paused, the queued
+ *  frames wait on a frozen clock, so it sleeps too: an arriving frame still gets one step (the
+ *  picture of a seek made while paused), and `setPaused(false)` wakes it. */
 export function drawLoop(
 	step: () => boolean,
 	raf: (cb: () => void) => number = requestAnimationFrame
-): { kick: () => void; stop: () => void } {
+): { kick: () => void; stop: () => void; setPaused: (paused: boolean) => void } {
 	let scheduled = false;
 	let stopped = false;
+	let paused = false;
 	const tick = () => {
 		scheduled = false;
 		if (stopped) return;
-		if (step()) {
+		if (step() && !paused) {
 			scheduled = true;
 			raf(tick);
 		}
 	};
+	const kick = () => {
+		if (scheduled || stopped) return;
+		scheduled = true;
+		raf(tick);
+	};
 	return {
-		kick: () => {
-			if (scheduled || stopped) return;
-			scheduled = true;
-			raf(tick);
-		},
+		kick,
 		stop: () => {
 			stopped = true;
+		},
+		setPaused: (next) => {
+			if (paused === next) return;
+			paused = next;
+			if (!paused) kick();
 		}
 	};
 }

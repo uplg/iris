@@ -187,6 +187,7 @@ function setUp(opts: VideoRendererOptions, nav: WebGpuNavigator, device: GPUDevi
 		enqueue,
 		queueDepth: () => queue.depth,
 		clear: () => queue.clear(),
+		setPaused: loop.setPaused,
 		lastDrawnTs: () => lastDrawn,
 		intrinsicSize: () => intrinsic,
 		canvas,

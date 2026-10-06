@@ -215,6 +215,7 @@ export const mountTierC: EngineMount = async (opts) => {
 			wall.resume();
 			if (!paused) return;
 			paused = false;
+			renderer.setPaused(false);
 			opts.onPlayingChange?.(true);
 		},
 		pause: () => {
@@ -223,6 +224,7 @@ export const mountTierC: EngineMount = async (opts) => {
 			// the clock freezes; the renderer and the decode pacing park with it
 			scheduler.suspend();
 			wall.pause();
+			renderer.setPaused(true);
 			opts.onPlayingChange?.(false);
 			opts.onPause?.(currentMediaTime());
 		},

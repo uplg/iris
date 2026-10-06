@@ -21,6 +21,8 @@ export type Canvas2dRenderer = {
 	queueDepth: () => number;
 	/** Drops every queued frame. */
 	clear: () => void;
+	/** Paused, the draw loop sleeps (see `drawLoop`). */
+	setPaused: (paused: boolean) => void;
 	/** Timestamp (seconds) of the last frame actually drawn — ground
 	 *  truth for "what the viewer's eye is seeing right now". */
 	lastDrawnTs: () => number;
@@ -93,6 +95,7 @@ export function createCanvas2dRenderer(opts: Canvas2dRendererOptions): Canvas2dR
 		enqueue,
 		queueDepth: () => queue.depth,
 		clear: () => queue.clear(),
+		setPaused: loop.setPaused,
 		lastDrawnTs: () => lastDrawn,
 		intrinsicSize: () => intrinsic,
 		dispose

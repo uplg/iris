@@ -31,6 +31,8 @@ export type VideoRenderer = {
 	queueDepth: () => number;
 	/** Drops every queued frame (a seek: they belong to the old timeline). */
 	clear: () => void;
+	/** Follows the clock: paused, the draw loop sleeps instead of polling a frozen clock. */
+	setPaused: (paused: boolean) => void;
 	/** Timestamp (seconds) of the last frame actually drawn — ground
 	 *  truth for what the viewer's eye is seeing right now. */
 	lastDrawnTs: () => number;
@@ -73,6 +75,7 @@ async function mountCanvas2d(opts: VideoRendererOptions): Promise<VideoRenderer>
 		enqueue: inner.enqueue,
 		queueDepth: inner.queueDepth,
 		clear: inner.clear,
+		setPaused: inner.setPaused,
 		lastDrawnTs: inner.lastDrawnTs,
 		intrinsicSize: inner.intrinsicSize,
 		canvas,
