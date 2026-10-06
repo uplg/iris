@@ -223,6 +223,21 @@ type StreamsDb = HashMap<String, Vec<channels::StreamSource>>;
 /// Folded channel name → logo URL, from iptv-org's channels + logos DBs.
 type NameLogos = HashMap<String, String>;
 
+/// One row of iptv-org's channels database.
+#[derive(Deserialize)]
+struct ApiChannel {
+    id: String,
+    name: String,
+    #[serde(default)]
+    alt_names: Vec<String>,
+    #[serde(default)]
+    country: String,
+    #[serde(default)]
+    is_nsfw: bool,
+    #[serde(default)]
+    closed: Option<String>,
+}
+
 /// One row of the cross-country search index. `channel_id` uses the SAME
 /// slug derivation as `build_channels` (`normalize(tvg_id_base(id))`), so a
 /// hit is directly openable as `(country, channel_id)` by every client.
@@ -1442,77 +1457,22 @@ impl LiveTvService {
     }
 
     async fn load_search_index(&self) -> Option<Vec<SearchEntry>> {
-        #[derive(serde::Deserialize)]
-        struct ApiChannel {
-            id: String,
-            name: String,
-            #[serde(default)]
-            alt_names: Vec<String>,
-            country: String,
-            #[serde(default)]
-            is_nsfw: bool,
-            #[serde(default)]
-            closed: Option<String>,
-        }
-        // Logos moved out of channels.json into a sibling logos.json
-        // (one or more per channel id) — join them in.
-        #[derive(serde::Deserialize)]
-        struct ApiLogo {
-            channel: String,
-            url: String,
-        }
-
         // Playability filter — a name hit without any stream is a dead card.
         let streams = self.streams_db().await?;
-        let logos_url = self
-            .inner
-            .cfg
-            .channels_url
-            .replace("channels.json", "logos.json");
-        let mut logo_by_channel: HashMap<String, String> = HashMap::new();
-        if let Ok(resp) = self.inner.http.get(&logos_url).send().await
-            && let Ok(logos) = read_json::<Vec<ApiLogo>>(resp).await
-        {
-            for l in logos {
-                logo_by_channel.entry(l.channel).or_insert(l.url);
-            }
-        }
-
-        let fetched: Vec<ApiChannel> = match self
-            .inner
-            .http
-            .get(&self.inner.cfg.channels_url)
-            .send()
+        let logo_by_channel = self
+            .fetch_logo_db()
             .await
-            .and_then(reqwest::Response::error_for_status)
-        {
-            Ok(resp) => match read_json(resp).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(error = %e, "live tv channels db parse failed");
-                    return None;
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %upstream_err(e), "live tv channels db fetch failed");
-                return None;
-            }
-        };
-
-        // Folded channel-name → logo, built from the same DB, to give Vavoo
-        // search cards a logo (they carry none of their own).
-        let name_logo: HashMap<String, String> = fetched
-            .iter()
-            .filter_map(|c| {
-                let logo = logo_by_channel.get(&c.id)?;
-                let key = channels::normalize(&c.name);
-                (!key.is_empty()).then(|| (key, logo.clone()))
-            })
-            .collect();
+            .inspect_err(|e| tracing::warn!(error = %e, "live tv logos db unavailable"))
+            .unwrap_or_default();
+        let fetched = self
+            .fetch_channels_db()
+            .await
+            .inspect_err(|e| tracing::warn!(error = %e, "live tv channels db unavailable"))
+            .ok()?;
 
         let mut index: Vec<SearchEntry> = fetched
             .into_iter()
-            .filter(|c| c.closed.is_none() && !c.is_nsfw)
+            .filter(|c| c.closed.is_none() && !c.is_nsfw && !c.country.is_empty())
             .filter(|c| streams.contains_key(&c.id.to_lowercase()))
             .filter_map(|c| {
                 let channel_id = channels::normalize(channels::tvg_id_base(&c.id));
@@ -1538,6 +1498,7 @@ impl LiveTvService {
         // lives in an extra playlist (ParaTV, schumijo, Free-TV…) or in Vavoo —
         // yet those channels ARE playable (they land in the country snapshot),
         // so a real search must surface them too.
+        let name_logo = self.name_logo_index().await.unwrap_or_default();
         self.augment_search_index(&name_logo, &mut index).await;
         tracing::info!(channels = index.len(), "live tv search index built");
         Some(index)
@@ -1603,47 +1564,12 @@ impl LiveTvService {
     }
 
     async fn load_name_logo_index(&self) -> Option<NameLogos> {
-        #[derive(serde::Deserialize)]
-        struct ApiChannel {
-            id: String,
-            name: String,
-            #[serde(default)]
-            alt_names: Vec<String>,
+        let loaded = async {
+            Ok::<_, LiveTvError>((self.fetch_logo_db().await?, self.fetch_channels_db().await?))
         }
-        #[derive(serde::Deserialize)]
-        struct ApiLogo {
-            channel: String,
-            url: String,
-        }
-
-        let logos_url = self
-            .inner
-            .cfg
-            .channels_url
-            .replace("channels.json", "logos.json");
-        let logos = self
-            .inner
-            .http
-            .get(&logos_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .ok()?;
-        let logos: Vec<ApiLogo> = read_json(logos).await.ok()?;
-        let mut logo_by_id: HashMap<String, String> = HashMap::new();
-        for l in logos {
-            logo_by_id.entry(l.channel).or_insert(l.url);
-        }
-
-        let channels = self
-            .inner
-            .http
-            .get(&self.inner.cfg.channels_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .ok()?;
-        let channels: Vec<ApiChannel> = read_json(channels).await.ok()?;
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "live tv name→logo index unavailable"));
+        let (logo_by_id, channels) = loaded.ok()?;
         let mut map: HashMap<String, String> = HashMap::new();
         for c in channels {
             let Some(logo) = logo_by_id.get(&c.id) else {
@@ -1658,6 +1584,47 @@ impl LiveTvService {
         }
         tracing::info!(names = map.len(), "live tv name→logo index built");
         Some(map)
+    }
+
+    /// iptv-org's channels database.
+    async fn fetch_channels_db(&self) -> Result<Vec<ApiChannel>, LiveTvError> {
+        let resp = self
+            .inner
+            .http
+            .get(&self.inner.cfg.channels_url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(upstream_err)?;
+        read_json(resp).await
+    }
+
+    /// iptv-org's logos database, beside the channels one: the first logo of
+    /// each channel id.
+    async fn fetch_logo_db(&self) -> Result<HashMap<String, String>, LiveTvError> {
+        #[derive(serde::Deserialize)]
+        struct ApiLogo {
+            channel: String,
+            url: String,
+        }
+        let url = self
+            .inner
+            .cfg
+            .channels_url
+            .replace("channels.json", "logos.json");
+        let resp = self
+            .inner
+            .http
+            .get(&url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(upstream_err)?;
+        let mut by_id = HashMap::new();
+        for logo in read_json::<Vec<ApiLogo>>(resp).await? {
+            by_id.entry(logo.channel).or_insert(logo.url);
+        }
+        Ok(by_id)
     }
 
     /// Last-resort transcoded playlist for a channel (see [`transcode`]).
@@ -3158,6 +3125,74 @@ https://a/x.m3u8
         assert!(svc.countries().await.is_err());
         assert!(svc.countries().await.is_err());
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn search_and_logo_back_fill_read_the_same_channel_databases() {
+        use axum::routing::get;
+        let app = axum::Router::new()
+            .route(
+                "/api/channels.json",
+                get(|| async {
+                    axum::Json(serde_json::json!([
+                        {"id": "TF1.fr", "name": "TF1", "alt_names": ["Television Francaise 1"], "country": "FR"},
+                        {"id": "Gone.fr", "name": "Gone", "country": "FR", "closed": "2020-01-01"},
+                        {"id": "Adult.fr", "name": "Adult", "country": "FR", "is_nsfw": true},
+                        {"id": "Nowhere.int", "name": "Nowhere"},
+                    ]))
+                }),
+            )
+            .route(
+                "/api/logos.json",
+                get(|| async {
+                    axum::Json(serde_json::json!([
+                        {"channel": "TF1.fr", "url": "https://logo.example/tf1.png"},
+                        {"channel": "TF1.fr", "url": "https://logo.example/tf1-old.png"},
+                    ]))
+                }),
+            )
+            .route(
+                "/api/streams.json",
+                get(|| async {
+                    axum::Json(serde_json::json!(
+                        ["TF1.fr", "Gone.fr", "Adult.fr", "Nowhere.int"]
+                            .map(|c| serde_json::json!({"channel": c, "url": "https://s.example/a.m3u8"}))
+                    ))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let cfg = iris_config::LiveTvConfig {
+            channels_url: format!("http://{addr}/api/channels.json"),
+            streams_url: format!("http://{addr}/api/streams.json"),
+            extra_playlists: HashMap::new(),
+            vavoo_enabled: false,
+            ..Default::default()
+        };
+        let svc = LiveTvService::new(cfg, "test-secret").unwrap();
+
+        let hits = svc.search("tf", 10).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            (hits[0].country.as_str(), hits[0].channel_id.as_str()),
+            ("fr", "tf1")
+        );
+        assert_eq!(
+            hits[0].logo_url.as_deref(),
+            Some("https://logo.example/tf1.png")
+        );
+        assert!(svc.search("gone", 10).await.is_empty(), "closed");
+        assert!(svc.search("adult", 10).await.is_empty(), "nsfw");
+        assert!(svc.search("nowhere", 10).await.is_empty(), "no country");
+
+        let names = svc.name_logo_index().await.unwrap();
+        assert_eq!(
+            names.get("tf1").map(String::as_str),
+            Some("https://logo.example/tf1.png")
+        );
+        assert!(names.contains_key("televisionfrancaise1"), "alt names too");
+        assert!(!names.contains_key("gone"), "no logo, no entry");
     }
 
     #[test]
