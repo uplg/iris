@@ -259,7 +259,7 @@ fn subtitle_url_ext(codec: &str) -> &'static str {
     }
 }
 
-// ---- codec strings (MSE / WebCodecs format, best-effort) ----
+// codec strings (MSE / WebCodecs format, best-effort)
 
 fn codec_string_video(v: &VideoStream) -> Option<String> {
     match v.codec.to_ascii_lowercase().as_str() {
@@ -347,7 +347,7 @@ fn codec_string_audio(codec: &str) -> Option<String> {
     }
 }
 
-// ---- container layout detection ----
+// container layout detection
 
 #[derive(Debug, Clone, Copy)]
 struct ContainerLayout {
