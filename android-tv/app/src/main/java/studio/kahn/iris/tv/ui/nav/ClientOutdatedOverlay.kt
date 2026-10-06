@@ -14,12 +14,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
@@ -51,6 +53,7 @@ fun ClientOutdatedOverlay(installedVersion: String, onOpenSettings: () -> Unit) 
     val activity = LocalActivity.current
     BackHandler { activity?.moveTaskToBack(true) }
     val open = remember { FocusRequester() }
+    val held = remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { runCatching { open.requestFocus() } }
     val layout = IrisLayout.current
     Box(
@@ -60,6 +63,11 @@ fun ClientOutdatedOverlay(installedVersion: String, onOpenSettings: () -> Unit) 
             .touchClick {}
             .semantics { paneTitle = "Update Iris" }
             .focusProperties { onExit = { cancelFocusChange() } }
+            // A screen below asking for the focus late (Home's hero) would press a hidden
+            // button: the focus comes straight back here.
+            .onFocusChanged {
+                if (it.hasFocus) held.value = true else if (held.value) runCatching { open.requestFocus() }
+            }
             .focusGroup()
             .padding(layout.safePadding),
     ) {

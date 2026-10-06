@@ -11,10 +11,12 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.TmdbMetadataCache
+import studio.kahn.iris.tv.data.bestEffort
+import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentView
@@ -23,7 +25,6 @@ import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
-import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.format.prettySceneName
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
@@ -68,22 +69,30 @@ class DetailViewModel(private val container: AppContainer, private val infohash:
     }
     private val progress = MutableStateFlow<List<FileProgressEntry>>(emptyList())
     private val meta = MutableStateFlow<MediaMetadata?>(null)
-    private val controls = MutableStateFlow(DetailUiState())
-    private var metaAsked = false
+    private val gone = MutableStateFlow(false)
+    private val actions = BusyActions(viewModelScope)
+    private var metaAsking = false
 
-    val state: StateFlow<DetailUiState> = combine(torrent.state, progress, meta, controls) { t, p, m, c ->
-        c.copy(page = t.map { page(it, p, m) })
+    val state: StateFlow<DetailUiState> = combine(torrent.state, progress, meta, actions.state, gone) { t, p, m, a, g ->
+        DetailUiState(page = t.map { page(it, p, m) }, busy = a.busy, notice = a.notice, gone = g)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), DetailUiState())
 
     suspend fun pollWhileStarted() = coroutineScope {
-        launch { progress.value = runCatching { container.api().torrentProgress(infohash) }.getOrDefault(progress.value) }
+        launch { bestEffort { container.api().torrentProgress(infohash) }?.let { progress.value = it } }
         launch {
             torrent.state.collect { s ->
                 val t = s.valueOrNull ?: return@collect
                 val id = t.tmdbId
-                if (!metaAsked && id != null) {
-                    metaAsked = true
-                    launch { meta.value = runCatching { container.api().tmdbMetadata(id, t.kind?.value) }.getOrNull() }
+                // Until it is in: a failed or cut read is asked again on the next change or start.
+                if (meta.value == null && !metaAsking && id != null) {
+                    metaAsking = true
+                    launch {
+                        try {
+                            meta.value = TmdbMetadataCache.get(container.api(), id, t.kind?.value)
+                        } finally {
+                            metaAsking = false
+                        }
+                    }
                 }
             }
         }
@@ -104,20 +113,13 @@ class DetailViewModel(private val container: AppContainer, private val infohash:
 
     fun delete(r: ReleaseRow) = act("delete:${r.infohash}", "Deleted ${r.release}.") {
         container.api().deleteTorrent(r.infohash)
-        controls.update { it.copy(gone = true) }
+        gone.value = true
     }
 
     private fun act(key: String, done: String, block: suspend CoroutineScope.() -> Unit) {
-        if (key in controls.value.busy) return
-        controls.update { it.copy(busy = it.busy + key, notice = null) }
-        viewModelScope.launch {
-            val notice = try {
-                coroutineScope { block() }
-                Notice(done, failed = false)
-            } catch (e: Exception) {
-                Notice(e.toUiError().message, failed = true)
-            }
-            controls.update { it.copy(busy = it.busy - key, notice = notice) }
+        actions.runSaying(key) {
+            block()
+            done
         }
     }
 }

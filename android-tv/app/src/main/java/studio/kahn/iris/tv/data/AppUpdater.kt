@@ -48,8 +48,8 @@ object AppUpdater {
      *  update path). */
     const val LATEST_VERSION_URL: String = "https://synthe.se/app-release.version"
 
-    /** Cache subdirectory used by [downloadApk]; cleared on each
-     *  successful install request. */
+    /** Cache subdirectory used by [downloadApk]; emptied at each process start ([clearDownloads]):
+     *  an install restarts the process, and a file from an earlier process is never handed on. */
     private const val CACHE_SUBDIR = "updates"
     private const val APK_FILENAME = "iris-tv-latest.apk"
 
@@ -67,10 +67,18 @@ object AppUpdater {
         data class Failed(val message: String) : Progress
     }
 
+    /** Deletes what earlier downloads left (the APK installed since, a `.part` cut short). */
+    fun clearDownloads(context: Context) {
+        File(context.cacheDir, CACHE_SUBDIR).deleteRecursively()
+    }
+
     /**
      * Stream the APK from [APK_URL] into the cache and emit progress
      * events. Cancellation by the caller (e.g. composable leaves
-     * composition) cancels the underlying network read.
+     * composition) cancels the underlying network read. [client] is the
+     * update client ([buildUpdateOkHttpClient]), never the API one: no
+     * session cookie leaves for that host, and no call timeout cuts a
+     * slow download.
      */
     fun downloadApk(
         context: Context,
@@ -106,6 +114,7 @@ object AppUpdater {
             val body = resp.body
             val total = body.contentLength()
             val source = body.byteStream()
+            var done = false
             try {
                 tmp.outputStream().use { out ->
                     val buf = ByteArray(64 * 1024)
@@ -124,10 +133,12 @@ object AppUpdater {
                         }
                     }
                 }
+                done = true
             } catch (e: IOException) {
-                tmp.delete()
                 emit(Progress.Failed("download interrupted: ${e.message ?: "io"}"))
                 return@flow
+            } finally {
+                if (!done) tmp.delete()
             }
         }
 

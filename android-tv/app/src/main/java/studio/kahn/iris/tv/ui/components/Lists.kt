@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -149,6 +150,9 @@ fun PageEnd(
     loadingText: String,
     endText: String,
     modifier: Modifier = Modifier,
+    /** The next page waits to be asked: a button that asks it. */
+    onMore: (() -> Unit)? = null,
+    moreText: String = "Show more",
 ) {
     Box(
         modifier
@@ -161,6 +165,8 @@ fun PageEnd(
                 StatusLine("The next page did not load: ${error.message}", tone = StatusTone.Down)
                 ActionButton("Try again", onRetry, style = ActionStyle.Secondary, size = ActionSize.Small, icon = Icons.Rounded.Refresh)
             }
+            !loadingMore && hasNext && onMore != null ->
+                ActionButton(moreText, onMore, style = ActionStyle.Secondary, size = ActionSize.Small, icon = Icons.Rounded.ExpandMore)
             loadingMore || hasNext -> Row(
                 Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
@@ -197,6 +203,7 @@ fun <T> PosterGrid(
     verticalGap: Dp = IrisSpace.s7,
     initialFocus: FocusRequester = FocusRequester.Default,
     header: (LazyGridScope.() -> Unit)? = null,
+    footer: (LazyGridScope.() -> Unit)? = null,
     itemContent: @Composable LazyGridItemScope.(T) -> Unit,
 ) {
     LazyVerticalGrid(
@@ -211,5 +218,6 @@ fun <T> PosterGrid(
     ) {
         header?.invoke(this)
         items(items, key = key) { item -> itemContent(item) }
+        footer?.invoke(this)
     }
 }

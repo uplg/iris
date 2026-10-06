@@ -28,36 +28,47 @@ fun LockLandscape() {
     val context = LocalContext.current
     DisposableEffect(Unit) {
         val activity = context.findActivity()
-        val previousOrientation = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        val controller = activity?.window?.let { w ->
-            WindowCompat.getInsetsController(w, w.decorView)
-        }
-        controller?.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        controller?.hide(WindowInsetsCompat.Type.systemBars())
+        if (activity != null) PlaybackWindow.hold(activity)
+        onDispose { if (activity != null) PlaybackWindow.release(activity) }
+    }
+}
+
+/**
+ * The holds on the playback window mode, counted: the next episode's screen composes (and
+ * holds) before the previous one leaves, so the mode is applied on the first hold only and
+ * undone on the last release, back to what the browsing UI had.
+ */
+private object PlaybackWindow {
+    private var holds = 0
+    private var previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    private var previousCutoutMode = 0
+
+    fun hold(activity: Activity) {
+        if (holds++ > 0) return
+        previousOrientation = activity.requestedOrientation
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
         // Draw INTO the display cutout (Netflix/YouTube behaviour) — without
         // this the notch side keeps a dead band in landscape playback.
-        var previousCutoutMode = 0
         if (android.os.Build.VERSION.SDK_INT >= 28) {
-            activity?.window?.attributes?.let { attrs ->
-                previousCutoutMode = attrs.layoutInDisplayCutoutMode
-                attrs.layoutInDisplayCutoutMode =
-                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                activity.window.attributes = attrs
-            }
+            val attrs = activity.window.attributes
+            previousCutoutMode = attrs.layoutInDisplayCutoutMode
+            attrs.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            activity.window.attributes = attrs
         }
-        onDispose {
-            controller?.show(WindowInsetsCompat.Type.systemBars())
-            if (android.os.Build.VERSION.SDK_INT >= 28) {
-                activity?.window?.attributes?.let { attrs ->
-                    attrs.layoutInDisplayCutoutMode = previousCutoutMode
-                    activity.window.attributes = attrs
-                }
-            }
-            activity?.requestedOrientation =
-                previousOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
+    fun release(activity: Activity) {
+        if (holds == 0 || --holds > 0) return
+        WindowCompat.getInsetsController(activity.window, activity.window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            val attrs = activity.window.attributes
+            attrs.layoutInDisplayCutoutMode = previousCutoutMode
+            activity.window.attributes = attrs
         }
+        activity.requestedOrientation = previousOrientation
     }
 }
 

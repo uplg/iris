@@ -32,6 +32,8 @@ interface AppContainer {
      *  reuse this for JSON RPC — it's tuned for long-lived byte-range
      *  streams. */
     val mediaOkHttpClient: OkHttpClient
+    /** The client of the APK host ([buildUpdateOkHttpClient]): never the session's cookies. */
+    val updateOkHttpClient: OkHttpClient
     val channels: ChannelsService
     /**
      * Process-lifetime scope for fire-and-forget background work that
@@ -67,6 +69,7 @@ class DefaultAppContainer(context: Context) : AppContainer {
     override val okHttpClient: OkHttpClient =
         buildOkHttpClient(sessionStore, context.applicationContext.cacheDir) { outdatedFlag.value = true }
     override val mediaOkHttpClient: OkHttpClient = deriveMediaOkHttpClient(okHttpClient)
+    override val updateOkHttpClient: OkHttpClient by lazy { buildUpdateOkHttpClient() }
     override val channels: ChannelsService = ChannelsService(context.applicationContext)
     override val applicationScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -104,6 +107,9 @@ class DefaultAppContainer(context: Context) : AppContainer {
                 .create(IrisApi::class.java)
         }
 
-    private fun normalize(url: String): String =
-        if (url.endsWith("/")) url else "$url/"
+    private fun normalize(url: String): String = serverBase(url)
 }
+
+/** The server's URL as a base for paths: with its trailing slash. */
+fun serverBase(url: String): String = if (url.endsWith("/")) url else "$url/"
+

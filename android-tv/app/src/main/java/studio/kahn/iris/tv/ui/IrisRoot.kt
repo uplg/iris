@@ -125,6 +125,7 @@ fun IrisRoot(
             // on TV; playback hides the bars (LockLandscape), so they collapse.
             .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.ime)),
     ) {
+        val locked = clientOutdated && currentEntry?.destination?.hasRoute<Routes.Settings>() != true
         NavHost(navController = navController, startDestination = start) {
             composable<Routes.Pairing> {
                 PairingScreen(
@@ -162,12 +163,8 @@ fun IrisRoot(
                     onOpenSearch = { query ->
                         navController.navigate(Routes.Search(query))
                     },
-                    onOpenLibrary = {
-                        navController.navigate(Routes.Library)
-                    },
-                    onOpenDiscover = {
-                        navController.navigate(Routes.Discover)
-                    },
+                    onOpenLibrary = { navController.openTab(TopTab.Library) },
+                    onOpenDiscover = { navController.openTab(TopTab.Discover) },
                 )
             }
             section<Routes.LiveTv>(TopTab.LiveTv, shellHost) {
@@ -227,7 +224,13 @@ fun IrisRoot(
                     onPickFile = { infohash, fileIdx ->
                         navController.navigate(Routes.Watch(infohash, fileIdx))
                     },
-                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
+                    onOpenCollection = { collectionId ->
+                        // Reached from that title's page: back to it, not a second copy on the stack.
+                        val from = navController.previousBackStackEntry
+                        val cameFrom = from?.destination?.hasRoute<Routes.Collection>() == true &&
+                            from.toRoute<Routes.Collection>().collectionId == collectionId
+                        if (cameFrom) navController.popBackStack() else navController.navigate(Routes.Collection(collectionId))
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -299,6 +302,7 @@ fun IrisRoot(
                         navController.navigate(Routes.SearchDetail(providerId, externalId, tmdbId, kind))
                     },
                     onPlay = { infohash, fileIdx -> navController.navigate(Routes.Watch(infohash, fileIdx)) },
+                    onOpenCollection = { collectionId -> navController.navigate(Routes.Collection(collectionId)) },
                 )
             }
             composable<Routes.SearchDetail> { backStackEntry ->
@@ -352,7 +356,7 @@ fun IrisRoot(
 
         // Everything but Settings (where the updater lives) is locked once the
         // server answered 426; the updater downloads from outside the server.
-        if (clientOutdated && currentEntry?.destination?.hasRoute<Routes.Settings>() != true) {
+        if (locked) {
             ClientOutdatedOverlay(installedVersion = BuildConfig.VERSION_NAME, onOpenSettings = openSettings)
         }
     }

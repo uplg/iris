@@ -42,7 +42,7 @@ class UpdateViewModel(
 
     init {
         viewModelScope.launch {
-            val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
+            val latest = AppUpdater.fetchLatestVersion(container.updateOkHttpClient)
             mutable.update {
                 it.copy(latest = AppUpdater.versionStatus(it.installed, latest), checking = false)
             }
@@ -53,7 +53,7 @@ class UpdateViewModel(
         if (job?.isActive == true) return
         mutable.update { it.copy(progress = AppUpdater.Progress.Connecting) }
         job = viewModelScope.launch {
-            AppUpdater.downloadApk(app, container.okHttpClient).collect { p ->
+            AppUpdater.downloadApk(app, container.updateOkHttpClient).collect { p ->
                 mutable.update { it.copy(progress = p) }
             }
         }

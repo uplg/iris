@@ -55,6 +55,7 @@ object SearchFixtures {
         isAnime = false,
         kind = "tv",
         torrentCount = 2,
+        tmdbId = 95396,
         watch = TitleWatch(
             completed = false,
             fileIdx = 3,

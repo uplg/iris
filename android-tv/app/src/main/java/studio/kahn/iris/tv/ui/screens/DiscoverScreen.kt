@@ -17,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -30,6 +31,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
+import studio.kahn.iris.tv.ui.components.focusReturn
 import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.ScreenFooter
@@ -93,6 +95,7 @@ fun DiscoverContent(
     val focus = rememberCardFocus(fallback = kindFocus)
     val tiles = rememberFocusReturn()
     val tileFocus = { id: String -> tiles.requester(id) }
+    val tileModifier = { id: String -> Modifier.focusReturn(tiles, id) }
     var lastMood by remember { mutableStateOf<String?>(null) }
     var focusPlaced by remember { mutableStateOf(false) }
 
@@ -102,6 +105,12 @@ fun DiscoverContent(
     val firstMood = state.board.valueOrNull?.firstOrNull()?.id
     LaunchedEffect(firstKey, firstMood, mood == null) {
         if (focusPlaced) return@LaunchedEffect
+        // Back on this screen: the card or the mood left.
+        withFrameNanos { }
+        if (focus.focusLast() || (mood == null && tiles.focusLast())) {
+            focusPlaced = true
+            return@LaunchedEffect
+        }
         val target = when {
             mood != null && firstKey != null -> focus.requester(firstKey)
             mood == null && firstMood != null -> tileFocus(firstMood)
@@ -123,9 +132,10 @@ fun DiscoverContent(
 
     val footer: @Composable () -> Unit = {
         ScreenFooter(
-            listOf(
+            listOfNotNull(
                 KeyHint(Keys.OK, if (mood == null) "Open, find releases" else "Find releases"),
-                KeyHint(Keys.HOLD_OK, "Not interested"),
+                // Mood tiles have no menu: the hold only means something on titles.
+                if (mood != null || !state.forYou.valueOrNull.isNullOrEmpty()) KeyHint(Keys.HOLD_OK, "Not interested") else null,
                 KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
             ),
         ) { NoticeLine(state.notice) }
@@ -163,7 +173,7 @@ fun DiscoverContent(
             }
             moodsHead(state.kind, onKind, kindFocus)
             if (mood == null) {
-                moodBoard(state.board, onOpenMood, onRetry, tileFocus, moodCols)
+                moodBoard(state.board, onOpenMood, onRetry, tileModifier, moodCols)
             } else {
                 moodResults(mood, focus, onCloseMood, onCardAction, onRetry, posterCols)
             }

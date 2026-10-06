@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.UserResponse
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 
@@ -30,8 +32,8 @@ class ShellViewModel(private val container: AppContainer) : ViewModel() {
     fun refresh() {
         reading?.cancel()
         reading = viewModelScope.launch {
-            val url = container.sessionStore.serverUrl.first() ?: return@launch
-            runCatching { container.apiFor(url).me() }.onSuccess { me.value = it }
+            if (container.sessionStore.serverUrl.first() == null) return@launch
+            bestEffort { container.api().me() }?.let { me.value = it }
         }
     }
 

@@ -21,6 +21,7 @@ import studio.kahn.iris.tv.ui.screens.TitleReleasesContent
 import studio.kahn.iris.tv.ui.screens.search.FollowState
 import studio.kahn.iris.tv.ui.screens.search.GrabUi
 import studio.kahn.iris.tv.ui.screens.search.ReleaseUiState
+import studio.kahn.iris.tv.ui.screens.search.ReleasePages
 import studio.kahn.iris.tv.ui.screens.search.SearchUiState
 import studio.kahn.iris.tv.ui.screens.search.TitleReleasesUiState
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
@@ -54,7 +55,7 @@ class SearchScreenshots {
         typed = "sever",
         query = "sever",
         titles = Loadable.Ready(F.titles),
-        results = Loadable.Ready(F.page),
+        pages = ReleasePages(results = Loadable.Ready(F.page)),
     )
 
     private val grid = typed.copy(typed = "severance", query = "severance", editing = false, view = SearchViewMode.GRID)
@@ -75,9 +76,9 @@ class SearchScreenshots {
 
     @Test
     fun states() {
-        shots.snap("search_loading") { Search(grid.copy(results = Loadable.Loading)) }
+        shots.snap("search_loading") { Search(grid.copy(pages = ReleasePages(results = Loadable.Loading))) }
         shots.snap("search_failed") {
-            Search(grid.copy(results = Loadable.Failed(UiError(UiError.OFFLINE_MESSAGE, code = UiError.NETWORK))))
+            Search(grid.copy(pages = ReleasePages(results = Loadable.Failed(UiError(UiError.OFFLINE_MESSAGE, code = UiError.NETWORK)))))
         }
         shots.snap("search_empty_language") { Search(grid.copy(language = "vo")) }
         shots.snap("search_no_recent") { Search(start.copy(recent = Loadable.Ready(emptyList()))) }
@@ -91,6 +92,11 @@ class SearchScreenshots {
             )
         }
         shots.snap("search_grab_huge") { Search(grid, GrabUi.AskHuge("3", 62_000_000_000L)) }
+        shots.snap("search_show_more") {
+            Search(
+                grid.copy(view = SearchViewMode.LIST, language = "fr", pages = ReleasePages(results = Loadable.Ready(F.page), waitsForViewer = true)),
+            )
+        }
     }
 
     @Test
@@ -100,7 +106,7 @@ class SearchScreenshots {
                 query = "severance",
                 tmdbId = 95396,
                 card = F.titles.first(),
-                results = Loadable.Ready(F.page.copy(rows = F.releases.filter { it.titleMatch?.tmdbId == 95396L }, matches = emptyList())),
+                pages = ReleasePages(results = Loadable.Ready(F.page.copy(rows = F.releases.filter { it.titleMatch?.tmdbId == 95396L }))),
             ),
             GrabUi.Idle,
             TitleReleasesActions(),

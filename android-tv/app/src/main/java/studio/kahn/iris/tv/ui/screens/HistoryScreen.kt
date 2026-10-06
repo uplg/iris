@@ -15,6 +15,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import studio.kahn.iris.tv.ui.components.FocusReturn
+import studio.kahn.iris.tv.ui.components.focusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -113,6 +116,7 @@ fun HistoryContent(state: HistoryUiState, actions: HistoryActions) {
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val first = remember { FocusRequester() }
+    val keys = rememberFocusReturn(fallback = first)
     var atFirst by remember { mutableStateOf(false) }
     val groups = state.groups.valueOrNull
     BackHandler {
@@ -125,8 +129,17 @@ fun HistoryContent(state: HistoryUiState, actions: HistoryActions) {
             }
         }
     }
+    // Back from the player or a title: the line left, else the first.
     LaunchedEffect(groups.isNullOrEmpty()) {
         if (groups.isNullOrEmpty()) return@LaunchedEffect
+        val left = keys.last
+        val at = groups.indexOfFirst { g -> "group:${g.key}" == left || g.lines.any { "line:${it.key}" == left } }
+        if (at >= 0) {
+            val item = at + 1
+            if (list.layoutInfo.visibleItemsInfo.none { it.index == item }) list.scrollToItem(item)
+            snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.index == item } }.first { it }
+            if (keys.focusLast()) return@LaunchedEffect
+        }
         snapshotFlow { list.layoutInfo.visibleItemsInfo.size > 1 }.first { it }
         runCatching { first.requestFocus() }
     }
@@ -176,6 +189,7 @@ fun HistoryContent(state: HistoryUiState, actions: HistoryActions) {
                         group = group,
                         busy = state.busy,
                         actions = actions,
+                        keys = keys,
                         firstFocus = if (group == groups.first()) first else null,
                         onFirstFocused = { atFirst = it },
                     )
@@ -190,6 +204,7 @@ private fun HistoryGroupRow(
     group: HistoryGroupUi,
     busy: Set<String>,
     actions: HistoryActions,
+    keys: FocusReturn,
     firstFocus: FocusRequester?,
     onFirstFocused: (Boolean) -> Unit,
 ) {
@@ -209,19 +224,22 @@ private fun HistoryGroupRow(
         Artwork(group.title, group.posterUrl, width = IrisSize.posterMini, showTitle = false)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
             if (group.solo) {
-                LineCard(group, group.lines.first(), busy, actions, firstModifier)
+                val line = group.lines.first()
+                LineCard(group, line, busy, actions, firstModifier.focusReturn(keys, "line:${line.key}"))
             } else {
                 val open = group.collectionId
                 RowCard(
                     onClick = { open?.let(actions.onOpenTitle) },
                     enabled = open != null,
-                    modifier = firstModifier,
+                    modifier = firstModifier.focusReturn(keys, "group:${group.key}"),
                 ) { _ ->
                     Text(group.title, style = IrisType.group, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (group.ghost) Chip("Gone from disk", size = ChipSize.Small)
                     if (open != null) Text("Open the title", style = IrisType.controlSmall, color = IrisColor.accent)
                 }
-                group.lines.forEach { line -> LineCard(group, line, busy, actions, Modifier.padding(start = IrisSpace.s6)) }
+                group.lines.forEach { line ->
+                    LineCard(group, line, busy, actions, Modifier.padding(start = IrisSpace.s6).focusReturn(keys, "line:${line.key}"))
+                }
             }
         }
     }

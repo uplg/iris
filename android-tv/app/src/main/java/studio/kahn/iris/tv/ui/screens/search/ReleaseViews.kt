@@ -22,6 +22,8 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
@@ -220,7 +222,7 @@ fun SummaryLine(words: String?, failed: List<ProviderResultMeta>, onRetry: () ->
 @Composable
 fun GrabRefusal(grab: GrabUi, onClose: () -> Unit, modifier: Modifier = Modifier) {
     val refused = grab as? GrabUi.Refused ?: return
-    NoticeLine(Notice("Nothing was downloaded", StatusTone.Down), modifier, detail = refused.message, onClose = onClose)
+    NoticeLine(Notice("Nothing was downloaded", StatusTone.Down), modifier, detail = refused.message, onClose = onClose, takeFocus = false)
 }
 
 /** The asks of a grab (a huge pack, a second copy of a movie) as a confirmation. */
@@ -246,19 +248,46 @@ fun GrabAsk(grab: GrabUi, onConfirm: () -> Unit, onCancel: () -> Unit) {
     }
 }
 
-/** The end of the releases: the next page loading, its failure with a retry, or the end said. */
+/**
+ * The end of the releases: the next page loading, its failure with a retry, "Show more
+ * releases" when the last page showed nothing new for the filters, or the end said.
+ */
 @Composable
-fun MoreFooter(loadingMore: Boolean, error: UiError?, hasNext: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+fun MoreFooter(pages: ReleasePages, onRetry: () -> Unit, onMore: () -> Unit, modifier: Modifier = Modifier) {
     PageEnd(
-        loadingMore = loadingMore,
-        error = error,
-        hasNext = hasNext,
+        loadingMore = pages.loadingMore,
+        error = pages.moreError,
+        hasNext = pages.hasNext,
         onRetry = onRetry,
         loadingText = "Loading more releases…",
         endText = "That is every release the trackers sent.",
         modifier = modifier,
+        onMore = onMore.takeIf { pages.waitsForViewer },
+        moreText = "Show more releases",
     )
 }
+
+/**
+ * Focus back where a grab's ask or refusal was opened from, once it closes (a confirm, a
+ * huge pack, a duplicate, "Nothing was downloaded"): the release row or card of [grab]'s key.
+ */
+@Composable
+fun ReturnFocusAfterGrab(grab: GrabUi, focus: FocusReturn) {
+    var asked by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(grab) {
+        when (grab) {
+            is GrabUi.AskHuge, is GrabUi.AskDuplicate, is GrabUi.Refused -> asked = grab.key
+            GrabUi.Idle -> {
+                asked?.let { focus.returnTo(it) }
+                asked = null
+            }
+            is GrabUi.Busy -> Unit
+        }
+    }
+}
+
+/** A library match in a lazy list: its key, tagged so focus comes back to it from the player. */
+fun matchKey(m: LibraryMatch): String = "match-${m.collectionId}"
 
 /** The rows of [releases] with their stable keys. */
 fun LazyListScope.releaseRows(

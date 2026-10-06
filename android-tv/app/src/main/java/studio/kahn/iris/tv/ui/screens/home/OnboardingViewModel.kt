@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.GenreOption
 import studio.kahn.iris.tv.data.LanguageOption
 import studio.kahn.iris.tv.data.PreferencesResponse
@@ -105,7 +106,7 @@ class OnboardingViewModel(private val container: AppContainer, initial: Preferen
     /** Put off for this visit (Back): the server is told it was skipped, the sheet closes at once. */
     fun skipInBackground() {
         container.applicationScope.launch {
-            runCatching {
+            bestEffort {
                 container.api().savePreferences(
                     UpdatePreferencesRequest(genres = emptyList(), includeAnime = false, languages = emptyList(), onboardingCompleted = true),
                 )

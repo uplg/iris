@@ -81,7 +81,7 @@ fun LazyListScope.moodBoard(
     board: Loadable<List<MoodModel>>,
     onOpen: (MoodModel) -> Unit,
     onRetry: () -> Unit,
-    tileFocus: (String) -> FocusRequester,
+    tileModifier: (String) -> Modifier,
     columns: Int,
 ) {
     val moods = board.valueOrNull
@@ -100,7 +100,7 @@ fun LazyListScope.moodBoard(
                             onClick = { onOpen(mood) },
                             width = null,
                             meta = mood.now,
-                            modifier = Modifier.focusRequester(tileFocus(mood.id)),
+                            modifier = tileModifier(mood.id),
                         )
                     }
                 }

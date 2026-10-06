@@ -23,6 +23,7 @@ import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
+import studio.kahn.iris.tv.ui.state.BusyActions
 
 /** What OK does on a history line. */
 enum class LineAction { Play, Restore, OpenTitle, None }
@@ -69,12 +70,12 @@ private const val LIMIT = 200
  */
 class HistoryViewModel(private val container: AppContainer) : ViewModel() {
     private val history = LiveRead({ _: List<HistoryItem>? -> 5 * 60_000L }) { container.api().history(limit = LIMIT, offset = 0) }
-    private val controls = MutableStateFlow(HistoryUiState())
+    private val actions = BusyActions(viewModelScope)
     private val play = MutableStateFlow<Pair<String, Int>?>(null)
     val playEvents: StateFlow<Pair<String, Int>?> = play
 
-    val state: StateFlow<HistoryUiState> = combine(history.state, controls) { h, c ->
-        c.copy(groups = h.map { items -> historyUi(items, Instant.now()) })
+    val state: StateFlow<HistoryUiState> = combine(history.state, actions.state) { h, a ->
+        HistoryUiState(groups = h.map { items -> historyUi(items, Instant.now()) }, busy = a.busy, notice = a.notice)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), HistoryUiState())
 
     suspend fun pollWhileStarted() = history.poll()
@@ -89,19 +90,11 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
         val item = history.value?.firstOrNull { historyKey(it) == line.key } ?: return
         val provider = item.sourceProvider ?: return
         val external = item.sourceExternalId ?: return
-        val key = "restore:${line.key}"
-        if (key in controls.value.busy) return
-        controls.update { it.copy(busy = it.busy + key, notice = null) }
-        viewModelScope.launch {
-            val notice = try {
-                container.api().ingest(ResolveBody(providerId = provider, externalId = external, tmdbId = item.tmdbId, allowDuplicate = true))
-                history.refresh()
-                play.value = item.infohash to item.fileIdx.toInt()
-                null
-            } catch (e: Exception) {
-                Notice(e.toUiError().message, failed = true)
-            }
-            controls.update { it.copy(busy = it.busy - key, notice = notice) }
+        actions.run("restore:${line.key}") {
+            container.api().ingest(ResolveBody(providerId = provider, externalId = external, tmdbId = item.tmdbId, allowDuplicate = true))
+            history.refresh()
+            play.value = item.infohash to item.fileIdx.toInt()
+            null
         }
     }
 }

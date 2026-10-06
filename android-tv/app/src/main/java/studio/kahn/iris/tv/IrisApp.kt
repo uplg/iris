@@ -9,7 +9,9 @@ import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
+import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.DefaultAppContainer
 
 /**
@@ -29,6 +31,7 @@ class IrisApp : Application(), SingletonImageLoader.Factory {
         if (BuildConfig.DEBUG) enableStrictMode()
         super.onCreate()
         container = DefaultAppContainer(this)
+        container.applicationScope.launch { AppUpdater.clearDownloads(this@IrisApp) }
     }
 
     // Sized for a 1-2 GB box: a fifth of the app heap for decoded posters

@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,6 +30,7 @@ import androidx.media3.ui.compose.ContentFrame
 import androidx.media3.ui.compose.SURFACE_TYPE_SURFACE_VIEW
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.awaitCancellation
 import studio.kahn.iris.tv.ui.theme.IrisColor
 
 /**
@@ -41,7 +43,8 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
  * - A Media3 [SubtitleView] fed the player's cues, in the system caption
  *   style ([applySystemCaptionStyle]), re-applied when the person changes
  *   the caption settings. [liftCues] raises them above the controls.
- * - The screen stays on while it is shown (as PlayerView's `keepScreenOn`).
+ * - The screen stays on while the player plays or is about to (buffering): a paused
+ *   picture lets the screensaver and sleep come, as PlayerView's `keepScreenOn` does.
  */
 @Composable
 fun PlayerStage(
@@ -50,11 +53,27 @@ fun PlayerStage(
     liftCues: Boolean = false,
 ) {
     val hostView = LocalView.current
-    DisposableEffect(hostView) {
-        stagesShown.incrementAndGet()
+    val awake by produceState(initialValue = player?.wantsScreen() == true, player) {
+        val p = player ?: return@produceState
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                value = player.wantsScreen()
+            }
+        }
+        p.addListener(listener)
+        value = p.wantsScreen()
+        try {
+            awaitCancellation()
+        } finally {
+            p.removeListener(listener)
+        }
+    }
+    DisposableEffect(hostView, awake) {
+        if (!awake) return@DisposableEffect onDispose {}
+        stagesAwake.incrementAndGet()
         hostView.keepScreenOn = true
         // The next episode's stage composes before the previous one leaves.
-        onDispose { if (stagesShown.decrementAndGet() == 0) hostView.keepScreenOn = false }
+        onDispose { if (stagesAwake.decrementAndGet() == 0) hostView.keepScreenOn = false }
     }
     Box(modifier.fillMaxSize().background(IrisColor.stage), contentAlignment = Alignment.Center) {
         ContentFrame(
@@ -123,7 +142,10 @@ private fun SubtitleView.applySystemCaptionStyle() {
 private const val LIFTED_CUES_FRACTION = 0.3f
 
 private val sessionIds = AtomicLong()
-private val stagesShown = AtomicInteger()
+private val stagesAwake = AtomicInteger()
+
+private fun Player.wantsScreen(): Boolean =
+    playWhenReady && (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING)
 
 /**
  * A [MediaSession] for an in-activity player: remote media keys (play,

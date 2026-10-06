@@ -367,8 +367,10 @@ private fun LogoWell(channel: LiveChannel) {
     ) {
         if (logo != null) {
             AsyncImage(
-                // Software bitmaps: the luminance pass reads pixels.
-                model = ImageRequest.Builder(LocalPlatformContext.current).data(logo).allowHardware(false).build(),
+                // Software bitmaps only while the luminance pass still has to read the pixels:
+                // a tone already known keeps the logo in a hardware bitmap (2 GB boxes).
+                model = ImageRequest.Builder(LocalPlatformContext.current).data(logo)
+                    .allowHardware(logoToneCache.containsKey(logo)).build(),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().padding(IrisSpace.s2),

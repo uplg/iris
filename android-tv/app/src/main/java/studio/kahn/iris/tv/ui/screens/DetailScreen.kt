@@ -13,6 +13,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import studio.kahn.iris.tv.ui.components.focusReturn
+import studio.kahn.iris.tv.ui.components.rememberFocusReturn
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -102,6 +107,8 @@ fun DetailScreen(
 fun DetailContent(state: DetailUiState, actions: DetailActions) {
     val layout = IrisLayout.current
     val firstFile = remember { FocusRequester() }
+    val keys = rememberFocusReturn(fallback = firstFile)
+    val list = rememberLazyListState()
     var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
     FooterLayout(
         footer = {
@@ -116,7 +123,18 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
             is Loadable.Failed -> ErrorState(page.error.message, actions.onRetry)
             is Loadable.Ready, is Loadable.Stale -> {
                 val p = page.valueOrNull ?: return@FooterLayout
-                LaunchedEffect(p.files.isNotEmpty()) { if (p.files.isNotEmpty()) runCatching { firstFile.requestFocus() } }
+                // Back from the player: the file left (episode 12 of a pack, not episode 1).
+                LaunchedEffect(p.files.isNotEmpty()) {
+                    if (p.files.isEmpty()) return@LaunchedEffect
+                    val left = p.files.indexOfFirst { "file:${it.index}" == keys.last }
+                    if (left >= 0) {
+                        val item = FILES_FIRST + left
+                        if (list.layoutInfo.visibleItemsInfo.none { it.index == item }) list.scrollToItem(item)
+                        snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.index == item } }.first { it }
+                        if (keys.focusLast()) return@LaunchedEffect
+                    }
+                    runCatching { firstFile.requestFocus() }
+                }
                 val compact = layout.height < 500.dp
                 Row(
                     Modifier
@@ -132,6 +150,7 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                         Modifier
                             .weight(1f)
                             .padding(bottom = footer),
+                        state = list,
                         contentPadding = PaddingValues(bottom = IrisSpace.s4, start = IrisSpace.s2, end = IrisSpace.s2, top = IrisSpace.s1),
                         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
                     ) {
@@ -142,20 +161,28 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                             }
                         }
                         item(key = "release") {
-                            ReleaseItem(p.row, actions.onRelease.copy(onDelete = { deleting = it }), state.busy, showTitle = false)
+                            ReleaseItem(
+                                p.row,
+                                actions.onRelease.copy(onDelete = { deleting = it }),
+                                state.busy,
+                                Modifier.focusReturn(keys, RELEASE_KEY),
+                                showTitle = false,
+                            )
                         }
                         item(key = "files") {
                             SectionTitle("Video files", meta = plural(p.files.size, "file"), modifier = Modifier.padding(top = IrisSpace.s5))
                         }
                         if (p.files.isEmpty()) {
-                            item(key = "no-files") {
+                            item(key = "no-files", contentType = "hint") {
                                 Text("No video file in this release.", style = IrisType.meta, color = IrisColor.inkMuted)
                             }
                         }
                         items(p.files, key = { it.index }) { f ->
                             RowCard(
                                 onClick = { actions.onPlay(f.index) },
-                                modifier = if (f == p.files.first()) Modifier.focusRequester(firstFile) else Modifier,
+                                modifier = Modifier
+                                    .focusReturn(keys, "file:${f.index}")
+                                    .then(if (f == p.files.first()) Modifier.focusRequester(firstFile) else Modifier),
                             ) { _ ->
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
                                     Text(f.name, style = IrisType.mono, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -181,9 +208,17 @@ fun DetailContent(state: DetailUiState, actions: DetailActions) {
                 onConfirm = {
                     deleting = null
                     actions.onRelease.onDelete(row)
+                    keys.returnTo(RELEASE_KEY)
                 },
-                onCancel = { deleting = null },
+                onCancel = {
+                    deleting = null
+                    keys.returnTo(RELEASE_KEY)
+                },
             )
         }
     }
 }
+
+/** The list's items before the files: the title, the release, the files' heading. */
+private const val FILES_FIRST = 3
+private const val RELEASE_KEY = "release"

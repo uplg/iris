@@ -50,8 +50,7 @@ fun trackMenu(tracks: Tracks, probe: MediaProbe?, route: PlayRoute): TrackMenu {
         probedAudio?.get(i)?.let { AudioTrackInfo(it.language, it.title, it.channels, it.codec) }
             ?: g.getTrackFormat(0).audioInfo()
     }
-    val probedSubs = probe?.subtitle
-        ?.let { subs -> if (route == PlayRoute.Direct) subs else subs.filter { it.textBased } }
+    val probedSubs = probe?.let { RouteTracks.of(it, route).subtitles }
         ?.takeIf { it.size == subGroups.size }
     val subInfos = subGroups.mapIndexed { i, g ->
         probedSubs?.get(i)?.let { SubtitleTrackInfo(it.language, it.title, it.forced, it.textBased) }

@@ -28,23 +28,27 @@ fun sceneMark(name: String): SceneMark? {
 
 private fun episodeOf(path: String): SceneMark? = sceneMark(path)?.takeIf { it.episode > 0 }
 
+private val SAMPLE = Regex("""\bsample\b""")
+
 /** SCENE samples are videos never to play by default (the backend's `is_main_video_file`). */
 fun isSample(path: String): Boolean {
     val p = path.lowercase()
-    return "/sample/" in p || ".sample." in p || Regex("""\bsample\b""").containsMatchIn(p)
+    return "/sample/" in p || ".sample." in p || SAMPLE.containsMatchIn(p)
 }
 
-fun sortFiles(files: List<ReleaseFile>): List<ReleaseFile> = files.sortedWith { a, b ->
-    if (a.isVideo != b.isVideo) return@sortedWith if (a.isVideo) -1 else 1
-    val sa = episodeOf(a.path)
-    val sb = episodeOf(b.path)
-    when {
-        sa != null && sb != null -> compareValuesBy(sa, sb, SceneMark::season, SceneMark::episode)
-        sa != null -> -1
-        sb != null -> 1
-        else -> b.sizeBytes.compareTo(a.sizeBytes)
+/** Each file's episode is read once, not on every comparison (a 100-file pack on a slow box). */
+fun sortFiles(files: List<ReleaseFile>): List<ReleaseFile> = files
+    .map { it to episodeOf(it.path) }
+    .sortedWith { (a, sa), (b, sb) ->
+        if (a.isVideo != b.isVideo) return@sortedWith if (a.isVideo) -1 else 1
+        when {
+            sa != null && sb != null -> compareValuesBy(sa, sb, SceneMark::season, SceneMark::episode)
+            sa != null -> -1
+            sb != null -> 1
+            else -> b.sizeBytes.compareTo(a.sizeBytes)
+        }
     }
-}
+    .map { it.first }
 
 /** The videos one may choose to play (samples left out). */
 fun playableFiles(files: List<ReleaseFile>): List<ReleaseFile> =

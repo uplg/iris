@@ -38,22 +38,25 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.IrisCaps
 import studio.kahn.iris.tv.data.PlayStatus
-import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.SeekHint
 import studio.kahn.iris.tv.data.SubtitlePick
 import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.buildMediaItem
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.humanizePlaybackError
 import studio.kahn.iris.tv.data.isRemuxableError
+import studio.kahn.iris.tv.data.serverBase
 import studio.kahn.iris.tv.data.webVttSubtitle
-import studio.kahn.iris.tv.ui.components.OnOutputLost
 import studio.kahn.iris.tv.ui.components.buildMediaSession
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
 
 /**
  * What the player UI reads from [VodEngine]: published once per change, so
@@ -88,6 +91,11 @@ class VodPlayback {
     /** The film's duration from the probe (a growing server stream reports less), 0 when unknown. */
     var filmDurationMs by mutableLongStateOf(0L)
         internal set
+    /**
+     * The picture stopped reaching anyone (`OnOutputLost`), maybe before the player existed:
+     * nothing starts playing by itself until the viewer presses Play.
+     */
+    var outputLost by mutableStateOf(false)
 
     /** Re-prepare after an error ("Try again"). */
     fun retry() {
@@ -104,14 +112,9 @@ class VodPlayback {
 /**
  * The playback engine of one file: builds the Media3 player for the right
  * stream, starts it at the resume point, restores and saves the track picks,
- * reports progress, falls back to the server's HLS remux when the device
- * cannot decode the file, and pauses when the screen stops or the picture
- * goes away. No UI: it publishes into [out].
- *
- * Moved verbatim from the pre-redesign WatchScreen (the same decisions, in
- * the same order); only the controller-bound bits changed: the title and the
- * next-episode button live in Compose now, the player error is published
- * instead of shown by PlayerView, and a MediaSession lives with the player.
+ * reports progress ([ProgressSaver]), falls back to the server's HLS remux
+ * when the device cannot decode the file, stops when the screen stops and
+ * pauses when the picture goes away. No UI: it publishes into [out].
  */
 @Composable
 fun VodEngine(
@@ -122,20 +125,17 @@ fun VodEngine(
     out: VodPlayback,
 ) {
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
     val infohash = vm.infohash
     val fileIdx = vm.fileIdx
     val serverUrl = setup.serverUrl
     val probe = setup.probe
-    val startPositionSec = setup.resumeSec
-    val initialAudioIdx = setup.savedAudioIdx
-    val initialSubIdx = setup.savedSubIdx
     val prefAudioLang = setup.prefAudioLang
     val prefSubLang = setup.prefSubLang
     val currentTitle by rememberUpdatedState(title)
     val fileSizeBytes by vm.fileSizeBytes.collectAsStateWithLifecycle()
     val currentFileSize by rememberUpdatedState(fileSizeBytes)
-
 
     // Tier-F fallback gate: flipped by the error listener when ExoPlayer chokes
     // on the container / decoder / codec (DV, Atmos JOC, exotic HEVC profiles…).
@@ -143,8 +143,9 @@ fun VodEngine(
     var useRemuxFallback by remember(infohash, fileIdx) { mutableStateOf(false) }
     // Position at the moment the fallback fires, so the HLS player resumes there.
     var fallbackResumeMs by remember(infohash, fileIdx) { mutableLongStateOf(0L) }
-    // The last position the progress tick saw (the resume point of a rebuilt player).
-    val lastPositionMs = remember(infohash, fileIdx) { AtomicLong((startPositionSec * 1000).toLong()) }
+    // The last position the progress tick saw (the resume point of a rebuilt player). Kept by
+    // the ViewModel too, so an activity recreated mid-film resumes there, not where it opened.
+    val lastPositionMs = remember(infohash, fileIdx) { AtomicLong(vm.playedMs ?: (setup.resumeSec * 1000).toLong()) }
 
     // Per-stream AV1 decode routing, from the probed codec + bit depth. 8-bit
     // AV1 hardware-decodes on ANY AV1 silicon; 10-bit additionally needs the
@@ -165,10 +166,17 @@ fun VodEngine(
     val needsServerTranscode = remember(probedAv1, av1HardwareFits) {
         probedAv1 != null && (probedAv1.bitDepth ?: 8) >= 10 && !av1HardwareFits
     }
+    val route = when {
+        useRemuxFallback -> PlayRoute.ServerRemux
+        needsServerTranscode -> PlayRoute.ServerTranscode
+        else -> PlayRoute.Direct
+    }
+    // The player's track groups in probe terms on this route: picks are ordinals into these.
+    val routeTracks = remember(probe, route) { RouteTracks.of(probe, route) }
 
-    val playUrl = remember(serverUrl, infohash, fileIdx, useRemuxFallback, needsServerTranscode) {
-        val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-        if (useRemuxFallback || needsServerTranscode) {
+    val playUrl = remember(serverUrl, infohash, fileIdx, route) {
+        val base = serverBase(serverUrl)
+        if (route != PlayRoute.Direct) {
             "${base}api/torrents/$infohash/files/$fileIdx/play/master.m3u8"
         } else {
             "${base}api/torrents/$infohash/files/$fileIdx/stream"
@@ -199,8 +207,9 @@ fun VodEngine(
     // The reactive remux is always gated (its cold start is what failed).
     val gateOnServerBuild = useRemuxFallback || (needsServerTranscode && resumeMs > 0)
     var portionReady by remember(playUrl) { mutableStateOf(!gateOnServerBuild) }
-    if (needsServerTranscode || useRemuxFallback) {
-        LaunchedEffect(playUrl) {
+    if (route != PlayRoute.Direct) {
+        // Only while the screen is started: the status read also kicks the server's build.
+        RepeatWhileStarted(playUrl) {
             val durationSec = probe.durationSeconds ?: 0.0
             val resumeSec = resumeMs / 1000.0
             vm.pollPlayStatus(keepGoing = { !firstFrameRendered }) { st ->
@@ -216,14 +225,13 @@ fun VodEngine(
     }
 
     // The server HLS master carries no subtitle renditions: side-load each
-    // text-based source sub as WebVTT. PGS can't become WebVTT (skipped here;
-    // the direct path shows them).
-    val sideLoadedSubs = remember(probe, serverUrl, infohash, fileIdx, useRemuxFallback, needsServerTranscode) {
-        if (!useRemuxFallback && !needsServerTranscode) {
+    // text-based source sub as WebVTT, in [RouteTracks]' order.
+    val sideLoadedSubs = remember(routeTracks, serverUrl, infohash, fileIdx, route) {
+        if (route == PlayRoute.Direct) {
             emptyList()
         } else {
-            val base = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
-            probe.subtitle.filter { it.textBased }.map { s ->
+            val base = serverBase(serverUrl)
+            routeTracks.subtitles.map { s ->
                 webVttSubtitle(
                     url = "${base}api/torrents/$infohash/files/$fileIdx/sub/${s.absoluteIndex}/track.vtt",
                     language = s.language,
@@ -243,57 +251,62 @@ fun VodEngine(
             preferPlatformAv1 = av1HardwareFits,
         )
     }
+
+    // The one way progress reaches the server; it outlives a rebuilt player (the remux fallback).
+    val saver = remember(infohash, fileIdx) {
+        ProgressSaver(lastPositionMs.get()) { body, failed ->
+            container.applicationScope.launch {
+                bestEffort { container.apiFor(serverUrl).saveProgress(infohash = infohash, idx = fileIdx, body = body) }
+                    ?: failed()
+            }
+        }.apply {
+            audioIdx = setup.savedAudioIdx
+            subtitleIdx = setup.savedSubIdx
+        }
+    }
+    val durationOf: () -> Long? = { filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 } }
+
     LaunchedEffect(player) { out.resetTracks() }
     LaunchedEffect(player, portionReady) {
         if (!portionReady) return@LaunchedEffect
+        // Never starts behind Home or the screensaver: it waits for the screen.
+        lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
         player.setMediaItem(buildMediaItem(playUrl, currentTitle, subtitles = sideLoadedSubs), resumeMs)
         player.prepare()
-        player.playWhenReady = true
+        player.playWhenReady = !out.outputLost
     }
 
-    // Saved picks resolve to ORDINALS within probe.audio / probe.subtitle:
-    // Media3 surfaces each MKV track as its own group in source order, so the
-    // N-th audio group is probe.audio[N]. Subtitles: -1 = turned off, null =
-    // no saved pick.
-    val savedAudioOrdinal = remember(probe, initialAudioIdx) {
-        initialAudioIdx?.let { idx ->
-            probe.audio.indexOfFirst { it.index == idx }.takeIf { it >= 0 }
-        }
-    }
-    val savedSubOrdinal: Int? = remember(probe, initialSubIdx) {
-        when (initialSubIdx) {
-            null -> null
-            -1 -> -1
-            else -> probe.subtitle.indexOfFirst { it.index == initialSubIdx }.takeIf { it >= 0 }
-        }
-    }
+    // The picks to restore on this player: the viewer's current ones (seeded with the saved
+    // ones), as ordinals into this route's groups. Subtitles: -1 = turned off, null = no pick.
+    val pinAudioOrdinal = remember(player, routeTracks) { routeTracks.audioOrdinal(saver.audioIdx) }
+    val pinSubIdx = remember(player) { saver.subtitleIdx }
+    val pinSubOrdinal: Int? = remember(player, routeTracks) { routeTracks.subtitleOrdinal(pinSubIdx) }
     // No per-file pick: the track the preferred language maps to (non-forced
     // before forced, plain before SDH: `SubtitlePick`).
-    val preferredSubOrdinal: Int? = remember(probe, initialSubIdx, prefSubLang) {
-        if (initialSubIdx != null || prefSubLang == "off") null
-        else SubtitlePick.preferredOrdinal(probe.subtitle, prefSubLang)
+    val preferredSubOrdinal: Int? = remember(player, routeTracks, prefSubLang) {
+        if (pinSubIdx != null || prefSubLang == NO_SUBTITLES) null
+        else SubtitlePick.preferredOrdinal(routeTracks.subtitles, prefSubLang)
     }
 
     // A language hint at load time so the first frames play the right audio;
     // the exact pin is the override applied on the first onTracksChanged.
-    LaunchedEffect(player, probe, initialAudioIdx, initialSubIdx, prefAudioLang, prefSubLang) {
-        val savedAudioLang = savedAudioOrdinal?.let { probe.audio[it].language }
-        val initialAudio = savedAudioLang
+    LaunchedEffect(player, routeTracks, prefAudioLang, prefSubLang) {
+        val initialAudio = pinAudioOrdinal?.let { routeTracks.audio[it].language }
             ?: prefAudioLang
             ?: probe.audio.firstOrNull { it.default }?.language
             ?: probe.audio.firstOrNull()?.language
-        val savedSubLang = savedSubOrdinal
-            ?.takeIf { it >= 0 && it in probe.subtitle.indices }
-            ?.let { probe.subtitle[it].language }
+        val pinSubLang = pinSubOrdinal
+            ?.takeIf { it >= 0 && it in routeTracks.subtitles.indices }
+            ?.let { routeTracks.subtitles[it].language }
         val params = player.trackSelectionParameters.buildUpon()
         if (initialAudio != null) params.setPreferredAudioLanguage(initialAudio)
         when {
-            savedSubLang != null -> {
-                params.setPreferredTextLanguage(savedSubLang)
+            pinSubLang != null -> {
+                params.setPreferredTextLanguage(pinSubLang)
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
-            savedSubOrdinal == -1 -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-            prefSubLang == "off" -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            pinSubIdx == -1 -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            prefSubLang == NO_SUBTITLES -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             // Enable only when the preferred language is present: never force a
             // different language onto the viewer.
             preferredSubOrdinal != null -> {
@@ -305,52 +318,31 @@ fun VodEngine(
         player.trackSelectionParameters = params.build()
     }
 
-    // The current picks, seeded with the saved ones so the first onTracksChanged
-    // (Media3 applying our preferences, before any viewer action) saves nothing.
-    val currentAudioIdxRef = remember { AtomicReference<Int?>(initialAudioIdx) }
-    val currentSubIdxRef = remember { AtomicReference<Int?>(initialSubIdx) }
-    val initialRestoreDone = remember { AtomicBoolean(false) }
+    // Per player: its first tracks event is Media3 applying the picks above, not the viewer.
+    val initialRestoreDone = remember(player) { AtomicBoolean(false) }
     // A pick is saved at once (500 ms debounce), from the application scope so
     // a Back right after the pick doesn't drop it.
     val pendingTrackSaveJob = remember { AtomicReference<Job?>(null) }
     val collectionId = setup.collectionId
-    val scheduleTrackSave = remember(serverUrl, infohash, fileIdx, player) {
+    val savePrefs: suspend () -> Unit = {
+        // The chosen LANGUAGES too, for the next episode and device: the
+        // series' choice when the file belongs to one (the web's rule).
+        val audioLang = routeTracks.audioLanguage(saver.audioIdx)
+        val subLang = routeTracks.subtitleLanguage(saver.subtitleIdx)
+        bestEffort {
+            container.apiFor(serverUrl).savePlaybackPreferences(
+                UpdatePlaybackPrefs(audioLanguage = audioLang, collectionId = collectionId, subtitleLanguage = subLang),
+            )
+        }
+    }
+    val scheduleTrackSave = remember(player, routeTracks) {
         {
             pendingTrackSaveJob.getAndSet(null)?.cancel()
             val job = container.applicationScope.launch {
                 delay(500)
-                // Player getters on its looper (main); the POST back on IO.
-                val (pos, dur) = withContext(Dispatchers.Main) {
-                    player.currentPosition to
-                        (filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 })
-                }
-                runCatching {
-                    container.apiFor(serverUrl).saveProgress(
-                        infohash = infohash,
-                        idx = fileIdx,
-                        body = ProgressUpdate(
-                            positionSeconds = pos / 1000.0,
-                            durationSeconds = dur?.div(1000.0),
-                            audioTrackIdx = currentAudioIdxRef.get()?.toLong(),
-                            subtitleTrackIdx = currentSubIdxRef.get()?.toLong(),
-                            completed = isWatched(pos, dur),
-                        ),
-                    )
-                }
-                // The chosen LANGUAGES too, for the next episode and device: the
-                // series' choice when the file belongs to one (the web's rule).
-                val audioLang = currentAudioIdxRef.get()
-                    ?.let { idx -> probe.audio.firstOrNull { it.index == idx }?.language }
-                val subLang = when (val s = currentSubIdxRef.get()) {
-                    null -> null
-                    -1 -> "off"
-                    else -> probe.subtitle.firstOrNull { it.index == s }?.language
-                }
-                runCatching {
-                    container.apiFor(serverUrl).savePlaybackPreferences(
-                        UpdatePlaybackPrefs(audioLanguage = audioLang, collectionId = collectionId, subtitleLanguage = subLang),
-                    )
-                }
+                // Player getters on its looper (main).
+                withContext(Dispatchers.Main) { saver.save(player.currentPosition, durationOf(), playing = player.isPlaying) }
+                savePrefs()
             }
             pendingTrackSaveJob.set(job)
         }
@@ -358,8 +350,7 @@ fun VodEngine(
 
     // Seek hint: on every user seek, ask the server to prioritise ~30 s of
     // bytes past the new playhead (byte offset ≈ playhead × size / duration).
-    // The next progress save carries `seek = true` (the server's reset guard).
-    val pendingSeekSave = remember { AtomicBoolean(false) }
+    // A pause says so at once (the admin "Now watching" shows it).
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPositionDiscontinuity(
@@ -368,7 +359,7 @@ fun VodEngine(
                 reason: Int,
             ) {
                 if (reason != Player.DISCONTINUITY_REASON_SEEK) return
-                pendingSeekSave.set(true)
+                saver.seeked()
                 val size = currentFileSize
                 val durMs = filmDurationMs.takeIf { it > 0 } ?: player.duration
                 if (durMs <= 0 || size <= 0) return
@@ -376,13 +367,21 @@ fun VodEngine(
                 val byteOffset = ((newPosition.positionMs.toDouble() / durMs.toDouble()) * size)
                     .toLong().coerceIn(0L, size - 1)
                 container.applicationScope.launch {
-                    runCatching {
+                    bestEffort {
                         container.apiFor(serverUrl).postSeekHint(
                             infohash = infohash,
                             idx = fileIdx,
                             body = SeekHint(byteOffset = byteOffset, playheadS = playheadS),
                         )
                     }
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (playWhenReady) {
+                    out.outputLost = false
+                } else if (player.playbackState != Player.STATE_IDLE) {
+                    saver.save(player.currentPosition, durationOf(), playing = false)
                 }
             }
         }
@@ -412,7 +411,7 @@ fun VodEngine(
                     Log.i("iris-core", "auto-retry #$retryCount after transient error")
                     scope.launch {
                         delay(1_500L * retryCount)
-                        runCatching { player.prepare() }
+                        bestEffort { player.prepare() }
                     }
                     return
                 }
@@ -456,7 +455,7 @@ fun VodEngine(
                 // Direct-play audio completeness telemetry: MatroskaExtractor
                 // drops tracks whose CodecID it doesn't know.
                 if (
-                    !useRemuxFallback && !needsServerTranscode &&
+                    route == PlayRoute.Direct &&
                     newTracks.groups.isNotEmpty() &&
                     (audioGroups.size < probe.audio.size || audioGroups.any { !it.isSupported })
                 ) {
@@ -467,77 +466,75 @@ fun VodEngine(
                     )
                 }
 
-                // First event with real tracks: pin the saved pick (or the
+                // First event with real tracks: pin the picks (or the
                 // preference's) and save nothing, the viewer touched nothing.
                 if (!initialRestoreDone.get() && audioGroups.isNotEmpty()) {
                     initialRestoreDone.set(true)
                     val params = player.trackSelectionParameters.buildUpon()
                     var dirty = false
                     var settledSubOrdinal = subGroups.indexOfFirst { it.isSelected }
-                    if (savedAudioOrdinal != null && savedAudioOrdinal in audioGroups.indices) {
+                    if (pinAudioOrdinal != null && pinAudioOrdinal in audioGroups.indices) {
                         val currentSelected = audioGroups.indexOfFirst { it.isSelected }
-                        if (currentSelected != savedAudioOrdinal) {
-                            params.setOverrideForType(TrackSelectionOverride(audioGroups[savedAudioOrdinal].mediaTrackGroup, 0))
+                        if (currentSelected != pinAudioOrdinal) {
+                            params.setOverrideForType(TrackSelectionOverride(audioGroups[pinAudioOrdinal].mediaTrackGroup, 0))
                             dirty = true
                         }
                     }
-                    val pinSubOrdinal = when (savedSubOrdinal) {
+                    val pinSub = when (pinSubOrdinal) {
                         -1 -> null
                         null -> preferredSubOrdinal
-                        else -> savedSubOrdinal
+                        else -> pinSubOrdinal
                     }
-                    if (pinSubOrdinal != null && pinSubOrdinal in subGroups.indices) {
-                        settledSubOrdinal = pinSubOrdinal
-                        if (subGroups.indexOfFirst { it.isSelected } != pinSubOrdinal) {
+                    if (pinSub != null && pinSub in subGroups.indices) {
+                        settledSubOrdinal = pinSub
+                        if (subGroups.indexOfFirst { it.isSelected } != pinSub) {
                             params
-                                .setOverrideForType(TrackSelectionOverride(subGroups[pinSubOrdinal].mediaTrackGroup, 0))
+                                .setOverrideForType(TrackSelectionOverride(subGroups[pinSub].mediaTrackGroup, 0))
                                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                             dirty = true
                         }
                     }
-                    // Seed the refs with the settled state, or the next event
+                    // Seed the picks with the settled state, or the next event
                     // reads "no subtitle" as a change and saves an "off" nobody chose.
-                    val settledAudioOrdinal = savedAudioOrdinal?.takeIf { it in audioGroups.indices }
+                    val settledAudioOrdinal = pinAudioOrdinal?.takeIf { it in audioGroups.indices }
                         ?: audioGroups.indexOfFirst { it.isSelected }
-                    currentAudioIdxRef.set(probe.audio.getOrNull(settledAudioOrdinal)?.index ?: currentAudioIdxRef.get())
-                    currentSubIdxRef.set(
-                        if (settledSubOrdinal >= 0) {
-                            probe.subtitle.getOrNull(settledSubOrdinal)?.index ?: currentSubIdxRef.get()
-                        } else {
-                            -1
-                        },
-                    )
+                    saver.audioIdx = routeTracks.audioIndexAt(settledAudioOrdinal, audioGroups.size) ?: saver.audioIdx
+                    saver.subtitleIdx = if (settledSubOrdinal >= 0) {
+                        routeTracks.subtitleIndexAt(settledSubOrdinal, subGroups.size) ?: saver.subtitleIdx
+                    } else {
+                        -1
+                    }
                     if (dirty) player.trackSelectionParameters = params.build()
                     return
                 }
 
                 val pickedAudioOrdinal = audioGroups.indexOfFirst { it.isSelected }
                 val newAudioIdx = if (pickedAudioOrdinal >= 0) {
-                    probe.audio.getOrNull(pickedAudioOrdinal)?.index ?: currentAudioIdxRef.get()
+                    routeTracks.audioIndexAt(pickedAudioOrdinal, audioGroups.size) ?: saver.audioIdx
                 } else {
-                    currentAudioIdxRef.get()
+                    saver.audioIdx
                 }
                 val pickedSubOrdinal = subGroups.indexOfFirst { it.isSelected }
                 val newSubIdx: Int? = if (pickedSubOrdinal >= 0) {
-                    probe.subtitle.getOrNull(pickedSubOrdinal)?.index ?: currentSubIdxRef.get()
+                    routeTracks.subtitleIndexAt(pickedSubOrdinal, subGroups.size) ?: saver.subtitleIdx
                 } else {
                     -1
                 }
-                val audioChanged = currentAudioIdxRef.getAndSet(newAudioIdx) != newAudioIdx
-                val subChanged = currentSubIdxRef.getAndSet(newSubIdx) != newSubIdx
-                if (audioChanged || subChanged) scheduleTrackSave()
+                val changed = saver.audioIdx != newAudioIdx || saver.subtitleIdx != newSubIdx
+                saver.audioIdx = newAudioIdx
+                saver.subtitleIdx = newSubIdx
+                if (changed) scheduleTrackSave()
             }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
     }
 
-    // The progress tick (1 s) and the heartbeat save every 7 s of playback;
-    // the last save, the MediaSession and the player go with the stream.
+    // The progress tick (1 s) feeds the heartbeat; the last save, the
+    // MediaSession and the player go with the stream.
     DisposableEffect(player) {
         val session = buildMediaSession(context, player, "vod")
         val handler = Handler(Looper.getMainLooper())
-        var lastSavedMs: Long = (startPositionSec * 1000).toLong()
         var durationMs: Long = filmDurationMs.takeIf { it > 0 } ?: -1
         val tick = object : Runnable {
             override fun run() {
@@ -545,31 +542,10 @@ fun VodEngine(
                 val pos = player.currentPosition
                 if (pos > 0) {
                     lastPositionMs.set(pos)
+                    vm.playedMs = pos
                     if (!out.nearEnd && durationMs > 0 && isNearEnd(pos, durationMs)) out.nearEnd = true
-                    if (pos - lastSavedMs >= 7_000) {
-                        lastSavedMs = pos
-                        val completed = isWatched(pos, durationMs.takeIf { it > 0 })
-                        val audioIdx = currentAudioIdxRef.get()
-                        val subIdx = currentSubIdxRef.get()
-                        scope.launch {
-                            runCatching {
-                                container.apiFor(serverUrl).saveProgress(
-                                    infohash = infohash,
-                                    idx = fileIdx,
-                                    body = ProgressUpdate(
-                                        positionSeconds = pos / 1000.0,
-                                        durationSeconds = if (durationMs > 0) durationMs / 1000.0 else null,
-                                        audioTrackIdx = audioIdx?.toLong(),
-                                        subtitleTrackIdx = subIdx?.toLong(),
-                                        completed = completed,
-                                        seek = pendingSeekSave.getAndSet(false),
-                                        playing = true,
-                                    ),
-                                )
-                            }
-                        }
-                    }
                 }
+                saver.tick(pos, durationMs.takeIf { it > 0 }, playing = player.isPlaying)
                 handler.postDelayed(this, 1_000)
             }
         }
@@ -578,81 +554,49 @@ fun VodEngine(
         onDispose {
             handler.removeCallbacksAndMessages(null)
             val pos = player.currentPosition
-            val dur = filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 }
-            if (pos > 0) lastPositionMs.set(pos)
-            val audioIdx = currentAudioIdxRef.get()
-            val subIdx = currentSubIdxRef.get()
-            pendingTrackSaveJob.getAndSet(null)?.cancel()
-            // The process scope: the composition's is being cancelled.
-            container.applicationScope.launch {
-                runCatching {
-                    container.apiFor(serverUrl).saveProgress(
-                        infohash = infohash,
-                        idx = fileIdx,
-                        body = ProgressUpdate(
-                            positionSeconds = pos / 1000.0,
-                            durationSeconds = dur?.div(1000.0),
-                            audioTrackIdx = audioIdx?.toLong(),
-                            subtitleTrackIdx = subIdx?.toLong(),
-                            completed = isWatched(pos, dur),
-                            seek = pendingSeekSave.getAndSet(false),
-                        ),
-                    )
-                }
+            if (pos > 0) {
+                lastPositionMs.set(pos)
+                vm.playedMs = pos
             }
+            // A pick made just before leaving: its languages are saved now, the picks ride on
+            // the last progress save.
+            pendingTrackSaveJob.getAndSet(null)?.takeIf { it.isActive }?.let { pending ->
+                pending.cancel()
+                container.applicationScope.launch { savePrefs() }
+            }
+            saver.save(pos, durationOf(), playing = false)
             session.release()
             player.release()
         }
     }
 
-    // Pause and cut the stream on Home (`ON_STOP`) or when the picture stops
-    // reaching anyone (`OnOutputLost`), with an immediate save so the admin
-    // presence view shows the pause. No auto-resume on return: the viewer
-    // presses Play.
-    val suspendPlayback: () -> Unit = {
-        player.pause()
-        val pos = player.currentPosition
-        if (pos > 0) {
-            val dur = filmDurationMs.takeIf { it > 0 } ?: player.duration.takeIf { it > 0 }
-            val audioIdx = currentAudioIdxRef.get()
-            val subIdx = currentSubIdxRef.get()
-            container.applicationScope.launch {
-                runCatching {
-                    container.apiFor(serverUrl).saveProgress(
-                        infohash = infohash,
-                        idx = fileIdx,
-                        body = ProgressUpdate(
-                            positionSeconds = pos / 1000.0,
-                            durationSeconds = dur?.div(1000.0),
-                            audioTrackIdx = audioIdx?.toLong(),
-                            subtitleTrackIdx = subIdx?.toLong(),
-                            completed = isWatched(pos, dur),
-                            playing = false,
-                        ),
-                    )
+    // Home (`ON_STOP`) cuts the stream: the player stops (the decoder and the
+    // buffer go back to a small box) and keeps its place; on return it is
+    // prepared again, paused there. No auto-resume: the viewer presses Play.
+    DisposableEffect(player, lifecycle) {
+        var stopped = false
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> if (player.playbackState != Player.STATE_IDLE) {
+                    player.pause()
+                    player.stop()
+                    stopped = true
                 }
+                Lifecycle.Event.ON_START -> if (stopped) {
+                    stopped = false
+                    player.prepare()
+                }
+                else -> Unit
             }
         }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(player, lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) suspendPlayback()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    // A screen-off the lifecycle follows with ON_STOP fires this first; the
-    // second call finds the player paused and skips.
-    OnOutputLost {
-        if (player.playWhenReady) suspendPlayback()
+    // The picture stopped reaching anyone (WatchScreen's `OnOutputLost`): pause.
+    LaunchedEffect(player, out.outputLost) {
+        if (out.outputLost && player.playWhenReady) player.pause()
     }
 
-    val route = when {
-        useRemuxFallback -> PlayRoute.ServerRemux
-        needsServerTranscode -> PlayRoute.ServerTranscode
-        else -> PlayRoute.Direct
-    }
     SideEffect {
         out.player = player
         out.route = route

@@ -3,7 +3,7 @@ package studio.kahn.iris.tv.ui.screens.settings
 import java.time.ZonedDateTime
 import studio.kahn.iris.tv.data.DeviceView
 import studio.kahn.iris.tv.data.PasskeyView
-import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.format.normalizeLanguage
 import studio.kahn.iris.tv.ui.format.onDay
 
@@ -29,24 +29,13 @@ fun PasskeyView.facts(now: ZonedDateTime): String {
 /** The languages offered first for playback, as on the web. */
 val COMMON_LANGUAGES = listOf("fr", "en", "es", "de", "it", "pt", "ja", "ko")
 
-/** The subtitle sentinel for "no subtitles". */
-const val SUBTITLES_OFF = "off"
-
-/** A saved playback language as a choice: its ISO 639-1 base (`fre`, `fr-FR` are `fr`), or [SUBTITLES_OFF]. */
+/** A saved playback language as a choice: its ISO 639-1 base (`fre`, `fr-FR` are `fr`), or [NO_SUBTITLES]. */
 fun languageChoice(saved: String?): String? =
-    if (saved == SUBTITLES_OFF) SUBTITLES_OFF else normalizeLanguage(saved)
+    if (saved == NO_SUBTITLES) NO_SUBTITLES else normalizeLanguage(saved)
 
 /** The choices of a playback language list: the common ones, plus the current one when it is not among them. */
 fun languageOptions(current: String?): List<String> =
-    if (current == null || current == SUBTITLES_OFF || current in COMMON_LANGUAGES) COMMON_LANGUAGES else COMMON_LANGUAGES + current
-
-fun audioWords(choice: String?): String = choice?.let { languageName(it) ?: it } ?: "The file’s own"
-
-fun subtitleWords(choice: String?): String = when (choice) {
-    null -> "The file’s own"
-    SUBTITLES_OFF -> "No subtitles"
-    else -> languageName(choice) ?: choice
-}
+    if (current == null || current == NO_SUBTITLES || current in COMMON_LANGUAGES) COMMON_LANGUAGES else COMMON_LANGUAGES + current
 
 /** The display name an email suggests: its first word ("leonard.c@…" gives "leonard"). */
 fun nameFromEmail(email: String?): String =

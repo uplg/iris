@@ -7,6 +7,7 @@ import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatSize
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
 import studio.kahn.iris.tv.ui.format.languageName
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
@@ -65,7 +66,7 @@ fun languagesLine(p: PlaybackPrefsResponse?): String? {
         p.audioLanguage?.takeIf { it.isNotBlank() }?.let { add("audio in ${languageName(it) ?: it}") }
         val subs = p.subtitleLanguage?.takeIf { it.isNotBlank() }
         when {
-            subs == "off" -> add("subtitles off")
+            subs == NO_SUBTITLES -> add("subtitles off")
             subs != null -> add("subtitles in ${languageName(subs) ?: subs}")
         }
     }

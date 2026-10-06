@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -73,6 +74,8 @@ import studio.kahn.iris.tv.ui.components.TextInput
 import studio.kahn.iris.tv.ui.screens.library.DownloadsUi
 import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
+import studio.kahn.iris.tv.ui.components.ScreenFooter
+import studio.kahn.iris.tv.ui.components.focusReturn
 import studio.kahn.iris.tv.ui.screens.library.LibraryUiState
 import studio.kahn.iris.tv.ui.screens.library.watchedKey
 import studio.kahn.iris.tv.ui.format.markWatchedLabel
@@ -127,7 +130,7 @@ fun LibraryScreen(
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     initialView: LibraryView? = null,
 ) {
-    val vm = irisViewModel(container) { c, _ -> LibraryViewModel(c, initialView) }
+    val vm = irisViewModel(container) { c, saved -> LibraryViewModel(c, initialView, saved) }
     val state by vm.state.collectAsStateWithLifecycle()
     RepeatWhileStarted(Unit) { vm.pollWhileStarted() }
     LibraryContent(
@@ -187,7 +190,9 @@ fun LibraryContent(
     LaunchedEffect(state.view) {
         if (state.view != LibraryView.Downloads || contentFocused) return@LaunchedEffect
         snapshotFlow { list.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
-        runCatching { top.requestFocus() }
+        // Back from a release's files or the player: the row left, when it is in sight.
+        withFrameNanos { }
+        if (!keys.focusLast()) runCatching { top.requestFocus() }
     }
     // Back from deep in the view goes to its top first; from there the shell (or the back stack) takes over.
     BackHandler(enabled = contentFocused && !topFocused && panel == Panel.None && hiding == null && deleting == null && menu == null) {
@@ -252,8 +257,8 @@ fun LibraryContent(
                 focusSort = panel == Panel.Sort,
                 onFilters = actions.onFilters,
                 onDismiss = {
+                    keys.returnTo(if (panel == Panel.Sort) SORT_KEY else FIND_KEY)
                     panel = Panel.None
-                    keys.returnTo(FIND_KEY)
                 },
             )
             Panel.FindRelease -> FindReleasePanel(
@@ -342,7 +347,6 @@ private fun PageHeading(state: LibraryUiState, onView: (LibraryView) -> Unit, mo
                 modifier = modifier,
             )
         }
-        NoticeLine(state.notice)
     }
 }
 
@@ -433,7 +437,7 @@ private fun TitlesPane(
             statusTone = card.status.tone.cardTone(),
             dimmed = card.ghost,
             modifier = Modifier
-                .focusRequester(keys.requester(card.id))
+                .focusReturn(keys, card.id)
                 .onFocusChanged { if (it.hasFocus) focusedIndex.intValue = index },
         )
     }
@@ -441,6 +445,7 @@ private fun TitlesPane(
 
 private const val HEADER_ITEMS = 2
 private const val FIND_KEY = "find"
+private const val SORT_KEY = "sort"
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -500,7 +505,7 @@ private fun Filters(
                 onClick = onFind,
                 modifier = Modifier.focusRequester(keys.requester(FIND_KEY)),
             )
-            Pill(text = f.sort.words, selected = false, onClick = onSort)
+            Pill(text = f.sort.words, selected = false, onClick = onSort, modifier = Modifier.focusReturn(keys, SORT_KEY))
         }
         if (ui.cards.isEmpty()) {
             EmptyState(
@@ -582,7 +587,7 @@ private fun DownloadsPane(
                             row,
                             actions.onRelease,
                             state.busy,
-                            Modifier.focusRequester(keys.requester(row.infohash)),
+                            Modifier.focusReturn(keys, row.infohash),
                             actionsBeside = layout.width >= 840.dp,
                         )
                     }
@@ -613,7 +618,8 @@ private fun LibraryHints(state: LibraryUiState, focusedIndex: MutableIntState, m
     } else {
         null
     }
-    KeyHints(hints, modifier, trailing = trailing, framed = true)
+    // The action's outcome sits above the keys, in sight wherever the list is scrolled.
+    ScreenFooter(hints, modifier, trailing = trailing, framed = true) { NoticeLine(state.notice) }
 }
 
 @Composable

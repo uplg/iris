@@ -20,6 +20,11 @@ import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.BuildConfig
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.TmdbMetadataCache
+import studio.kahn.iris.tv.data.bestEffort
+import studio.kahn.iris.tv.data.libraryCollections
+import studio.kahn.iris.tv.data.libraryTorrents
+import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.ContinueWatchingItem
@@ -29,7 +34,6 @@ import studio.kahn.iris.tv.data.FeaturedResponse
 import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.IrisApi
-import studio.kahn.iris.tv.data.LibraryResponse
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
@@ -173,10 +177,14 @@ class HomeViewModel(
     private val metaInFlight = mutableSetOf<MetaKey>()
     private var forYouReadAt: Long? = null
     private var collectionsReadAt: Long? = null
+    private val actions = BusyActions(viewModelScope, oneAtATime = true)
 
     init {
         viewModelScope.launch {
-            val latest = AppUpdater.fetchLatestVersion(container.okHttpClient)
+            actions.state.collect { a -> data.update { it.copy(busy = a.busyKey, notice = a.notice) } }
+        }
+        viewModelScope.launch {
+            val latest = AppUpdater.fetchLatestVersion(container.updateOkHttpClient)
             val available = AppUpdater.versionStatus(BuildConfig.VERSION_NAME, latest) is AppUpdater.VersionStatus.UpdateAvailable
             data.update { it.copy(updateAvailable = available) }
         }
@@ -184,6 +192,8 @@ class HomeViewModel(
 
     /** Run by the screen while it is started: one full read, then the live loop. */
     suspend fun refreshWhileStarted() {
+        // The last action's words belong to the visit they were said in (web notices pass).
+        if (data.value.busy == null) actions.say(null)
         refreshRows()
         pollWhile({ if (somethingMoves()) FAST_MS else SLOW_MS }) { refreshLive() }
     }
@@ -207,11 +217,7 @@ class HomeViewModel(
 
     private suspend fun refreshLive() = coroutineScope {
         val summary = async { load(data.value.summary) { container.api().homeSummary() } }
-        val torrents = async {
-            runCatching {
-                (container.api().library("torrents") as? LibraryResponse.TorrentsWrapper)?.value?.items.orEmpty()
-            }.getOrNull()
-        }
+        val torrents = async { bestEffort { container.api().libraryTorrents().items } }
         val s = summary.await()
         val t = torrents.await()
         data.update { it.copy(summary = s, torrents = t ?: it.torrents) }
@@ -242,16 +248,14 @@ class HomeViewModel(
 
     private suspend fun readCollections() {
         collectionsReadAt = now()
-        val next = load(data.value.collections) {
-            (container.api().library("collections") as? LibraryResponse.CollectionsWrapper)?.value?.items.orEmpty()
-        }
+        val next = load(data.value.collections) { container.api().libraryCollections().items }
         data.update { it.copy(collections = next) }
         next.valueOrNull?.firstOrNull { it.ghost != true }?.metaKey()?.let(::fetchMeta)
         maybeFeatured()
     }
 
     private suspend fun readPreferences() {
-        val prefs = runCatching { container.api().preferences() }.getOrNull() ?: return
+        val prefs = bestEffort { container.api().preferences() } ?: return
         data.update { it.copy(preferences = prefs) }
     }
 
@@ -260,7 +264,8 @@ class HomeViewModel(
         val d = data.value
         val ownNothing = d.continueWatching.valueOrNull?.isEmpty() == true &&
             d.collections.valueOrNull?.none { it.ghost != true } == true
-        if (!ownNothing || d.featured != null) return
+        // A failed read is asked again (on the next read of the rows, on Retry).
+        if (!ownNothing || (d.featured != null && d.featured !is Loadable.Failed)) return
         data.update { it.copy(featured = Loadable.Loading) }
         viewModelScope.launch {
             val next = load(Loadable.Loading) { container.api().discoverFeatured() }
@@ -272,8 +277,11 @@ class HomeViewModel(
     private fun fetchMeta(key: MetaKey) {
         if (key in data.value.meta || !metaInFlight.add(key)) return
         viewModelScope.launch {
-            val md = runCatching { container.api().tmdbMetadata(key.id, key.kind?.value) }.getOrNull()
-            metaInFlight.remove(key)
+            val md = try {
+                TmdbMetadataCache.get(container.api(), key.id, key.kind?.value)
+            } finally {
+                metaInFlight.remove(key)
+            }
             if (md != null) data.update { it.copy(meta = it.meta + (key to md)) }
         }
     }
@@ -281,10 +289,10 @@ class HomeViewModel(
     private fun fetchHeroPrefs(item: ContinueWatchingItem) {
         val key = heroPrefsKey(item)
         viewModelScope.launch {
-            val prefs = runCatching {
+            val prefs = bestEffort {
                 val api = container.api()
                 item.collectionId?.let { api.seriesPlaybackPreferences(it.toString()) } ?: api.playbackPreferences()
-            }.getOrNull() ?: return@launch
+            } ?: return@launch
             data.update { it.copy(heroPrefs = key to prefs) }
         }
     }
@@ -366,27 +374,16 @@ class HomeViewModel(
             emit(cid?.let { HomeEvent.OpenCollection(it.toString()) } ?: HomeEvent.OpenLibrary)
             return
         }
-        val key = "get:${tileKey(item)}"
-        if (data.value.busy != null) return
-        data.update { it.copy(busy = key, notice = null) }
-        viewModelScope.launch {
-            try {
-                val got = container.api().grabCollectionEpisode(cid.toString(), season.toInt(), episode.toInt(), "auto")
-                emit(HomeEvent.Play(got.infohash, got.fileIdx.toInt()))
-                data.update { it.copy(busy = null) }
-                readContinueWatching()
+        actions.run("get:${tileKey(item)}") {
+            val got = try {
+                container.api().grabCollectionEpisode(cid.toString(), season.toInt(), episode.toInt(), "auto")
             } catch (e: Exception) {
                 val error = e.toUiError()
-                data.update {
-                    it.copy(
-                        busy = null,
-                        notice = Notice(
-                            "Could not get ${nextName(item)}. ${error.message} Open the series to pick another release.",
-                            StatusTone.Down,
-                        ),
-                    )
-                }
+                return@run Notice("Could not get ${nextName(item)}. ${error.message} Open the series to pick another release.", StatusTone.Down)
             }
+            emit(HomeEvent.Play(got.infohash, got.fileIdx.toInt()))
+            launch { readContinueWatching() }
+            null
         }
     }
 
@@ -428,16 +425,7 @@ class HomeViewModel(
 
     /** One action at a time: [busy] while it travels, then its notice (or the error, said). */
     private fun act(key: String, block: suspend () -> Notice?) {
-        if (data.value.busy != null) return
-        data.update { it.copy(busy = key, notice = null) }
-        viewModelScope.launch {
-            val notice = try {
-                block()
-            } catch (e: Exception) {
-                Notice(e.toUiError().message, StatusTone.Down)
-            }
-            data.update { it.copy(busy = null, notice = notice) }
-        }
+        actions.run(key) { block() }
     }
 
     private fun emit(event: HomeEvent) {

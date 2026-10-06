@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,10 +29,12 @@ import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaProbe
 import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.TorrentView
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.irisError
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
+import studio.kahn.iris.tv.ui.state.SLOW_MS
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.pollWhile
 import studio.kahn.iris.tv.ui.state.pollWhileStarted
@@ -85,7 +88,13 @@ class WatchViewModel(
 ) : ViewModel() {
     private val serverUrl = MutableStateFlow<String?>(null)
 
-    val torrent: StateFlow<Loadable<TorrentView>> = viewModelScope.pollWhileStarted(TORRENT_POLL_MS) {
+    /** The last position played, kept across an activity recreated mid-film (the player resumes there). */
+    var playedMs: Long? = null
+
+    // A finished torrent changes little (a season pack's file list is a big read): slow down.
+    val torrent: StateFlow<Loadable<TorrentView>> = viewModelScope.pollWhileStarted({ t: TorrentView? ->
+        if (t?.finished == true) SLOW_MS else TORRENT_POLL_MS
+    }) {
         api().getTorrent(infohash)
     }
 
@@ -167,12 +176,23 @@ class WatchViewModel(
         viewModelScope.launch {
             serverUrl.value = container.sessionStore.serverUrl.first()
             loadSetup()
-            launch { contextState.value = runCatching { api().episodeContext(infohash, fileIdx) }.getOrNull() }
             launch { refreshProgress() }
+            loadSeries()
+        }
+    }
+
+    /**
+     * The episode's context and its series, for the episode wording, the panel and the next
+     * episode; a failed read is read again on "Try again" and when the panel opens.
+     */
+    private suspend fun loadSeries() = coroutineScope {
+        if (contextState.value == null) {
+            launch { bestEffort { api().episodeContext(infohash, fileIdx) }?.let { contextState.value = it } }
+        }
+        if (collectionState.value == null) {
             // The collection id rides on the torrent: the first answer is enough.
-            val first = torrent.first { it.valueOrNull != null }.valueOrNull
-            val cid = first?.collectionId
-            if (cid != null) collectionState.value = runCatching { api().collectionDetail(cid.toString()) }.getOrNull()
+            val cid = torrent.first { it.valueOrNull != null }.valueOrNull?.collectionId
+            if (cid != null) bestEffort { api().collectionDetail(cid.toString()) }?.let { collectionState.value = it }
         }
     }
 
@@ -185,6 +205,7 @@ class WatchViewModel(
     /** Probe again (Try again, after a regrab). */
     fun retry() {
         loadSetup()
+        viewModelScope.launch { loadSeries() }
     }
 
     private fun loadSetup() {
@@ -209,16 +230,16 @@ class WatchViewModel(
         }
         serverUrl.value = url
         val api = container.apiFor(url)
-        val collectionId = runCatching { api.getTorrent(infohash).collectionId }.getOrNull()
+        val collectionId = bestEffort { api.getTorrent(infohash).collectionId }
         var attempts = 0
         while (attempts < PROBE_ATTEMPTS) {
             try {
                 val freshProbe = api.probe(infohash, fileIdx)
-                val progresses = runCatching { api.torrentProgress(infohash) }.getOrDefault(emptyList())
+                val progresses = bestEffort { api.torrentProgress(infohash) }.orEmpty()
                 val resume = progresses.firstOrNull { it.fileIdx == fileIdx.toLong() }
                     ?.takeUnless { it.completed }?.positionSeconds ?: 0.0
-                val saved = runCatching { api.getProgress(infohash, fileIdx) }.getOrNull()
-                val prefs = runCatching { api.playbackPreferences(collectionId?.toString()) }.getOrNull()
+                val saved = bestEffort { api.getProgress(infohash, fileIdx) }
+                val prefs = bestEffort { api.playbackPreferences(collectionId?.toString()) }
                 setupState.value = WatchSetup(
                     serverUrl = url,
                     probe = freshProbe,
@@ -267,14 +288,14 @@ class WatchViewModel(
     suspend fun pollPlayStatus(keepGoing: () -> Boolean, onStatus: (PlayStatus) -> Unit) {
         val api = api()
         pollWhile({ PLAY_STATUS_POLL_MS }, keepGoing) {
-            val st = runCatching { api.playStatus(infohash, fileIdx) }.getOrNull()
-            if (st != null) onStatus(st)
+            bestEffort { api.playStatus(infohash, fileIdx) }?.let(onStatus)
         }
     }
 
     fun refreshProgress() {
         viewModelScope.launch {
-            val list = runCatching { api().torrentProgress(infohash) }.getOrNull() ?: return@launch
+            launch { loadSeries() }
+            val list = bestEffort { api().torrentProgress(infohash) } ?: return@launch
             progressState.value = list.associateBy { it.fileIdx.toInt() }
         }
     }
@@ -284,19 +305,34 @@ class WatchViewModel(
         if (busyState.value != null) return
         busyState.value = BUSY_REGRAB
         viewModelScope.launch {
-            val ok = runCatching { api().regrabTorrent(infohash) }.isSuccess
+            val ok = bestEffort { api().regrabTorrent(infohash) } != null
             busyState.value = null
             regrabFailed.value = !ok
             if (ok) loadSetup()
         }
     }
 
-    /** Remove a dead release (frees the partial download), then search for another. */
+    /**
+     * Remove a dead release (frees the partial download), then search for another. A removal
+     * the server refused is said, and nothing opens: the partial download is still there.
+     */
     fun replace(deadSwarm: Boolean, onSearch: (String) -> Unit) {
         if (busyState.value != null) return
         busyState.value = BUSY_REPLACE
         viewModelScope.launch {
-            if (deadSwarm) runCatching { api().deleteTorrent(infohash) }
+            if (deadSwarm) {
+                val failed = try {
+                    api().deleteTorrent(infohash)
+                    null
+                } catch (e: Exception) {
+                    e.toUiError()
+                }
+                if (failed != null) {
+                    busyState.value = null
+                    say("Iris could not remove this release: ${failed.message}")
+                    return@launch
+                }
+            }
             busyState.value = null
             val c = collectionState.value
             val current = c?.episodes?.firstOrNull { it.infohash == infohash && it.fileIdx.toInt() == fileIdx }

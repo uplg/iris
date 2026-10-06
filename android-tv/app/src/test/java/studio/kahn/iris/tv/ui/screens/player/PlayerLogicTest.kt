@@ -63,7 +63,8 @@ class PlayerWordsTest {
 
     @Test
     fun releaseNamesReadable() {
-        assertEquals("Severance S02E04 1080p", prettyName("Season 2/Severance.S02E04.1080p.mkv"))
+        assertEquals("Severance", prettyName("Season 2/Severance.S02E04.1080p.mkv"))
+        assertEquals("Mercato (2025)", prettyName("Mercato.2025.1080p.WEB.x264-GRP.mkv"))
         assertNull(prettyName(""))
     }
 

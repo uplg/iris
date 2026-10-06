@@ -4,6 +4,9 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
+import studio.kahn.iris.tv.ui.format.NO_SUBTITLES
+import studio.kahn.iris.tv.ui.format.audioChoiceWords
+import studio.kahn.iris.tv.ui.format.subtitleChoiceWords
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -41,13 +44,13 @@ class SettingsWordsTest {
     fun playbackLanguages() {
         assertEquals("fr", languageChoice("fre"))
         assertEquals("fr", languageChoice("fr-FR"))
-        assertEquals(SUBTITLES_OFF, languageChoice("off"))
+        assertEquals(NO_SUBTITLES, languageChoice("off"))
         assertNull(languageChoice(null))
-        assertEquals("The file’s own", audioWords(null))
-        assertEquals("No subtitles", subtitleWords(SUBTITLES_OFF))
+        assertEquals("The file’s own", audioChoiceWords(null))
+        assertEquals("No subtitles", subtitleChoiceWords(NO_SUBTITLES))
         assertEquals(COMMON_LANGUAGES, languageOptions("fr"))
         assertEquals(COMMON_LANGUAGES + "nl", languageOptions("nl"))
-        assertEquals(COMMON_LANGUAGES, languageOptions(SUBTITLES_OFF))
+        assertEquals(COMMON_LANGUAGES, languageOptions(NO_SUBTITLES))
     }
 
     @Test

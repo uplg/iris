@@ -4,6 +4,7 @@
 package studio.kahn.iris.tv.ui.screens
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.text.format.DateFormat
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
@@ -26,7 +27,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,12 +52,12 @@ import androidx.tv.material3.Text
 import java.time.OffsetDateTime
 import java.util.Date
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.LiveChannel
 import studio.kahn.iris.tv.data.LiveNowNext
 import studio.kahn.iris.tv.data.buildMediaItem
+import studio.kahn.iris.tv.data.serverBase
 import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.humanizePlaybackError
 import studio.kahn.iris.tv.ui.components.ActionButton
@@ -73,6 +73,7 @@ import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.buildMediaSession
+import studio.kahn.iris.tv.ui.screens.live.LiveWatchViewModel
 import studio.kahn.iris.tv.ui.screens.live.nextWords
 import studio.kahn.iris.tv.ui.screens.live.nowWords
 import studio.kahn.iris.tv.ui.screens.live.programmeProgress
@@ -81,10 +82,9 @@ import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisShape
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
-import studio.kahn.iris.tv.ui.state.pollWhile
-
-/** Now/next refresh cadence while watching (drives the overlay). */
-private const val EPG_REFRESH_MS = 30_000L
+import studio.kahn.iris.tv.ui.state.RepeatWhileStarted
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** How long the channel strip stays up after it (re)appears. */
 private const val OVERLAY_VISIBLE_MS = 4_000L
@@ -159,12 +159,12 @@ fun LiveTvWatchScreen(
 ) {
     LockLandscape()
     val context = LocalContext.current
-
-    var serverUrl by remember { mutableStateOf<String?>(null) }
-    var channels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
-    var channelId by remember { mutableStateOf(initialChannelId) }
-    var epg by remember { mutableStateOf<Map<String, LiveNowNext>>(emptyMap()) }
-    var epgReadAtMs by remember { mutableLongStateOf(0L) }
+    val vm = irisViewModel(container) { c, saved -> LiveWatchViewModel(c, country, initialChannelId, saved) }
+    val serverUrl by vm.baseUrl.collectAsStateWithLifecycle()
+    val channelsRead by vm.channels.collectAsStateWithLifecycle()
+    val channels = channelsRead.valueOrNull.orEmpty()
+    val channelId by vm.channelId.collectAsStateWithLifecycle()
+    val guide by vm.guide.collectAsStateWithLifecycle()
     var errorMessage by remember { mutableStateOf<String?>(null) }
     // STABLE state (not re-keyed) + reset per channel below: a long-lived
     // Player.Listener would otherwise capture a stale re-keyed state object
@@ -192,36 +192,20 @@ fun LiveTvWatchScreen(
         overlayVisible = false
     }
 
-    LaunchedEffect(Unit) {
-        serverUrl = container.sessionStore.serverUrl.first()
-        val url = serverUrl ?: return@LaunchedEffect
-        runCatching { container.apiFor(url).liveTvChannels(country) }
-            .onSuccess { channels = it.channels }
-    }
-    LaunchedEffect(serverUrl) {
-        val url = serverUrl ?: return@LaunchedEffect
-        pollWhile({ EPG_REFRESH_MS }) {
-            runCatching { container.apiFor(url).liveTvEpgNow(country) }
-                .onSuccess { res ->
-                    epg = res.propertyEntries.associateBy { it.channelId }
-                    epgReadAtMs = System.currentTimeMillis()
-                }
-        }
-    }
-
     val player = remember { mutableStateOf<ExoPlayer?>(null) }
     val session = remember { mutableStateOf<MediaSession?>(null) }
 
-    var stage by remember { mutableStateOf(DecodeStage.Hardware) }
+    // Primed from what the channel needed before.
+    var stage by remember { mutableStateOf(recallStage(context, "$country:${vm.channelId.value}")) }
     // The stage the CURRENT player was built for: renderers are fixed at construction.
     val playerStage = remember { mutableStateOf(DecodeStage.Hardware) }
 
-    // New channel ⇒ fresh retry budget; stage primed from what this channel
-    // needed before. Keyed on channelId only, so a reconnect doesn't reset the
-    // count it is incrementing.
-    LaunchedEffect(channelId) {
+    // A new channel: a fresh retry budget and its own stage, both set with the channel so the
+    // load below runs once, at the right stage.
+    val watch: (String) -> Unit = { id ->
         autoRetryCount = 0
-        stage = recallStage(context, "$country:$channelId")
+        stage = recallStage(context, "$country:$id")
+        vm.watch(id)
     }
     LaunchedEffect(playing) {
         if (playing) persistStage(context, "$country:$channelId", playerStage.value)
@@ -230,31 +214,29 @@ fun LiveTvWatchScreen(
     // Shared failure path (error listener + connect timeout): demote the dead
     // source, WAIT for that POST, then reload the newly elected feed. Past the
     // budget, the Retry card.
-    val onFail: (String) -> Unit = onFail@{ message ->
-        val url = serverUrl ?: return@onFail
+    val onFail: (String) -> Unit = { message ->
+        val failed = channelId
         if (autoRetryCount < MAX_AUTO_RETRIES) {
             autoRetryCount++
             container.applicationScope.launch {
-                runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
+                vm.reportFailure(failed)
                 retryNonce++
             }
         } else {
-            container.applicationScope.launch {
-                runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
-            }
+            container.applicationScope.launch { vm.reportFailure(failed) }
             errorMessage = message
         }
     }
 
     // "Try another source" (the web's escape hatch for a feed that plays
     // badly): report it, then start again on the next one with a fresh budget.
-    val anotherSource: () -> Unit = another@{
-        val url = serverUrl ?: return@another
+    val anotherSource: () -> Unit = {
+        val failed = channelId
         actionsShown = false
         autoRetryCount = 0
         errorMessage = null
         container.applicationScope.launch {
-            runCatching { container.apiFor(url).liveTvPlaybackError(country, channelId) }
+            vm.reportFailure(failed)
             retryNonce++
         }
     }
@@ -265,7 +247,7 @@ fun LiveTvWatchScreen(
         errorMessage = null
         playing = false
         outputLost = false
-        val base = if (url.endsWith("/")) url else "$url/"
+        val base = serverBase(url)
         val masterUrl = if (stage == DecodeStage.Server) {
             "${base}api/livetv/$country/channels/$channelId/transcode/master.m3u8"
         } else {
@@ -292,9 +274,11 @@ fun LiveTvWatchScreen(
         p.playWhenReady = true
     }
 
-    // Stall escape hatch: re-armed per attempt. A silent no-start walks the
-    // ladder; it never demotes the source nor burns the retry walk.
-    LaunchedEffect(channelId, retryNonce, serverUrl, stage) {
+    // Stall escape hatch: re-armed per attempt, counted only while the screen is started and
+    // the picture reaches someone (a stop is not a stall: it would persist a stage for 24 h).
+    // A silent no-start walks the ladder; it never demotes the source nor burns the retry walk.
+    RepeatWhileStarted(listOf(channelId, retryNonce, serverUrl, stage, outputLost)) {
+        if (outputLost) return@RepeatWhileStarted
         delay(
             when (stage) {
                 DecodeStage.Hardware -> HW_STALL_MS
@@ -381,10 +365,8 @@ fun LiveTvWatchScreen(
         }
     }
 
-    val zap: (Int) -> Unit = zap@{ delta ->
-        if (channels.isEmpty()) return@zap
-        val idx = channels.indexOfFirst { it.id == channelId }.coerceAtLeast(0)
-        channelId = channels[(idx + delta + channels.size) % channels.size].id
+    val zap: (Int) -> Unit = { delta ->
+        vm.channelAt(delta)?.let(watch)
         actionsShown = false
     }
 
@@ -399,6 +381,7 @@ fun LiveTvWatchScreen(
     }
     BackHandler(enabled = actionsShown && errorMessage == null) { actionsShown = false }
 
+    val touchscreen = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) }
     val format = remember(context) { DateFormat.getTimeFormat(context) }
     val clock = remember(format) { { t: OffsetDateTime -> format.format(Date.from(t.toInstant())) } }
 
@@ -461,7 +444,7 @@ fun LiveTvWatchScreen(
         PlayerStage(player.value, liftCues = overlayVisible || actionsShown)
 
         val channel = channels.firstOrNull { it.id == channelId }
-        val nowNext = epg[channelId]
+        val nowNext = guide.entries[channelId]
         if ((overlayVisible || actionsShown) && !outputLost) {
             LiveTopBar(
                 channel = channel,
@@ -472,12 +455,14 @@ fun LiveTvWatchScreen(
             )
             LiveBottomBar(
                 nowNext = nowNext,
-                nowMs = epgReadAtMs,
+                nowMs = guide.readAtMs,
                 clock = clock,
                 actionsShown = actionsShown,
                 actionsFocus = actionsFocus,
                 onAnotherSource = anotherSource,
                 onChannels = onBack,
+                onZap = zap.takeIf { touchscreen },
+                listError = channelsRead.errorOrNull?.message,
                 modifier = Modifier.align(Alignment.BottomStart),
             )
         }
@@ -490,33 +475,7 @@ fun LiveTvWatchScreen(
         }
 
         if (errorMessage == null && !playing && !outputLost) {
-            // Diagnostic by design: no adb on the household TVs, so the stage
-            // and the elapsed seconds are the debugging story.
-            var elapsedS by remember(channelId, retryNonce, stage) { mutableIntStateOf(0) }
-            LaunchedEffect(channelId, retryNonce, stage) {
-                while (true) {
-                    delay(1_000)
-                    elapsedS++
-                }
-            }
-            ConnectingNote(
-                title = when (stage) {
-                    DecodeStage.Hardware -> "Connecting…"
-                    DecodeStage.Software -> "Slow start, retrying with the software decoder…"
-                    DecodeStage.Server -> "Preparing a compatible stream on the server…"
-                },
-                detail = buildString {
-                    append("${elapsedS}s")
-                    if (autoRetryCount > 0) append(" · source attempt ${autoRetryCount + 1}")
-                    append(
-                        when (stage) {
-                            DecodeStage.Hardware -> " · hw"
-                            DecodeStage.Software -> " · sw"
-                            DecodeStage.Server -> " · srv"
-                        },
-                    )
-                },
-            )
+            ConnectingNote(attempt = listOf(channelId, retryNonce, stage), stage = stage, autoRetryCount = autoRetryCount)
         }
 
         val error = errorMessage
@@ -591,6 +550,10 @@ internal fun LiveBottomBar(
     onAnotherSource: () -> Unit,
     onChannels: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Touch: the previous / next channel as buttons (no ↑/↓ on a phone). */
+    onZap: ((Int) -> Unit)? = null,
+    /** Why the channel list did not load: the channel can't change until it does. */
+    listError: String? = null,
 ) {
     val layout = IrisLayout.current
     Column(
@@ -612,6 +575,9 @@ internal fun LiveBottomBar(
         nowNext?.next?.let { next ->
             Text(nextWords(next, clock), style = IrisType.meta, color = IrisColor.stageMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (listError != null) {
+            StatusLine("The channel list did not load, so the channel can't change: $listError", tone = StatusTone.Down)
+        }
         if (actionsShown) {
             Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
                 ActionButton(
@@ -622,6 +588,10 @@ internal fun LiveBottomBar(
                     modifier = Modifier.focusRequester(actionsFocus),
                 )
                 ActionButton("Channels", onChannels, style = ActionStyle.Quiet)
+                if (onZap != null) {
+                    ActionButton("Previous channel", { onZap(-1) }, style = ActionStyle.Quiet)
+                    ActionButton("Next channel", { onZap(1) }, style = ActionStyle.Quiet)
+                }
             }
         }
         KeyHints(
@@ -635,8 +605,36 @@ internal fun LiveBottomBar(
     }
 }
 
+/**
+ * "Connecting…" with the seconds since [attempt] began, ticking here only (the screen does not
+ * recompose each second). Diagnostic by design: no adb on the household TVs, so the stage and
+ * the elapsed seconds are the debugging story.
+ */
 @Composable
-private fun ConnectingNote(title: String, detail: String) {
+private fun ConnectingNote(attempt: Any, stage: DecodeStage, autoRetryCount: Int) {
+    var elapsedS by remember(attempt) { mutableIntStateOf(0) }
+    LaunchedEffect(attempt) {
+        while (true) {
+            delay(1_000)
+            elapsedS++
+        }
+    }
+    val title = when (stage) {
+        DecodeStage.Hardware -> "Connecting…"
+        DecodeStage.Software -> "Slow start, retrying with the software decoder…"
+        DecodeStage.Server -> "Preparing a compatible stream on the server…"
+    }
+    val detail = buildString {
+        append("${elapsedS}s")
+        if (autoRetryCount > 0) append(" · source attempt ${autoRetryCount + 1}")
+        append(
+            when (stage) {
+                DecodeStage.Hardware -> " · hw"
+                DecodeStage.Software -> " · sw"
+                DecodeStage.Server -> " · srv"
+            },
+        )
+    }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
             Spinner(Modifier.size(22.dp), color = IrisColor.accent)

@@ -4,7 +4,6 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +12,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
+import studio.kahn.iris.tv.data.api
+import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.ChangeDisplayNameRequest
 import studio.kahn.iris.tv.data.ChangePasswordRequest
 import studio.kahn.iris.tv.data.DeviceView
@@ -134,16 +135,14 @@ const val PASSWORD_MIN = 8
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     private val mutable = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = mutable.asStateFlow()
-    private var waiting: Job? = null
+    /** A code entered: the device count before it, and when the code's life ends. */
+    private var waitFor: Pair<Int, Long>? = null
 
     init {
         refresh()
     }
 
-    private suspend fun api(): IrisApi {
-        val url = container.sessionStore.serverUrl.first() ?: error("No Iris server is set on this TV.")
-        return container.apiFor(url)
-    }
+    private suspend fun api(): IrisApi = container.api()
 
     fun refresh() {
         viewModelScope.launch {
@@ -321,21 +320,33 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** Reads the list every 2 s until it grows or the code's life (10 min on the server) is over. */
     private fun waitForDevice(had: Int) {
-        waiting?.cancel()
+        waitFor = had to System.currentTimeMillis() + CODE_LIFE_MS
         mutable.update { it.copy(waitingForDevice = true) }
-        waiting = viewModelScope.launch {
-            val signedIn = pollUntil(DEVICE_POLL_MS, CODE_LIFE_MS) {
-                readDevices()
-                (mutable.value.devices.valueOrNull?.size ?: 0) > had
+    }
+
+    /**
+     * Reads the list every 2 s until it grows or the code's life (10 min on the server) is
+     * over. Run by the screen only while it is started: in the background nothing is read, and
+     * the wait goes on (what time is left of it) on return.
+     */
+    suspend fun waitForDeviceWhileStarted() {
+        val (had, deadline) = waitFor ?: return
+        val grew = { (mutable.value.devices.valueOrNull?.size ?: 0) > had }
+        readDevices()
+        val signedIn = grew() || pollUntil(DEVICE_POLL_MS, (deadline - System.currentTimeMillis()).coerceAtLeast(0)) {
+            readDevices()
+            grew()
+        }
+        if (waitFor == null) return
+        waitFor = null
+        if (signedIn) {
+            mutable.update {
+                it.copy(waitingForDevice = false, outcome = Outcome(SettingsSection.Devices, "The other TV is paired and signed in."))
             }
-            if (signedIn) {
-                mutable.update {
-                    it.copy(waitingForDevice = false, outcome = Outcome(SettingsSection.Devices, "The other TV is paired and signed in."))
-                }
-                return@launch
-            }
+            return
+        }
+        run {
             mutable.update {
                 it.copy(
                     waitingForDevice = false,
@@ -350,7 +361,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun stopWaiting() {
-        waiting?.cancel()
+        waitFor = null
         mutable.update { it.copy(waitingForDevice = false, outcome = null) }
     }
 
@@ -391,7 +402,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         mutable.update { it.copy(busy = Busy.SIGN_OUT) }
         viewModelScope.launch {
             // Best effort: the session is forgotten here whether the server heard or not.
-            runCatching { api().logout() }
+            bestEffort { api().logout() }
             container.sessionStore.clear()
             mutable.update { it.copy(busy = null, signedOut = true) }
         }

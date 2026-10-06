@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -145,10 +146,26 @@ fun HomeContent(
     val list = rememberLazyListState()
     var focusPlaced by remember { mutableStateOf(false) }
 
-    // The first focus: the hero's main action, else the menu once the home knows it has no hero.
+    // The first focus: back on this screen the card left, else the hero's main action, else the
+    // menu once the home knows it has no hero. The onboarding sheet closing puts it back too.
     val sheetOpen = state.onboarding != null
-    LaunchedEffect(state.hero?.key, state.heroPending, sheetOpen) {
-        if (focusPlaced || state.heroPending || sheetOpen) return@LaunchedEffect
+    var sheetWasOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(sheetOpen) {
+        if (sheetOpen) {
+            sheetWasOpen = true
+        } else if (sheetWasOpen) {
+            sheetWasOpen = false
+            focusPlaced = false
+        }
+    }
+    LaunchedEffect(state.hero?.key, state.heroPending, sheetOpen, focusPlaced) {
+        if (focusPlaced || sheetOpen) return@LaunchedEffect
+        withFrameNanos { }
+        if (focus.focusLast()) {
+            focusPlaced = true
+            return@LaunchedEffect
+        }
+        if (state.heroPending) return@LaunchedEffect
         val target = if (state.hero != null) heroFocus else header ?: return@LaunchedEffect
         focusPlaced = runCatching { target.requestFocus() }.isSuccess
     }
