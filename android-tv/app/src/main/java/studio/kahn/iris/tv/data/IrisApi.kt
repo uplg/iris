@@ -100,7 +100,10 @@ interface IrisApi {
     /** The user's preferred audio + subtitle language (applied across episodes
      *  / devices). */
     @GET("api/me/playback-preferences")
-    suspend fun playbackPreferences(): PlaybackPrefsResponse
+    suspend fun playbackPreferences(
+        /** The series whose choice to read (falls back to the account's). */
+        @Query("collection_id") collectionId: String? = null,
+    ): PlaybackPrefsResponse
 
     /** Save preferred audio + subtitle language. Send the full current state. */
     @PUT("api/me/playback-preferences")
