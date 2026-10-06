@@ -78,9 +78,9 @@ export type AssOverlayOptions = {
 	host: HTMLElement;
 	/** Server URL that returns the raw ASS bytes. */
 	subUrl: string;
-	/** Function returning the current media time in seconds. Phase 2d
-	 *  alpha just polls this via rAF; native `<video>` time sync (which
-	 *  libass-wasm does internally) lands when we accept a `<video>`. */
+	/** The current media time in seconds, read live (the engine's own clock, not a value
+	 *  refreshed at `timeupdate`'s 4 Hz): read every animation frame, handed to the worker
+	 *  only when it moved. */
 	getCurrentTime: () => number;
 	/** Native `<video>` element to bind to. If provided, libass-wasm
 	 *  drives its own timeupdate loop and ignores `getCurrentTime`. */
@@ -157,6 +157,7 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
 	// without flooding the console.
 	let remountAttempts = 0;
 	const MAX_REMOUNTS = 1;
+	let disposed = false;
 	const handleWorkerError = (err: unknown) => {
 		console.error('[iris-core:libass] worker error', err);
 		if (remountAttempts >= MAX_REMOUNTS) return;
@@ -172,6 +173,8 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
 		// Defer one frame so the worker thread fully tears down before
 		// attaching a new one (constructor refetches the worker script).
 		requestAnimationFrame(() => {
+			// disposed within that frame: no worker nobody would ever dispose
+			if (disposed) return;
 			try {
 				instance = new Ctor(constructorOptions(handleWorkerError));
 				syncResize();
@@ -190,11 +193,17 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
 	// When there's no <video>, drive the time pump ourselves via rAF.
 	let rafId: number | null = null;
 	if (!opts.video) {
+		let posted = Number.NaN;
 		const tick = () => {
-			try {
-				instance.setCurrentTime(opts.getCurrentTime());
-			} catch {
-				/* libass may throw during teardown — swallow */
+			const t = opts.getCurrentTime();
+			// paused or between frames: nothing new for the worker
+			if (t !== posted) {
+				posted = t;
+				try {
+					instance.setCurrentTime(t);
+				} catch {
+					/* libass may throw during teardown — swallow */
+				}
 			}
 			rafId = requestAnimationFrame(tick);
 		};
@@ -237,6 +246,7 @@ export async function mountAssOverlay(opts: AssOverlayOptions): Promise<AssOverl
 			}
 		},
 		dispose: () => {
+			disposed = true;
 			observer.disconnect();
 			if (rafId !== null) cancelAnimationFrame(rafId);
 			try {

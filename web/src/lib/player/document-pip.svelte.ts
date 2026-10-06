@@ -68,16 +68,23 @@ export class DocumentPip {
 		return this.window !== null;
 	}
 
-	async toggle(): Promise<void> {
+	/** Closes the window if one is open (the player going away must not leave it behind,
+	 * always on top and empty). */
+	close(): void {
 		const open = this.window;
-		if (open) {
-			this.#size = { w: open.innerWidth || this.#size.w, h: open.innerHeight || this.#size.h };
-			try {
-				open.close();
-			} catch {
-				// already closed
-			}
-			this.window = null;
+		if (!open) return;
+		this.#size = { w: open.innerWidth || this.#size.w, h: open.innerHeight || this.#size.h };
+		this.window = null;
+		try {
+			open.close();
+		} catch {
+			// already closed
+		}
+	}
+
+	async toggle(): Promise<void> {
+		if (this.window) {
+			this.close();
 			return;
 		}
 		const api = isDocumentPipSupported() ? window.documentPictureInPicture : undefined;

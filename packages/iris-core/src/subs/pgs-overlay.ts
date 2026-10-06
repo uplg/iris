@@ -6,10 +6,9 @@
  * subtitle URL and it manages everything else (decode, scale, paint
  * sync via the supplied `<video>` element).
  *
- * For Tier C (canvas-based playback, no `<video>`) we synthesise a
- * minimal "video-like" interface via a hidden `<video>` and drive its
- * `currentTime` from the AV scheduler's clock. Cheap and lets us reuse
- * the same `PgsRenderer` code path.
+ * Without a `<video>` (the player hands none: its canvas sits over every
+ * engine, canvas ones included) a rAF loop renders at the engine's live
+ * clock, only when it moved.
  */
 
 const WORKER_URL = '/libpgs/libpgs.worker.js';
@@ -49,11 +48,17 @@ export async function mountPgsOverlay(opts: PgsOverlayOptions): Promise<PgsOverl
 
 	let rafId: number | null = null;
 	if (!opts.video) {
+		let rendered = Number.NaN;
 		const tick = () => {
-			try {
-				renderer.renderAtTimestamp(opts.getCurrentTime());
-			} catch {
-				/* ignore */
+			// read live, rendered only when it moved (paused: nothing to do)
+			const t = opts.getCurrentTime();
+			if (t !== rendered) {
+				rendered = t;
+				try {
+					renderer.renderAtTimestamp(t);
+				} catch {
+					/* ignore */
+				}
 			}
 			rafId = requestAnimationFrame(tick);
 		};
