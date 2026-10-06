@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page as screen, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
+import { focusManager } from '@tanstack/svelte-query';
+import { queryClient } from '#lib/query.ts';
+import { KEYS } from '#lib/queries.ts';
 import { stubApi, type ApiCall } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
 import { answer, release, severance } from './fixtures.ts';
@@ -49,6 +52,23 @@ describe('SearchScreen', () => {
 		expect(nav.replaceState).toHaveBeenLastCalledWith('/search?q=severance', {});
 		// the search is kept in the account's recent searches
 		expect(api.sent('POST', '/me/recent-searches')[0].body).toEqual({ query: 'severance' });
+	});
+
+	it('a return to the tab does not ask every tracker again', async () => {
+		at('/search?q=severance');
+		const api = backend();
+		await render(SearchScreen);
+		await expect.element(screen.getByText('1 release', { exact: true })).toBeVisible();
+		expect(searches(api)).toHaveLength(1);
+		// back much later: the answer is old, still not asked again (the app's provider mounts the client)
+		queryClient.mount();
+		for (const q of queryClient.getQueryCache().findAll({ queryKey: KEYS.search })) q.setState({ dataUpdatedAt: 0 });
+		focusManager.setFocused(false);
+		focusManager.setFocused(true);
+		await new Promise((resolve) => requestAnimationFrame(resolve));
+		expect(searches(api)).toHaveLength(1);
+		focusManager.setFocused(undefined);
+		queryClient.unmount();
 	});
 
 	it('Titles first; the chosen view is remembered in this browser', async () => {

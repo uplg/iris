@@ -77,7 +77,11 @@
 					search.query(asked.q, searchOpts(asked, pageParam, PAGE_SIZE), signal),
 				initialPageParam: 1,
 				getNextPageParam: (last: AggregatedResults, all: AggregatedResults[]) => nextPage(last, all.length),
-				enabled: asked.q.length >= 2
+				enabled: asked.q.length >= 2,
+				// each page is a fan-out to every tracker: never asked again on a return to the tab
+				// (a new search, or pressing Search again, asks)
+				staleTime: 5 * 60_000,
+				refetchOnWindowFocus: false
 			};
 		},
 		() => queryClient
