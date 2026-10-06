@@ -151,6 +151,7 @@ default_country = "fr"
 # cold_start_timeout_secs = 25       # when dlive is the channel's last option
 # breaker_failures = 4
 # breaker_open_mins = 15
+# merge_all = true                  # every other dlive channel, as a source of a same-named listed one
 # [live_tv.dlive.countries]
 # fr = [469, 950, 951, 952, 953, 470, 958, 959, 955, 957, 964, 962, 645, 963, 954, 961, 965,
 #       121, 122, 463, 464, 271, 273, 116, 117, 118, 494, 495, 496, 497, 498, 499, 500,

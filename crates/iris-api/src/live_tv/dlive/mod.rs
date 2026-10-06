@@ -62,6 +62,8 @@ const DEFAULT_VALIDITY_S: i64 = 1800;
 const MAX_HOPS: usize = 4;
 /// Probe id for the edge-host lookup when no country lists one.
 const DEFAULT_PROBE_ID: u32 = 51;
+/// How long a zapped-to channel stays a warm-up priority.
+const OPENED_RECENTLY: Duration = Duration::from_hours(24);
 
 /// `dlive://469/1`.
 pub fn sentinel(id: u32, player: u8) -> String {
@@ -312,6 +314,9 @@ pub struct Dlive {
     embeds: RwLock<HashMap<Key, (Embed, i64)>>,
     state_file: OnceLock<PathBuf>,
     pending_embeds: Mutex<HashSet<Key>>,
+    /// dlive ids of the channels zapped to, with when: the warm-up's second
+    /// priority, after the allow-list.
+    opened: Mutex<HashMap<u32, Instant>>,
     resolved: RwLock<HashMap<Key, Resolved>>,
     resolve_locks: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
     embed_locks: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
@@ -349,6 +354,7 @@ impl Dlive {
             embeds: RwLock::new(HashMap::new()),
             state_file: OnceLock::new(),
             pending_embeds: Mutex::new(HashSet::new()),
+            opened: Mutex::new(HashMap::new()),
             resolved: RwLock::new(HashMap::new()),
             resolve_locks: Mutex::new(HashMap::new()),
             embed_locks: Mutex::new(HashMap::new()),
@@ -432,6 +438,26 @@ impl Dlive {
             return Vec::new();
         };
         entries_for(&index, ids, &self.cfg.players, country)
+    }
+
+    /// The rest of the list, offered to `country`'s already-listed channels
+    /// by name (`merge_all`). The same daily list: no extra dlive.sx load.
+    pub async fn merged_entries(
+        self: &Arc<Self>,
+        country: &str,
+    ) -> Vec<(SourceOrigin, Vec<M3uEntry>)> {
+        if !self.cfg.merge_all {
+            return Vec::new();
+        }
+        let Some(index) = self.index_within(INDEX_WAIT).await else {
+            return Vec::new();
+        };
+        let allowed = self
+            .cfg
+            .countries
+            .get(country)
+            .map_or(&[][..], Vec::as_slice);
+        merged_entries_for(&index, allowed, &self.cfg.players, country)
     }
 
     async fn index_within(self: &Arc<Self>, wait: Duration) -> Option<Arc<Index>> {
@@ -733,6 +759,13 @@ impl Dlive {
     /// Queue the embeds a channel's dlive sources still lack, so its next
     /// election finds them cached.
     pub fn prefetch(self: &Arc<Self>, keys: impl IntoIterator<Item = Key>) {
+        let keys: Vec<Key> = keys.into_iter().collect();
+        {
+            let now = Instant::now();
+            let mut opened = self.opened.lock().expect("poisoned");
+            opened.retain(|_, at| now.duration_since(*at) < OPENED_RECENTLY);
+            opened.extend(keys.iter().map(|&(id, _)| (id, now)));
+        }
         if self.breaker_open() {
             return;
         }
@@ -760,29 +793,52 @@ impl Dlive {
                 return;
             }
         }
-        let mut ids: Vec<u32> = self.cfg.countries.values().flatten().copied().collect();
-        ids.sort_unstable();
-        ids.dedup();
-        let wanted: Vec<Key> = ids
-            .into_iter()
-            .filter(|id| index.names.contains_key(id))
-            .flat_map(|id| self.cfg.players.iter().map(move |&p| (id, p)))
-            .filter(|&key| {
-                key.1 != 1
-                    && player_path(key.1).is_some()
-                    && self.fresh_embed(key).is_none()
-                    && !self.pending_embeds.lock().expect("poisoned").contains(&key)
-            })
-            .collect();
-        // a channel with no embed at all before one that only needs a refresh
-        let next = wanted
-            .iter()
-            .find(|&&key| self.embed(key).is_none())
-            .or_else(|| wanted.first())
-            .copied();
-        if let Some(key) = next {
+        if let Some(key) = self.warm_next(&index) {
             let _ = self.fetch_embed(key).await;
         }
+    }
+
+    /// The embed the warm-up scrapes next: the allow-listed channels first,
+    /// then the ones zapped to lately, never the rest of the merged list; in
+    /// each, a channel with no embed at all before one that only needs a
+    /// refresh.
+    fn warm_next(&self, index: &Index) -> Option<Key> {
+        let mut allowed: Vec<u32> = self.cfg.countries.values().flatten().copied().collect();
+        allowed.sort_unstable();
+        allowed.dedup();
+        let mut recent: Vec<(u32, Instant)> = {
+            let now = Instant::now();
+            self.opened
+                .lock()
+                .expect("poisoned")
+                .iter()
+                .filter(|(id, at)| {
+                    now.duration_since(**at) < OPENED_RECENTLY && !allowed.contains(id)
+                })
+                .map(|(id, at)| (*id, *at))
+                .collect()
+        };
+        recent.sort_by_key(|&(id, at)| (std::cmp::Reverse(at), id));
+        let groups = [allowed, recent.into_iter().map(|(id, _)| id).collect()];
+        let wanted = |ids: &Vec<u32>| -> Vec<Key> {
+            ids.iter()
+                .filter(|id| index.names.contains_key(id))
+                .flat_map(|&id| self.cfg.players.iter().map(move |&p| (id, p)))
+                .filter(|&key| {
+                    key.1 != 1
+                        && player_path(key.1).is_some()
+                        && self.fresh_embed(key).is_none()
+                        && !self.pending_embeds.lock().expect("poisoned").contains(&key)
+                })
+                .collect()
+        };
+        let wanted: Vec<Vec<Key>> = groups.iter().map(wanted).collect();
+        wanted
+            .iter()
+            .flatten()
+            .find(|&&key| self.embed(key).is_none())
+            .or_else(|| wanted.iter().flatten().next())
+            .copied()
     }
 
     /// Resolve `dlive://<id>/<player>` to a playable URL. Never loads a
@@ -1036,6 +1092,41 @@ fn entries_for(
     players: &[u8],
     country: &str,
 ) -> Vec<(SourceOrigin, Vec<M3uEntry>)> {
+    entries_with(index, ids, players, country, |rank| SourceOrigin::Dlive {
+        rank,
+    })
+}
+
+/// Every channel of the list `country` may carry besides its allow-list
+/// (`allowed`): none whose name's country word names another country, none
+/// for adults. Each joins only a channel already listed under its name.
+fn merged_entries_for(
+    index: &Index,
+    allowed: &[u32],
+    players: &[u8],
+    country: &str,
+) -> Vec<(SourceOrigin, Vec<M3uEntry>)> {
+    let mut ids: Vec<u32> = index
+        .names
+        .iter()
+        .filter(|(id, raw)| {
+            !allowed.contains(id) && !parse::is_adult(raw) && parse::fits_country(raw, country)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_unstable();
+    entries_with(index, &ids, players, country, |rank| {
+        SourceOrigin::DliveMerged { rank }
+    })
+}
+
+fn entries_with(
+    index: &Index,
+    ids: &[u32],
+    players: &[u8],
+    country: &str,
+    origin: impl Fn(u8) -> SourceOrigin,
+) -> Vec<(SourceOrigin, Vec<M3uEntry>)> {
     let mut seen = HashSet::new();
     players
         .iter()
@@ -1060,12 +1151,7 @@ fn entries_for(
                     })
                 })
                 .collect();
-            (
-                SourceOrigin::Dlive {
-                    rank: u8::try_from(rank).unwrap_or(u8::MAX),
-                },
-                entries,
-            )
+            (origin(u8::try_from(rank).unwrap_or(u8::MAX)), entries)
         })
         .collect()
 }

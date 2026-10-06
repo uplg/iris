@@ -160,9 +160,16 @@ pub struct DliveConfig {
     /// While open, every dlive source is skipped (unless nothing else plays).
     #[serde(default = "default_dlive_breaker_open_mins")]
     pub breaker_open_mins: u64,
-    /// Country code → dlive channel ids folded into that country's list.
+    /// Country code → dlive channel ids folded into that country's list,
+    /// created there even when nothing else carries them.
     #[serde(default = "default_dlive_countries")]
     pub countries: HashMap<String, Vec<u32>>,
+    /// Offer every other dlive channel as an extra source to a channel the
+    /// country already lists under the same name. A trailing country word in
+    /// the dlive name (`TF1 France`) restricts it to that country; no channel
+    /// is created and no country guessed for one that matches nothing.
+    #[serde(default = "default_true")]
+    pub merge_all: bool,
 }
 
 impl Default for DliveConfig {
@@ -180,6 +187,7 @@ impl Default for DliveConfig {
             breaker_failures: default_dlive_breaker_failures(),
             breaker_open_mins: default_dlive_breaker_open_mins(),
             countries: default_dlive_countries(),
+            merge_all: true,
         }
     }
 }
@@ -694,6 +702,7 @@ mod tests {
         assert_eq!(bare.dlive.players, vec![1, 2, 6]);
         assert!(bare.dlive.countries["fr"].contains(&469));
         assert_eq!(bare.dlive.countries["ie"], vec![364, 365], "RTÉ One, RTÉ2");
+        assert!(bare.dlive.merge_all, "on by default");
         let on: LiveTvConfig =
             toml::from_str("[dlive]\nenabled = true\npage_budget = 8\n").unwrap();
         assert!(on.dlive.enabled);

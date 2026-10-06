@@ -826,10 +826,27 @@ impl LiveTvService {
                     playlists.push((origin, entries));
                 }
             }
+            // Last: they only join the channels every list above brought.
+            playlists.extend(self.inner.dlive.merged_entries(country).await);
         }
 
         let tnt = (country == "fr").then_some(&self.inner.cfg.tnt_overrides);
         let mut built = channels::build_channels(&playlists, tnt);
+        let merged = built
+            .iter()
+            .filter(|c| {
+                c.sources
+                    .iter()
+                    .any(|s| matches!(s.origin, SourceOrigin::DliveMerged { .. }))
+            })
+            .count();
+        if merged > 0 {
+            tracing::info!(
+                country,
+                channels = merged,
+                "live tv dlive channels merged by name"
+            );
+        }
         if built.is_empty() {
             tracing::info!(country, "live tv country has no channels");
             return Ok(self.build_snapshot(built));
