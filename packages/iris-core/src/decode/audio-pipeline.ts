@@ -6,8 +6,9 @@
  * `AudioBuffer`).
  */
 
-import { EncodedPacketSink, type InputAudioTrack } from 'mediabunny';
+import { AudioSampleSink, EncodedPacketSink, type InputAudioTrack } from 'mediabunny';
 
+import { ensureLibavAudioDecoderRegistered, libavCanDecode } from './libav-audio-decoder';
 import { DECODE_QUEUE_POLL_MS, PACING_POLL_MS } from './video-pipeline';
 import { configWithFreshDescription } from './webcodecs-probe';
 
@@ -62,6 +63,11 @@ export function startAudioPipeline(opts: AudioPipelineOptions): AudioPipelineHan
 
 	void (async () => {
 		try {
+			const codec = await opts.track.getCodec();
+			if (codec && libavCanDecode(codec) && !(await nativelyDecodable(opts.config))) {
+				await decodeThroughLibav(opts, () => stopped);
+				return;
+			}
 			decoder.configure(configWithFreshDescription(opts.config) as AudioDecoderConfig);
 			const sink = new EncodedPacketSink(opts.track);
 			const startPacket =
@@ -106,4 +112,37 @@ export function startAudioPipeline(opts: AudioPipelineOptions): AudioPipelineHan
 	})();
 
 	return { stop };
+}
+
+async function nativelyDecodable(config: AudioDecoderConfig): Promise<boolean> {
+	try {
+		return (await AudioDecoder.isConfigSupported(configWithFreshDescription(config) as AudioDecoderConfig)).supported === true;
+	} catch {
+		return false;
+	}
+}
+
+/** A codec WebCodecs refuses (E-AC-3, AC-3, FLAC… in most browsers): mediabunny decodes it
+ *  through the registered libav.js decoder, same pacing, same `AudioData` out. */
+async function decodeThroughLibav(opts: AudioPipelineOptions, stopped: () => boolean): Promise<void> {
+	ensureLibavAudioDecoderRegistered();
+	const sink = new AudioSampleSink(opts.track);
+	for await (const sample of sink.samples(opts.startSeconds && opts.startSeconds > 0 ? opts.startSeconds : 0)) {
+		while (opts.canDecode && !opts.canDecode(sample.timestamp) && !stopped()) {
+			await new Promise<void>((r) => setTimeout(r, PACING_POLL_MS));
+		}
+		if (stopped()) {
+			sample.close();
+			break;
+		}
+		const data = sample.toAudioData();
+		sample.close();
+		try {
+			opts.onData(data);
+		} catch (e) {
+			data.close();
+			throw e;
+		}
+	}
+	if (!stopped()) opts.onEnd?.();
 }

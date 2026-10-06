@@ -108,18 +108,9 @@ pub fn build_router(state: AppState) -> Router {
     let mut app = Router::new().nest("/api", api);
 
     if let Some(dist) = state.cfg().server.web_dist.clone() {
-        let index = dist.join("index.html");
         if dist.is_dir() {
             tracing::info!(path = %dist.display(), "serving static frontend");
-            let serve = ServeDir::new(&dist).fallback(ServeFile::new(&index));
-            // Differentiated Cache-Control per path family — see
-            // `static_cache_layer` for the policy table. Applied here
-            // (not on the whole router) so `/api/*` keeps its own
-            // per-route cache headers untouched.
-            let static_app = Router::new()
-                .fallback_service(serve)
-                .layer(axum::middleware::from_fn(static_cache_layer));
-            app = app.fallback_service(static_app);
+            app = app.fallback_service(static_router(&dist));
         } else {
             tracing::warn!(path = %dist.display(), "web_dist not found, skipping static serving");
         }
@@ -150,4 +141,77 @@ pub fn into_service(
 > + Clone
 + Send {
     NormalizePathLayer::trim_trailing_slash().layer(router)
+}
+
+/// Asset directories of the web build: a missing file under one is a 404,
+/// never the SPA's `index.html` (a 200 there reads as "present" to a
+/// probe — the libav.js variant check — and as garbage to a loader).
+const ASSET_DIRS: [&str; 6] = ["_app", "libavjs", "libass", "hevcjs", "libpgs", "fonts"];
+
+/// The web build: asset directories as plain files, every other path the SPA
+/// (its route or `index.html`), with the per-family `Cache-Control` of
+/// `static_cache_layer` (here, not on the whole router, so `/api/*` keeps
+/// its own).
+fn static_router<S: Clone + Send + Sync + 'static>(dist: &std::path::Path) -> Router<S> {
+    let mut static_app = Router::new();
+    for dir in ASSET_DIRS {
+        static_app = static_app.nest_service(&format!("/{dir}"), ServeDir::new(dist.join(dir)));
+    }
+    static_app
+        .fallback_service(ServeDir::new(dist).fallback(ServeFile::new(dist.join("index.html"))))
+        .layer(axum::middleware::from_fn(static_cache_layer))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use tower::ServiceExt;
+
+    async fn get(app: &axum::Router, path: &str) -> (StatusCode, String) {
+        let res = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let ty = res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_owned())
+            .unwrap_or_default();
+        (res.status(), ty)
+    }
+
+    #[tokio::test]
+    async fn a_missing_asset_is_a_404_not_the_spa() {
+        let dist = std::env::temp_dir().join(format!("iris-static-{}", std::process::id()));
+        std::fs::create_dir_all(dist.join("libavjs")).unwrap();
+        std::fs::write(dist.join("index.html"), "<!doctype html>").unwrap();
+        std::fs::write(dist.join("libavjs/libav.mjs"), "export {}").unwrap();
+        let app: axum::Router = super::static_router(&dist);
+
+        let (status, ty) = get(&app, "/libavjs/libav.mjs").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(ty.contains("javascript"), "{ty}");
+        for missing in [
+            "/libavjs/libav-6.10.9.0-iris.wasm.mjs",
+            "/libass/x.wasm",
+            "/hevcjs/x.js",
+            "/libpgs/x.js",
+            "/_app/immutable/x.js",
+            "/fonts/x.woff2",
+        ] {
+            assert_eq!(
+                get(&app, missing).await.0,
+                StatusCode::NOT_FOUND,
+                "{missing}"
+            );
+        }
+        for route in ["/", "/watch/abc/0", "/admin"] {
+            let (status, ty) = get(&app, route).await;
+            assert_eq!(status, StatusCode::OK, "{route}");
+            assert!(ty.starts_with("text/html"), "{route}: {ty}");
+        }
+        std::fs::remove_dir_all(&dist).unwrap();
+    }
 }

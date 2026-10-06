@@ -8,6 +8,7 @@
 	import { livetv } from '@iris/api/client';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
 	import { readStoredVolume, writeStoredVolume } from '#lib/player/browser.ts';
+	import { forcedTier } from '#lib/watch/tier.ts';
 	import { liveManifest, liveTier, LiveRotation, sourceCount } from './live.ts';
 
 	interface Props {
@@ -29,8 +30,10 @@
 		// through the client: an expired access cookie refreshes instead of failing the channel
 		queryFn: async () => {
 			const headers = await livetv.masterHeaders(country, channelId);
+			const forced = forcedTier(location.search);
+			if (forced) console.log('[iris-core] live tier', forced, '(forced via ?tier=)');
 			return {
-				tier: liveTier(headers.get('x-iris-live-upstream'), typeof globalThis.VideoDecoder !== 'undefined'),
+				tier: liveTier(headers.get('x-iris-live-upstream'), typeof globalThis.VideoDecoder !== 'undefined', forced),
 				sources: sourceCount(headers.get('x-iris-live-sources'))
 			};
 		},

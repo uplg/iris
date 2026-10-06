@@ -14,6 +14,8 @@ export const CATALOG = {
 	pgs: { file: 'Bench.Hotel.2008.360p.WEB.H264.AAC.PGS-IRIS.mkv', duration: 60 },
 	h264Eac3: { file: 'Bench.India.2009.360p.WEB.H264.EAC3-IRIS.mkv', duration: 60 },
 	heavy: { file: 'Bench.Juliet.2010.720p.WEB.H264.AAC-IRIS.mp4', duration: 120 },
+	sync: { file: 'Bench.Lima.2012.360p.WEB.H264.AAC.Sync-IRIS.mp4', duration: 60 },
+	syncLong: { file: 'Bench.Mike.2013.360p.WEB.H264.AAC.Sync-IRIS.mp4', duration: 1800 },
 	ep1: { file: 'Bench.Show.S01E01.360p.WEB.H264.AAC-IRIS.mp4', duration: 30 },
 	ep2: { file: 'Bench.Show.S01E02.360p.WEB.H264.AAC-IRIS.mp4', duration: 30 }
 } as const;

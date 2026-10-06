@@ -109,10 +109,16 @@ async function detectIrisVariant(): Promise<boolean> {
 			method: 'HEAD',
 			cache: 'no-store'
 		});
-		return res.ok;
+		return isScriptResponse(res);
 	} catch {
 		return false;
 	}
+}
+
+/** A script really served: a server whose SPA fallback answers `index.html`
+ *  for a missing file says 200 too. */
+export function isScriptResponse(res: Response): boolean {
+	return res.ok && /javascript/i.test(res.headers.get('content-type') ?? '');
 }
 
 function getLibav(): Promise<LibavLike> {

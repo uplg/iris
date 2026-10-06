@@ -1197,10 +1197,14 @@ async fn run_shaka(
         dir = out_dir.display(),
     ))
     .chain(plan.audio.iter().zip(audio_tmps.iter()).map(|(a, tmp)| {
+        // shaka refuses `language=und` (INVALID_ARGUMENT); without the field the
+        // rendition just carries no LANGUAGE attribute
+        let lang = known_language(&a.language)
+            .map(|l| format!("language={l},"))
+            .unwrap_or_default();
         format!(
-            "in={input},stream=audio,language={lang},init_segment={dir}/{name}_init.mp4,segment_template={dir}/{name}_$Number$.m4s,playlist_name={name}.m3u8,hls_group_id=audio,hls_name={name}",
+            "in={input},stream=audio,{lang}init_segment={dir}/{name}_init.mp4,segment_template={dir}/{name}_$Number$.m4s,playlist_name={name}.m3u8,hls_group_id=audio,hls_name={name}",
             input = tmp.display(),
-            lang = a.language,
             dir = out_dir.display(),
             name = a.name,
         )
@@ -1223,13 +1227,9 @@ async fn run_shaka(
     // Android HLS source) refuses to auto-select an audio track when no
     // rendition advertises DEFAULT=YES — playback ends up with a video
     // stream and no sound, with the audio menu collapsed.
-    if let Some(default_lang) = plan
-        .audio
-        .iter()
-        .find(|a| a.default)
-        .map(|a| iso639_2to1(&a.language))
-    {
-        cmd.args(["--default_language", &default_lang]);
+    let default = plan.audio.iter().find(|a| a.default);
+    if let Some(lang) = default.and_then(|a| known_language(&a.language)) {
+        cmd.args(["--default_language", &iso639_2to1(lang)]);
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1253,7 +1253,45 @@ async fn run_shaka(
             log_path.display().to_string(),
         ));
     }
+    // An untagged default can't go through `--default_language`, so shaka wrote
+    // DEFAULT=NO everywhere: mark it by NAME (Media3 selects no audio otherwise).
+    if let Some(a) = default.filter(|a| known_language(&a.language).is_none()) {
+        let master = out_dir.join(MASTER_PLAYLIST);
+        let text = tokio::fs::read_to_string(&master).await?;
+        let staged = out_dir.join(format!("{MASTER_PLAYLIST}.part"));
+        tokio::fs::write(&staged, mark_default_rendition(&text, &a.name)).await?;
+        tokio::fs::rename(&staged, &master).await?;
+    }
     Ok(())
+}
+
+/// The language as shaka accepts it: `None` for an absent or `und` tag.
+fn known_language(code: &str) -> Option<&str> {
+    let code = code.trim();
+    (!code.is_empty() && !code.eq_ignore_ascii_case("und")).then_some(code)
+}
+
+/// `DEFAULT=YES` on the audio rendition named `name`, `DEFAULT=NO` on the others.
+fn mark_default_rendition(master: &str, name: &str) -> String {
+    let wanted = format!("NAME=\"{name}\"");
+    let mut out = String::with_capacity(master.len() + 4);
+    for line in master.split_inclusive('\n') {
+        if line.starts_with("#EXT-X-MEDIA:") && line.contains("TYPE=AUDIO") {
+            let flag = if line.split(',').any(|attr| attr.trim_end() == wanted) {
+                "DEFAULT=YES"
+            } else {
+                "DEFAULT=NO"
+            };
+            out.push_str(
+                &line
+                    .replace("DEFAULT=YES", flag)
+                    .replace("DEFAULT=NO", flag),
+            );
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 async fn append_stderr_to_log(stderr: tokio::process::ChildStderr, log_path: PathBuf) {
@@ -1399,6 +1437,37 @@ mod tests {
         ] {
             assert!(!is_safe_asset_name(refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn untagged_audio_gets_no_shaka_language() {
+        for unknown in ["und", "UND", "", " "] {
+            assert_eq!(known_language(unknown), None, "{unknown:?}");
+        }
+        assert_eq!(known_language("fre"), Some("fre"));
+    }
+
+    #[test]
+    fn untagged_default_rendition_is_marked_by_name() {
+        // shaka v3.7.2's master for an untagged + an English rendition
+        let master = concat!(
+            "#EXTM3U\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,URI=\"und.m3u8\",GROUP-ID=\"audio\",NAME=\"und\",DEFAULT=NO,AUTOSELECT=YES,CHANNELS=\"2\"\n",
+            "#EXT-X-MEDIA:TYPE=AUDIO,URI=\"eng.m3u8\",GROUP-ID=\"audio\",LANGUAGE=\"en\",NAME=\"eng\",DEFAULT=NO,AUTOSELECT=YES,CHANNELS=\"2\"\n",
+            "#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS=\"avc1.640028,mp4a.40.2\",AUDIO=\"audio\"\n",
+            "video.m3u8\n",
+        );
+        let out = mark_default_rendition(master, "und");
+        let media: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with("#EXT-X-MEDIA"))
+            .collect();
+        assert!(media[0].contains("NAME=\"und\",DEFAULT=YES"), "{out}");
+        assert!(media[1].contains("NAME=\"eng\",DEFAULT=NO"), "{out}");
+        assert_eq!(out.len(), master.len() + 1);
+        // a name that prefixes another's must not match it
+        let out = mark_default_rendition(&out, "en");
+        assert!(!out.contains("DEFAULT=YES"), "{out}");
     }
 
     #[test]

@@ -32,8 +32,11 @@ export function nextWords(p: LiveProgramme): string {
  * its own concealment (MSE kills the pipeline on mid-stream joins; hls.js rejects `ec-3` in a
  * muxed fMP4); without WebCodecs (iOS Safari) Tier F, the native HLS pipeline decoding E-AC-3
  * on Apple hardware. Every other feed: Tier F live (hls.js, + the E-AC-3 WebAudio sidecar).
+ * `forced` (the page's `?tier=`) pins one of the live engines (B, C, F); the other letters
+ * have none and keep the pick.
  */
-export function liveTier(upstream: string | null, webcodecs: boolean): DecodeTier {
+export function liveTier(upstream: string | null, webcodecs: boolean, forced: DecodeTier | null = null): DecodeTier {
+	if (forced === 'B' || forced === 'C' || forced === 'F') return forced;
 	return upstream === 'tuner' && webcodecs ? 'C' : 'F';
 }
 

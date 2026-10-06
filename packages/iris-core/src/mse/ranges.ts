@@ -69,6 +69,19 @@ export function evictionSpan(b: Ranges, t: number, keep: number, minSpan = 0): [
 	return [first, before];
 }
 
+/** The buffered spans outside the window `[t - behind, t + ahead]`, to `remove()` after a seek:
+ *  the ranges a seek leaves behind (or ahead) sit outside what the engine's own trimming walks,
+ *  which follows the playhead. Spans of a second or less are left. */
+export function outsideWindow(b: Ranges, t: number, behind: number, ahead: number): [number, number][] {
+	if (b.length === 0) return [];
+	const out: [number, number][] = [];
+	const first = b.start(0);
+	const last = b.end(b.length - 1);
+	if (t - behind - first > 1) out.push([first, t - behind]);
+	if (last - (t + ahead) > 1) out.push([Math.max(first, t + ahead), last]);
+	return out;
+}
+
 /** Where to jump over a small forward hole (an evicted or discarded fragment): the start of
  *  the next real range within `maxJump` of `t`. Zero-width ranges (Firefox leaves them behind
  *  after a `remove()`) don't count. */

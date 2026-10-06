@@ -13,6 +13,7 @@ import HlsJs, { ErrorTypes, Events } from 'hls.js';
 import { isMobileLike } from '../caps';
 import { normalizeLang } from '../lang';
 import { releaseVideo } from '../mse/media-source';
+import { outsideWindow } from '../mse/ranges';
 import {
 	appendNativeTrack,
 	bindVideoCallbacks,
@@ -416,6 +417,18 @@ export const mountTierF: EngineMount = async (opts) => {
 		giveUp(`hls.js fatal ${data.type}: ${data.details}`);
 	});
 
+	// hls.js trims the back buffer as playback crosses fragments, relative to the playhead, and
+	// never the forward one: a seek back leaves everything already loaded ahead of it, a seek
+	// forward a stretch behind, and a seek-heavy session piles islands up past both windows
+	// (measured on the phone bench: the whole 120 s clip held, 105 s behind the playhead). After
+	// a seek, flush what lies outside the configured windows.
+	const onSeeked = () => {
+		if (live || disposed) return;
+		const spans = outsideWindow(video.buffered, video.currentTime, hls.config.backBufferLength, hls.config.maxMaxBufferLength);
+		for (const [startOffset, endOffset] of spans) hls.trigger(Events.BUFFER_FLUSHING, { startOffset, endOffset, type: null });
+	};
+	video.addEventListener('seeked', onSeeked);
+
 	// Now attach + load. Order taken from Vidstack: listeners are
 	// registered above, then `attachMedia`, then `loadSource` directly.
 	hls.attachMedia(video);
@@ -441,6 +454,7 @@ export const mountTierF: EngineMount = async (opts) => {
 			liveAudio = null;
 			unbind();
 			video.removeEventListener('error', onErr);
+			video.removeEventListener('seeked', onSeeked);
 			try {
 				hls.destroy();
 			} catch {

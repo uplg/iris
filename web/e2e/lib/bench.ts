@@ -7,7 +7,7 @@ import { CATALOG, type BenchState, type ClipKey } from '../harness/catalog.ts';
 
 export { expect };
 
-function readState(): BenchState {
+export function readState(): BenchState {
 	return JSON.parse(readFileSync(join(import.meta.dirname, '..', '.state.json'), 'utf8')) as BenchState;
 }
 
