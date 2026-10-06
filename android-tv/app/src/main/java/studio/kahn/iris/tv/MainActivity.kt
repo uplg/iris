@@ -1,96 +1,75 @@
 package studio.kahn.iris.tv
 
 import android.annotation.SuppressLint
-import android.app.SearchManager
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.tv.material3.ExperimentalTvMaterial3Api
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.ui.IrisRoot
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
+import studio.kahn.iris.tv.ui.nav.LaunchTarget
+import studio.kahn.iris.tv.ui.nav.launchTarget
 import studio.kahn.iris.tv.ui.theme.IrisTheme
 
 class MainActivity : ComponentActivity() {
+    /** The pending request from outside: a launcher deep link, voice search, the search key. */
+    private val launch = MutableStateFlow<LaunchTarget?>(null)
 
     // Activity.dispatchKeyEvent is public framework API; lint trips on the
     // @RestrictTo that core's ComponentActivity puts on its own override.
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (PlayerKeyRouter.handler?.invoke(event) == true) return true
+        if (event.keyCode == KeyEvent.KEYCODE_SEARCH) {
+            if (event.action == KeyEvent.ACTION_UP) launch.value = LaunchTarget.Search()
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 
-    @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Explicit edge-to-edge on every OS version (targetSdk 35+ already
-        // enforces it on recent Android) so window insets flow into Compose
-        // deterministically — IrisRoot pads with `safeDrawing`, which is
-        // all-zero on TV and handles status bar / cutout / IME on phones.
+        // Edge-to-edge on every OS version so the insets reach Compose the same
+        // way everywhere (IrisRoot pads with them; all zero on a TV).
         enableEdgeToEdge()
         val container = (application as IrisApp).container
-        // Voice search hand-off from Google Assistant: the system delivers a
-        // MEDIA_PLAY_FROM_SEARCH intent with the spoken phrase as the
-        // SearchManager.QUERY extra. We propagate it to the SearchScreen
-        // start route, which auto-runs the search and auto-plays the top hit.
-        val pendingVoiceQuery = intent.voiceQuery()
-        // Channel deep-link: a click on a PreviewProgram in the TV home
-        // launcher fires `iris://watch/INFOHASH/IDX`. Skip Home, go straight
-        // to playback.
-        val pendingWatch = intent.watchDeepLink()
-        // Refresh the TV channel rows in the background so the launcher
-        // shows up-to-date posters/titles next time.
+        if (savedInstanceState == null) launch.value = intent.launchTarget()
         lifecycleScope.launch {
             runCatching { container.channels.sync(container) }
         }
         setContent {
             IrisTheme {
-                val session by container.sessionStore.session.collectAsState(initial = null)
-                // We pre-seed an empty `IrisSession` while pairing/login are
-                // in flight so the [SessionCookieJar] has somewhere to write
-                // Set-Cookie when the response arrives. That stub must NOT
-                // count as authenticated, otherwise the `startDestination`
-                // flips to HOME mid-pairing and Navigation rebuilds the
-                // graph, dropping the user off the PairingScreen with no
-                // cookies → cascading 401s.
-                val authenticated = session?.cookies?.isNotEmpty() == true
-                IrisRoot(
-                    container = container,
-                    isAuthenticated = authenticated,
-                    pendingVoiceQuery = pendingVoiceQuery,
-                    pendingWatch = pendingWatch,
-                )
+                // null until the stored session is read, so the first screen is
+                // the right one. Pairing pre-seeds a session with no cookies for
+                // the cookie jar to fill: that one is not signed in yet.
+                val authenticated by produceState<Boolean?>(null) {
+                    container.sessionStore.session.collect { value = it?.cookies?.isNotEmpty() == true }
+                }
+                val pending by launch.collectAsStateWithLifecycle()
+                authenticated?.let { signedIn ->
+                    IrisRoot(
+                        container = container,
+                        isAuthenticated = signedIn,
+                        launch = pending,
+                        onLaunchHandled = { launch.value = null },
+                    )
+                }
             }
         }
     }
-}
 
-private fun Intent?.voiceQuery(): String? {
-    if (this == null) return null
-    return when (action) {
-        Intent.ACTION_SEARCH,
-        "android.media.action.MEDIA_PLAY_FROM_SEARCH" ->
-            getStringExtra(SearchManager.QUERY)?.takeIf { it.isNotBlank() }
-        else -> null
+    // singleTask: a Watch Next pick or a voice search while Iris is open lands here.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.launchTarget()?.let { launch.value = it }
     }
-}
-
-/** Parse `iris://watch/INFOHASH/IDX` from a deep-link Intent. */
-private fun Intent?.watchDeepLink(): Pair<String, Int>? {
-    if (this == null || action != Intent.ACTION_VIEW) return null
-    val uri: Uri = data ?: return null
-    if (uri.scheme != "iris" || uri.host != "watch") return null
-    val segments = uri.pathSegments
-    if (segments.size < 2) return null
-    val infohash = segments[0].takeIf { it.isNotBlank() } ?: return null
-    val idx = segments[1].toIntOrNull() ?: return null
-    return infohash to idx
 }

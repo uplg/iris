@@ -1,157 +1,169 @@
 package studio.kahn.iris.tv.ui.screens
 
 import androidx.compose.foundation.background
-import studio.kahn.iris.tv.ui.theme.IrisColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Mail
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
-import studio.kahn.iris.tv.data.IrisSession
-import studio.kahn.iris.tv.data.LoginRequest
 import studio.kahn.iris.tv.ui.components.ActionButton
+import studio.kahn.iris.tv.ui.components.ActionSize
+import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.IrisWordmark
-import studio.kahn.iris.tv.ui.theme.IrisColors
+import studio.kahn.iris.tv.ui.components.KeyHint
+import studio.kahn.iris.tv.ui.components.KeyHints
+import studio.kahn.iris.tv.ui.components.Keys
+import studio.kahn.iris.tv.ui.components.StatusLine
+import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.TextInput
+import studio.kahn.iris.tv.ui.screens.settings.SecretInput
+import studio.kahn.iris.tv.ui.screens.settings.SetupUiState
+import studio.kahn.iris.tv.ui.screens.settings.SetupViewModel
+import studio.kahn.iris.tv.ui.state.irisViewModel
+import studio.kahn.iris.tv.ui.theme.IrisColor
+import studio.kahn.iris.tv.ui.theme.IrisLayout
+import studio.kahn.iris.tv.ui.theme.IrisSpace
+import studio.kahn.iris.tv.ui.theme.IrisType
 
 /**
- * Fallback re-pair / direct login screen. The user types their Iris URL +
- * email + password; on success we cache the session cookies via [AppContainer]
- * and navigate Home.
- *
- * Most users will reach this only if they explicitly click "Sign in with
- * email/password" on the [PairingScreen] — that's the preferred path.
+ * Signing in with email and password, reached from pairing ("Use email and
+ * password"). Pairing by code stays the way to go: no password on the TV.
+ * Back returns to pairing.
  */
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SetupScreen(
     container: AppContainer,
     onAuthenticated: () -> Unit,
+    onUseCode: () -> Unit = {},
 ) {
-    var serverUrl by remember { mutableStateOf("https://iris.kahn.studio") }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var pending by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    val vm = irisViewModel(container) { c, _ -> SetupViewModel(c) }
+    val state by vm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.signedIn) { if (state.signedIn) onAuthenticated() }
+    SetupContent(
+        state = state,
+        onServerUrlChange = vm::onServerUrlChange,
+        onEmailChange = vm::onEmailChange,
+        onPasswordChange = vm::onPasswordChange,
+        onSignIn = vm::signIn,
+        onUseCode = onUseCode,
+    )
+}
 
-    LaunchedEffect(Unit) {
-        container.sessionStore.serverUrl.first()?.let { serverUrl = it }
-    }
-
-    Box(Modifier.fillMaxSize().background(IrisColors.Background), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().background(IrisColor.ground))
-        Column(
-            // Scrollable + IME-aware: on a phone (landscape, soft keyboard
-            // up) the fixed column was taller than the viewport and the
-            // Sign in button sat unreachable below the fold. Inert on TV
-            // (fullscreen leanback IME, everything fits).
+@Composable
+fun SetupContent(
+    state: SetupUiState,
+    onServerUrlChange: (String) -> Unit,
+    onEmailChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onSignIn: () -> Unit,
+    onUseCode: () -> Unit,
+) {
+    val layout = IrisLayout.current
+    val emailFocus = remember { FocusRequester() }
+    val focus = LocalFocusManager.current
+    // The person came here to type: the email field is where they start.
+    LaunchedEffect(Unit) { runCatching { emailFocus.requestFocus() } }
+    val next = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) })
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(IrisColor.ground)
+            .padding(layout.safePadding),
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+    ) {
+        Box(
             Modifier
-                .width(540.dp)
-                .verticalScroll(rememberScrollState())
-                .imePadding()
-                .padding(32.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center,
         ) {
-            IrisWordmark(fontSize = 52.sp)
-            Text(
-                "Sign in to your Iris server",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            OutlinedTextField(
-                value = serverUrl,
-                onValueChange = { serverUrl = it.trim() },
-                label = { androidx.compose.material3.Text("Server URL") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.width(540.dp),
-            )
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it.trim() },
-                label = { androidx.compose.material3.Text("Email") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.width(540.dp),
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { androidx.compose.material3.Text("Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.width(540.dp),
-            )
-
-            error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
+            Column(
+                Modifier
+                    .widthIn(max = 460.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
+            ) {
+                IrisWordmark(fontSize = 26.sp)
+                Text("Sign in with email and password", style = IrisType.title, color = IrisColor.ink)
+                Text(
+                    "The password is typed on the TV. Pairing with a code shown here avoids it.",
+                    style = IrisType.body,
+                    color = IrisColor.inkMuted,
+                )
+                TextInput(
+                    value = state.serverUrl,
+                    onValueChange = onServerUrlChange,
+                    label = "Server address",
+                    leadingIcon = Icons.Rounded.Link,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                    keyboardActions = next,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextInput(
+                    value = state.email,
+                    onValueChange = onEmailChange,
+                    label = "Email",
+                    leadingIcon = Icons.Rounded.Mail,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                    keyboardActions = next,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(emailFocus),
+                )
+                SecretInput(
+                    value = state.password,
+                    onValueChange = onPasswordChange,
+                    label = "Password",
+                    keyboardActions = KeyboardActions(onDone = { onSignIn() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (state.error != null) {
+                    StatusLine(state.error, tone = StatusTone.Down, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                    ActionButton(
+                        "Sign in",
+                        onSignIn,
+                        enabled = state.canSignIn,
+                        busy = state.signingIn,
+                        busyText = "Signing in…",
+                        size = ActionSize.Large,
+                    )
+                    ActionButton("Pair with a code instead", onUseCode, style = ActionStyle.Secondary, size = ActionSize.Large)
+                }
             }
-
-            ActionButton(
-                if (pending) "Signing in…" else "Sign in",
-                {
-                    if (pending) return@ActionButton
-                    pending = true
-                    error = null
-                    scope.launch {
-                        try {
-                            container.sessionStore.setServerUrl(serverUrl)
-                            container.sessionStore.saveSession(
-                                IrisSession(
-                                    serverUrl = serverUrl,
-                                    email = email,
-                                    isAdmin = false,
-                                    cookies = emptyList(),
-                                )
-                            )
-                            val api = container.apiFor(serverUrl)
-                            val user = api.login(LoginRequest(email, password))
-                            // CookieJar already persisted Set-Cookie. Update
-                            // the user-visible fields (email, admin badge).
-                            val current = container.sessionStore.session.first()
-                            if (current != null) {
-                                container.sessionStore.saveSession(
-                                    current.copy(email = user.email, isAdmin = user.isAdmin)
-                                )
-                            }
-                            onAuthenticated()
-                        } catch (e: Exception) {
-                            error = e.message ?: "Login failed"
-                        } finally {
-                            pending = false
-                        }
-                    }
-                },
-                enabled = !pending && email.isNotBlank() && password.isNotBlank() && serverUrl.isNotBlank(),
-            )
         }
+        KeyHints(hints = listOf(KeyHint(Keys.OK, "Choose"), KeyHint(Keys.BACK, "Back to pairing")))
     }
 }
