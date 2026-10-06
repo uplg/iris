@@ -6,8 +6,8 @@ const SEI = [0x06, 0x05, 0x01, 0x00];
 const IDR = [0x65, 0x88, 0x84];
 const NON_IDR_I = [0x41, 0x9a, 0x02];
 
-const annexB = (...nals: number[][]) => new Uint8Array(nals.flatMap((n, i) => [...(i === 0 ? [0, 0, 0, 1] : [0, 0, 1]), ...n]));
-const avcc = (...nals: number[][]) => new Uint8Array(nals.flatMap((n) => [0, 0, 0, n.length, ...n]));
+const annexB = (...nals: number[][]) => new Uint8Array(nals.flatMap((n, i) => (i === 0 ? [0, 0, 0, 1] : [0, 0, 1]).concat(n)));
+const avcc = (...nals: number[][]) => new Uint8Array(nals.flatMap((n) => [0, 0, 0, n.length].concat(n)));
 
 describe('the live IDR anchor', () => {
 	it('reads the NAL length size from the avcC, Annex B without one', () => {
