@@ -61,8 +61,12 @@ fun channelSections(channels: List<LiveChannel>): List<ChannelSection> {
     }
 }
 
+/** A channel whose every feed is DRM-locked with no licence Iris can obtain. */
+const val ENCRYPTED_WORDS = "Encrypted by the broadcaster: it can't be played here."
+
 /** Why a channel may not play, in words; null when nothing is known against it. */
 fun channelNotice(c: LiveChannel): String? = when {
+    c.encrypted == true -> ENCRYPTED_WORDS
     c.unreachable == true -> "Not answering right now"
     c.geoBlocked -> "May be blocked in your country"
     c.not247 -> "Not on air all day"
@@ -70,7 +74,7 @@ fun channelNotice(c: LiveChannel): String? = when {
 }
 
 /** Said less loudly: a channel that will likely not play. */
-fun dimmed(c: LiveChannel): Boolean = c.unreachable == true || c.geoBlocked
+fun dimmed(c: LiveChannel): Boolean = c.encrypted == true || c.unreachable == true || c.geoBlocked
 
 /** How many picked countries the TV keeps. */
 const val RECENT_COUNTRIES = 3
