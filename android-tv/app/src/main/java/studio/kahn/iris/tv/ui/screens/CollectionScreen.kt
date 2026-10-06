@@ -24,9 +24,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.RemoveDone
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -103,6 +105,8 @@ import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.markWatchedLabel
+import studio.kahn.iris.tv.ui.screens.library.WATCHED_KEY
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.NoticeLine
@@ -114,6 +118,7 @@ data class CollectionActions(
     val onEpisode: (EpisodeRowUi, EpisodeAction) -> Unit = { _, _ -> },
     val onSeason: (Long) -> Unit = {},
     val onWatchlist: () -> Unit = {},
+    val onWatched: () -> Unit = {},
     val onPack: (PackUi, Boolean) -> Unit = { _, _ -> },
     val onRelease: ReleaseActions = ReleaseActions(),
     val onGoneAgain: (GoneUi) -> Unit = {},
@@ -127,7 +132,7 @@ data class CollectionActions(
 /**
  * A title of the library (web `/collection/[id]`, drawn in the TVTitleReleases language): the
  * poster and the title aside, then what to do (resume or start, keep it on the watchlist,
- * the series' languages), its episodes by season (packs, offers in each language, reclaimed
+ * mark it watched or not, the series' languages), its episodes by season (packs, offers in each language, reclaimed
  * releases), what is on disk, what used to be, and the files. OK does an episode's main
  * action; hold OK (or a long press) lists every action of it.
  */
@@ -167,6 +172,7 @@ fun CollectionScreen(
             },
             onSeason = vm::chooseSeason,
             onWatchlist = vm::toggleWatchlist,
+            onWatched = vm::toggleWatched,
             onPack = vm::grabPack,
             onRelease = ReleaseActions(
                 onPlay = onPlay,
@@ -472,11 +478,22 @@ private fun Head(
                     icon = if (p.onWatchlist) Icons.Rounded.Check else Icons.Rounded.BookmarkBorder,
                     style = ActionStyle.Secondary,
                     size = ActionSize.Large,
+                    enabled = !p.onWatchlist || p.canLeaveWatchlist,
                     busy = "watchlist" in state.busy,
                     busyText = "Saving…",
                     modifier = if (target == null) playModifier else Modifier,
                 )
             }
+            ActionButton(
+                markWatchedLabel(p.watched),
+                actions.onWatched,
+                icon = if (p.watched) Icons.Rounded.RemoveDone else Icons.Rounded.CheckCircle,
+                style = ActionStyle.Secondary,
+                size = ActionSize.Large,
+                busy = WATCHED_KEY in state.busy,
+                busyText = "Saving…",
+                modifier = if (target == null && p.onWatchlist == null) playModifier else Modifier,
+            )
             if (state.languages != null) {
                 ActionButton(
                     "Languages",
@@ -485,7 +502,7 @@ private fun Head(
                     style = ActionStyle.Secondary,
                     size = ActionSize.Large,
                     enabled = state.languages.valueOrNull != null,
-                    modifier = if (target == null && p.onWatchlist == null) playModifier.then(languagesModifier) else languagesModifier,
+                    modifier = languagesModifier,
                 )
             }
         }

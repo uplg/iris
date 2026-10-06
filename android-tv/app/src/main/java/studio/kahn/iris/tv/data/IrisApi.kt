@@ -249,11 +249,12 @@ interface IrisApi {
         @Query("tmdb_id") tmdbId: Long? = null,
     ): SearchResponse
 
+    /** The tracker's details plus Iris' match, poster and copy on disk: a release page needs nothing else. */
     @GET("api/search/details")
     suspend fun torrentDetails(
         @Query("provider") provider: String,
         @Query("id") id: String,
-    ): TorrentDetails
+    ): ReleaseDetails
 
     /** Add a torrent to Iris from a search hit. Returns the snapshot + id. */
     @POST("api/torrents")
@@ -365,6 +366,13 @@ interface IrisApi {
 
     // Library, a title's page, history.
 
+    /** Every file of the title marked watched for the caller. */
+    @POST("api/library/collections/{id}/watched")
+    suspend fun markCollectionWatched(@Path("id") id: String)
+
+    /** The caller's progress on the title forgotten. */
+    @DELETE("api/library/collections/{id}/watched")
+    suspend fun markCollectionUnwatched(@Path("id") id: String)
 
     /** Leave the swarm, files stay on disk. 403 unless admin or whoever added it. */
     @POST("api/torrents/{infohash}/pause")

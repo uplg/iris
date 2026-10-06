@@ -30,11 +30,13 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
-import studio.kahn.iris.tv.ui.format.episodeCode
+import studio.kahn.iris.tv.ui.format.IN_PROGRESS
+import studio.kahn.iris.tv.ui.format.allWatched
+import studio.kahn.iris.tv.ui.format.markedWatchedWords
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.formatSpeed
 import studio.kahn.iris.tv.ui.format.plural
-import studio.kahn.iris.tv.ui.format.timeLeft
+import studio.kahn.iris.tv.ui.format.resumeOf
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
@@ -59,6 +61,8 @@ data class TitleCard(
     val ghost: Boolean,
     /** Watched share (0..1) of what is in progress; its words are in [status]. */
     val progress: Float?,
+    /** Every file on disk finished: what Hold OK offers to undo. */
+    val watched: Boolean = false,
 )
 
 @Immutable
@@ -185,7 +189,7 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
             facts = libraryFacts(counts, sum.valueOrNull),
             filters = c.filters,
             releaseQuery = c.releaseQuery,
-            titles = cols.map { titlesUi(it, torrentList, cw.valueOrNull.orEmpty(), wl.valueOrNull.orEmpty(), c.filters) },
+            titles = cols.map { titlesUi(it, torrentList, wl.valueOrNull.orEmpty(), c.filters) },
             downloads = tors.map { downloadsUi(it, cols.valueOrNull.orEmpty(), cw.valueOrNull.orEmpty(), c.releaseQuery) },
             busy = c.busy,
             notice = c.notice,
@@ -221,6 +225,14 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
         coroutineScope {
             launch { collections.refresh() }
             launch { summary.refresh() }
+        }
+    }
+
+    fun toggleWatched(c: TitleCard) = act(watchedKey(c), markedWatchedWords(c.title, c.watched)) {
+        if (c.watched) container.api().markCollectionUnwatched(c.id) else container.api().markCollectionWatched(c.id)
+        coroutineScope {
+            launch { collections.refresh() }
+            launch { watching.refresh() }
         }
     }
 
@@ -261,10 +273,12 @@ class LibraryViewModel(private val container: AppContainer, initialView: Library
     }
 }
 
+/** The busy key of a title's watched toggle while the server answers. */
+fun watchedKey(c: TitleCard): String = "watched:${c.id}"
+
 fun titlesUi(
     items: List<CollectionListItem>,
     torrents: List<TorrentView>,
-    watching: List<ContinueWatchingItem>,
     watchlist: List<WatchlistItem>,
     filters: TitleFilters,
 ): TitlesUi {
@@ -272,22 +286,13 @@ fun titlesUi(
     val choices = showChoices(items, activity)
     val showing = if (choices.any { it.first == filters.show }) filters.show else ShowFilter.All
     val shown = filterTitles(items, filters.copy(show = showing), activity)
-    val resumeBy = watching
-        .filter { !it.completed && !it.grabbable && !it.nextUp && it.collectionId != null }
-        .groupBy { it.collectionId.toString() }
-        .mapValues { (_, v) -> v.maxBy { it.lastWatchedAt } }
     val fresh = watchlist.associate { it.id.toString() to it.newCount }
     val cards = shown.map { c ->
         val id = c.id.toString()
         val base = titleStatus(c, activity[id])
-        val resume = resumeBy[id]
-        val plain = base.tone == StatusTone.Ok
-        val progress = resume?.durationSeconds?.takeIf { it > 0 && plain }?.let { (resume.positionSeconds / it).toFloat().coerceIn(0f, 1f) }
-        val status = when {
-            plain && resume != null -> inProgress(c, resume)
-            plain && (fresh[id] ?: 0) > 0 -> Status(StatusTone.Ok, plural(fresh[id] ?: 0, "new episode"))
-            else -> base
-        }
+        val inProgress = base.text.startsWith(IN_PROGRESS)
+        val news = fresh[id] ?: 0
+        val status = if (base.tone == StatusTone.Ok && !inProgress && news > 0) Status(StatusTone.Ok, plural(news, "new episode")) else base
         TitleCard(
             id = id,
             title = c.displayTitle,
@@ -296,21 +301,11 @@ fun titlesUi(
             meta = titleMeta(c),
             status = status,
             ghost = c.ghost == true,
-            progress = progress,
+            progress = if (inProgress) resumeOf(c.watch)?.share else null,
+            watched = allWatched(c.watch, c.kind == MediaKind.tv, c.episodeCount),
         )
     }
     return TitlesUi(cards, items.size, countWords(shown.size, items.size), choices, showing)
-}
-
-/** `In progress · S1:E7`, or for a film `1 h 12 min left`. */
-private fun inProgress(c: CollectionListItem, w: ContinueWatchingItem): Status {
-    val code = episodeCode(w.season, w.episode)
-    val d = w.durationSeconds
-    return when {
-        c.kind == MediaKind.tv && code != null -> Status(StatusTone.Info, "In progress · $code")
-        d != null && d > w.positionSeconds -> Status(StatusTone.Info, timeLeft(d - w.positionSeconds))
-        else -> Status(StatusTone.Info, "In progress")
-    }
 }
 
 fun downloadsUi(

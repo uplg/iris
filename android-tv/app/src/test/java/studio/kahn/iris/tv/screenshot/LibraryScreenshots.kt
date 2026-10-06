@@ -57,9 +57,9 @@ class LibraryScreenshots {
     val shots = IrisScreenshotRule()
 
     @Composable
-    private fun ShelledLibrary(state: LibraryUiState, actions: LibraryActions) {
+    private fun ShelledLibrary(state: LibraryUiState, actions: LibraryActions, initialMenu: String? = null) {
         TopLevelShell(TopTab.Library, accountName = "Leonard", onSelect = {}, onAccount = {}) {
-            LibraryContent(state, actions)
+            LibraryContent(state, actions, initialMenu = initialMenu)
         }
     }
 
@@ -69,7 +69,7 @@ class LibraryScreenshots {
         view = view,
         facts = libraryFacts(titleCounts(F.titles), F.summary),
         filters = filters,
-        titles = Loadable.Ready(titlesUi(F.titles, F.torrents, F.watching, emptyList(), filters)),
+        titles = Loadable.Ready(titlesUi(F.titles, F.torrents, emptyList(), filters)),
         downloads = Loadable.Ready(downloadsUi(Torrents(F.torrents, 120L shl 30, 96L shl 30), F.titles, F.watching, "", F.now)),
     )
 
@@ -82,13 +82,18 @@ class LibraryScreenshots {
     }
 
     @Test
+    fun titleMenu() = shots.snap("library_title_menu") {
+        ShelledLibrary(library(), LibraryActions(onRelease = releaseActions), initialMenu = F.titles[1].id.toString())
+    }
+
+    @Test
     fun titlesLoading() = shots.snap("library_titles_loading") {
         ShelledLibrary(LibraryUiState(), LibraryActions(onRelease = releaseActions))
     }
 
     @Test
     fun titlesEmpty() = shots.snap("library_titles_empty") {
-        ShelledLibrary(LibraryUiState(titles = Loadable.Ready(titlesUi(emptyList(), emptyList(), emptyList(), emptyList(), TitleFilters()))), LibraryActions(onRelease = releaseActions))
+        ShelledLibrary(LibraryUiState(titles = Loadable.Ready(titlesUi(emptyList(), emptyList(), emptyList(), TitleFilters()))), LibraryActions(onRelease = releaseActions))
     }
 
     @Test

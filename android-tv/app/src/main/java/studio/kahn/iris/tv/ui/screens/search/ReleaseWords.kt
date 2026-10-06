@@ -7,16 +7,20 @@ import studio.kahn.iris.tv.data.AudioInfo
 import studio.kahn.iris.tv.data.LibraryMatch
 import studio.kahn.iris.tv.data.MediaInfoSummary
 import studio.kahn.iris.tv.data.MediaKind
+import studio.kahn.iris.tv.data.ReleaseDetails
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.SubInfo
 import studio.kahn.iris.tv.data.TitleCard
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatRelative
+import studio.kahn.iris.tv.ui.format.IN_PROGRESS
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.kindWord
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.format.prettySceneName
+import studio.kahn.iris.tv.ui.format.resumeOf
+import studio.kahn.iris.tv.ui.format.timeLeft
 
 // A release said for people (web `search/release.ts`): what title it is,
 // what part of it, how it sounds and looks, whether the swarm can deliver
@@ -78,7 +82,14 @@ fun ownedFile(r: SearchResult): OwnedFile? {
     return if (r.alreadyInLibrary == true) OwnedFile(infohash, idx) else null
 }
 
-/** Where a library match leads: the exact episode asked for plays at once, else its collection. */
+/** The copy on disk the server names for a release page; null for a pack (no one file to play). */
+fun ownedFile(d: ReleaseDetails): OwnedFile? {
+    val infohash = d.libraryInfohash ?: return null
+    val idx = d.libraryFileIdx ?: return null
+    return OwnedFile(infohash, idx.toInt())
+}
+
+/** Where a library match leads: the exact episode asked for, else the file left mid-way, else its collection. */
 sealed interface MatchTarget {
     val action: String
     val facts: String
@@ -90,11 +101,18 @@ sealed interface MatchTarget {
 }
 
 fun matchTarget(m: LibraryMatch): MatchTarget {
+    val resume = resumeOf(m.watch)
     val infohash = m.episodeInfohash
     val idx = m.episodeFileIdx
     if (infohash != null && idx != null) {
-        val code = episodeCode(m.episodeSeason?.toInt(), m.episodeNumber?.toInt())
-        return MatchTarget.Play(infohash, idx.toInt(), "Play ${code.orEmpty()}".trim(), "The episode you asked for is on disk")
+        val code = episodeCode(m.episodeSeason, m.episodeNumber)
+        val verb = if (resume != null) "Resume" else "Play"
+        val facts = resume?.left?.let(::timeLeft) ?: "The episode you asked for is on disk"
+        return MatchTarget.Play(infohash, idx.toInt(), "$verb ${code.orEmpty()}".trim(), facts)
+    }
+    if (resume != null) {
+        val facts = resume.left?.let(::timeLeft) ?: IN_PROGRESS
+        return MatchTarget.Play(resume.infohash, resume.fileIdx, "Resume ${resume.code.orEmpty()}".trim(), facts)
     }
     val seasonCount = m.seasonEpisodeCount
     val season = m.episodeSeason

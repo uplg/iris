@@ -9,6 +9,7 @@ import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
+import studio.kahn.iris.tv.ui.format.WATCHED
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatSize
@@ -17,6 +18,7 @@ import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.format.prettySceneName
 import studio.kahn.iris.tv.ui.format.recentTime
+import studio.kahn.iris.tv.ui.format.watchWords
 import studio.kahn.iris.tv.ui.components.StatusTone
 
 // The library's facts in words, as the web's `lib/library/model.ts` says them.
@@ -92,7 +94,7 @@ fun seasonOf(name: String?): String? {
 fun titleMeta(c: CollectionListItem): String =
     if (c.ghost == true) kindOf(c).word else "${kindOf(c).word} · ${formatSize(c.totalSizeBytes)}"
 
-/** A title's state in words: on disk, downloading, needs a hand, or gone. */
+/** A title's state in words: downloading, needs a hand, gone, else where the person is in it, else on disk. */
 fun titleStatus(c: CollectionListItem, a: Activity?): Status {
     if (c.ghost == true) return Status(StatusTone.Info, "No longer on disk")
     if (a != null && a.fetching.isNotEmpty()) {
@@ -101,6 +103,9 @@ fun titleStatus(c: CollectionListItem, a: Activity?): Status {
         if (a.trouble) return Status(StatusTone.Warn, "Download stuck · $pct")
         return Status(StatusTone.Busy, if (what != null) "Downloading $what · $pct" else "Downloading · $pct")
     }
+    val watch = watchWords(c.watch, c.kind == MediaKind.tv, c.episodeCount)
+    if (watch == WATCHED) return Status(StatusTone.Info, watch)
+    if (watch != null) return Status(StatusTone.Ok, watch)
     if (c.kind == MediaKind.tv && c.episodeCount > 0) return Status(StatusTone.Ok, "${plural(c.episodeCount, "episode")} on disk")
     if (c.torrentCount > 1) return Status(StatusTone.Ok, "${plural(c.torrentCount, "release")} on disk")
     return Status(StatusTone.Ok, "On disk")

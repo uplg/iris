@@ -35,9 +35,11 @@ import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
+import studio.kahn.iris.tv.ui.format.allWatched
 import studio.kahn.iris.tv.ui.format.duration
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.languageName
+import studio.kahn.iris.tv.ui.format.markedWatchedWords
 import studio.kahn.iris.tv.ui.format.recentTime
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
@@ -100,6 +102,10 @@ data class CollectionPage(
     val playLabel: String,
     val playTarget: PlayTarget?,
     val onWatchlist: Boolean?,
+    /** Off the watchlist takes the title's SCENE name; a title without one stays on it. */
+    val canLeaveWatchlist: Boolean,
+    /** Every file on disk finished: the page's toggle offers to undo it. */
+    val watched: Boolean,
     val showEpisodes: Boolean,
     val absolute: Boolean,
     val seasons: List<SeasonUi>,
@@ -267,15 +273,23 @@ class CollectionViewModel(private val container: AppContainer, private val colle
 
     fun toggleWatchlist() = act("watchlist", null) {
         val c = detail.value ?: return@act null
-        val api = container.api()
-        val entry = api.watchlist().firstOrNull { it.id.toString() == collectionId }
-        if (entry != null) {
-            api.removeFromWatchlist(RemoveWatchlistRequest(entry.normalizedName))
-        } else {
-            api.addFollow(CreateFollowRequest(c.displayTitle, c.tmdbId))
+        val listed = c.onWatchlist == true
+        val name = c.normalizedName
+        when {
+            listed && name == null -> return@act null
+            listed && name != null -> container.api().removeFromWatchlist(RemoveWatchlistRequest(name))
+            else -> container.api().addFollow(CreateFollowRequest(c.displayTitle, c.tmdbId))
         }
         detail.refresh()
-        if (entry != null) "${c.displayTitle} is no longer on your watchlist." else "${c.displayTitle} is on your watchlist."
+        if (listed) "${c.displayTitle} is no longer on your watchlist." else "${c.displayTitle} is on your watchlist."
+    }
+
+    fun toggleWatched() = act(WATCHED_KEY, null) {
+        val c = detail.value ?: return@act null
+        val watched = allWatched(c.watch, c.kind == MediaKind.tv, c.episodes.size.toLong())
+        if (watched) container.api().markCollectionUnwatched(collectionId) else container.api().markCollectionWatched(collectionId)
+        refreshAll()
+        markedWatchedWords(c.displayTitle, watched)
     }
 
     fun delete(r: ReleaseRow) = act("delete:${r.infohash}", null) {
@@ -323,6 +337,9 @@ class CollectionViewModel(private val container: AppContainer, private val colle
         }
     }
 }
+
+/** The busy key of the title's watched toggle. */
+const val WATCHED_KEY = "title-watched"
 
 fun audioWords(code: String?): String = code?.let { languageName(it) ?: it } ?: "Each file’s own default"
 
@@ -377,6 +394,8 @@ fun collectionPage(
         playLabel = playLabel(c, resume),
         playTarget = resume?.let { PlayTarget(it.infohash, it.fileIdx.toInt()) } ?: firstPlayable(c),
         onWatchlist = if (series) c.onWatchlist ?: false else null,
+        canLeaveWatchlist = c.normalizedName != null,
+        watched = allWatched(c.watch, series, c.episodes.size.toLong()),
         showEpisodes = showEpisodes,
         absolute = absolute,
         seasons = if (seasons.size > 1) seasons.map { SeasonUi(it.season, seasonLabel(it)) } else emptyList(),

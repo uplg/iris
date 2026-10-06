@@ -17,7 +17,7 @@ import studio.kahn.iris.tv.data.CreateFollowRequest
 import studio.kahn.iris.tv.data.GrabTarget
 import studio.kahn.iris.tv.data.ReleaseFile
 import studio.kahn.iris.tv.data.SearchResult
-import studio.kahn.iris.tv.data.TorrentDetails
+import studio.kahn.iris.tv.data.ReleaseDetails
 import studio.kahn.iris.tv.data.TorrentPreview
 import studio.kahn.iris.tv.data.asReleaseFile
 import studio.kahn.iris.tv.data.autoFile
@@ -50,14 +50,14 @@ sealed interface FollowState {
 data class ReleaseUiState(
     val providerId: String,
     val externalId: String,
-    /** What the search knew about it (seeders, poster, TMDB title, library state). */
+    /** What the search knew about it, shown while the details load (none when opened from a link). */
     val hit: SearchResult? = null,
     val routeTmdbId: Long? = null,
     val routeKind: String? = null,
     /** The `.torrent`: files, size, whether it streams. A full leech slot fails it, named. */
     val preview: Loadable<TorrentPreview> = Loadable.Loading,
-    /** The tracker's page, best effort: some trackers have none. */
-    val details: TorrentDetails? = null,
+    /** The tracker's page plus Iris' title, poster and copy on disk, best effort: some trackers have none. */
+    val details: ReleaseDetails? = null,
     val notes: AnnotatedString? = null,
     val pickedFile: Int? = null,
     val follow: FollowState = FollowState.Hidden,
@@ -100,12 +100,13 @@ fun releaseSheet(s: ReleaseUiState): ReleaseSheet {
     val hit = s.hit
     val name = p?.name ?: d?.title ?: hit?.title.orEmpty()
     val mark = sceneMark(name)
-    val title = hit?.titleMatch?.title ?: if (name.isNotEmpty()) prettySceneName(name) else "Release"
-    val kind = hit?.titleMatch?.kind?.value ?: hit?.kind?.value ?: s.routeKind ?: if (mark != null) "tv" else null
-    val year = hit?.titleMatch?.year ?: hit?.year
+    val matched = d?.titleMatch ?: hit?.titleMatch
+    val title = matched?.title ?: if (name.isNotEmpty()) prettySceneName(name) else "Release"
+    val kind = matched?.kind?.value ?: hit?.kind?.value ?: s.routeKind ?: if (mark != null) "tv" else null
+    val year = matched?.year ?: hit?.year
     val part = partWords(hit?.parsedSeason ?: mark?.season, hit?.parsedEpisode ?: mark?.episode, name)
     val heading = listOfNotNull(title, part ?: if (kind == "movie") year?.toString() else null).joinToString(" · ")
-    val poster = hit?.posterUrl ?: tmdbPosterUrl(hit?.titleMatch?.posterPath)
+    val poster = d?.posterUrl ?: hit?.posterUrl ?: tmdbPosterUrl(matched?.posterPath)
     val seeders = d?.seeders ?: hit?.seeders
     val freeleech = d?.freeleech ?: hit?.freeleech ?: false
     val chips = listOfNotNull(
@@ -145,11 +146,11 @@ fun releaseSheet(s: ReleaseUiState): ReleaseSheet {
         posterUrl = poster,
         chips = chips.distinct(),
         freeleech = freeleech,
-        tmdbId = hit?.titleMatch?.tmdbId ?: hit?.tmdbId ?: s.routeTmdbId,
+        tmdbId = matched?.tmdbId ?: hit?.tmdbId ?: s.routeTmdbId,
         isTv = kind == "tv",
         dead = isDead(seeders),
         archive = p != null && !p.streamable,
-        owned = hit?.let(::ownedFile),
+        owned = d?.let(::ownedFile) ?: hit?.let(::ownedFile),
         videos = playableFiles(files),
         chosenFile = chosen,
         playLabel = if (p != null) playWords(files, chosen) else "Download and play",
