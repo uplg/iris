@@ -61,8 +61,8 @@ class CardFocus(private val cards: FocusReturn) {
 
     fun requester(key: String): FocusRequester = cards.requester(key)
 
-    /** Tags a card: focus comes back to it from a menu, another screen, the player. */
-    fun modifier(key: String): Modifier = Modifier.focusReturn(cards, key)
+    /** Where focus comes back to: tag each card with `Modifier.focusReturn(focus.returns, key)`. */
+    val returns: FocusReturn get() = cards
 
     /** Focuses the card focused last (back on this screen); false when it is not composed. */
     fun focusLast(): Boolean = cards.focusLast()
@@ -140,7 +140,7 @@ fun HomeCard(
     modifier: Modifier = Modifier,
     fillCell: Boolean = false,
 ) {
-    val m = modifier.then(focus.modifier(card.key))
+    val m = modifier.focusReturn(focus.returns, card.key)
     val click = { onAction(card.key, card.primary) }
     val long = onMenu.takeIf { card.menu.isNotEmpty() }
     if (still) {
