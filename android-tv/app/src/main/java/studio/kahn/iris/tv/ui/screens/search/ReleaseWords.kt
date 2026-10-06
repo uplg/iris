@@ -45,14 +45,6 @@ private val UHD = Regex("""\b(4k|uhd)\b""", RegexOption.IGNORE_CASE)
 fun resolution(name: String): String? =
     RESOLUTION.find(name)?.let { "${it.groupValues[1]}p" } ?: if (UHD.containsMatchIn(name)) "2160p" else null
 
-fun codecWord(codec: String?): String? = when (codec) {
-    "h264" -> "H.264"
-    "hevc" -> "HEVC"
-    "av1" -> "AV1"
-    "vp9" -> "VP9"
-    else -> null
-}
-
 fun seedersWords(n: Int?): String? = n?.let { if (it == 1) "1 seeder" else "${String.format(Locale.ENGLISH, "%,d", it)} seeders" }
 
 /** A confirmed empty swarm: its pieces would never all arrive. Unknown is not dead. */

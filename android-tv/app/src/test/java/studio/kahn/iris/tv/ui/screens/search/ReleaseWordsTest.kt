@@ -17,6 +17,7 @@ import studio.kahn.iris.tv.data.TitleMatch
 import studio.kahn.iris.tv.data.TorrentFilePreview
 import studio.kahn.iris.tv.data.TorrentPreview
 import studio.kahn.iris.tv.data.VideoInfo
+import studio.kahn.iris.tv.ui.format.codecWord
 
 class ReleaseWordsTest {
     @Test

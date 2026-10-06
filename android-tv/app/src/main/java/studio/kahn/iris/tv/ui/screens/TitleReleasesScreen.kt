@@ -58,7 +58,7 @@ import studio.kahn.iris.tv.ui.screens.search.TitleReleasesUiState
 import studio.kahn.iris.tv.ui.screens.search.TitleReleasesViewModel
 import studio.kahn.iris.tv.ui.screens.search.SummaryLine
 import studio.kahn.iris.tv.ui.screens.search.failedTrackers
-import studio.kahn.iris.tv.ui.screens.search.languageLabel
+import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.screens.search.releaseKey
 import studio.kahn.iris.tv.ui.screens.search.releaseRows
 import studio.kahn.iris.tv.ui.state.Loadable

@@ -59,6 +59,37 @@ fun prettySceneName(raw: String): String {
     return if (year != null) "$name ($year)" else name
 }
 
+private val CODECS = listOf(
+    Regex("hevc|hev1|hvc1|h265|x265", RegexOption.IGNORE_CASE) to "HEVC",
+    Regex("h264|avc|x264", RegexOption.IGNORE_CASE) to "H.264",
+    Regex("av1|av01", RegexOption.IGNORE_CASE) to "AV1",
+    Regex("vp9|vp09", RegexOption.IGNORE_CASE) to "VP9",
+    Regex("vp8", RegexOption.IGNORE_CASE) to "VP8",
+    Regex("mpeg2", RegexOption.IGNORE_CASE) to "MPEG-2",
+    Regex("mpeg4|xvid|divx", RegexOption.IGNORE_CASE) to "MPEG-4",
+)
+
+/** A video codec as people know it (`hevc`, `hvc1.2.4` → "HEVC", `avc1.64001f` → "H.264"); null when unknown. */
+fun codecWord(codec: String?): String? =
+    codec?.let { c -> CODECS.firstOrNull { (re, _) -> re.containsMatchIn(c) }?.second }
+
+/**
+ * A search language tag (`SearchResult.language_tag`: fr, en, multi, vost, vo) in words: [short]
+ * fits a filter pill, [long] a release's facts; tracker jargon stays in brackets.
+ */
+data class LanguageTag(val tag: String, val short: String, val long: String)
+
+val LANGUAGE_TAGS = listOf(
+    LanguageTag("fr", "French (VF)", "French audio (VF)"),
+    LanguageTag("en", "English", "English audio"),
+    LanguageTag("multi", "Several (MULTI)", "Several audio languages (MULTI)"),
+    LanguageTag("vost", "Original with subtitles (VOSTFR)", "Original audio, French subtitles (VOSTFR)"),
+    LanguageTag("vo", "Original (VO)", "Original audio (VO)"),
+)
+
+fun languageLabel(tag: String?, long: Boolean = true): String? =
+    LANGUAGE_TAGS.firstOrNull { it.tag == tag }?.let { if (long) it.long else it.short }
+
 // ISO 639-2 codes (bibliographic and terminology) the tracks and the trackers carry.
 private val ISO_639_2_TO_1 = mapOf(
     "fre" to "fr", "fra" to "fr", "eng" to "en", "ger" to "de", "deu" to "de",

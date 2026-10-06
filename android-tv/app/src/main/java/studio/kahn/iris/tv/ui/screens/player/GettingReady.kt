@@ -9,6 +9,7 @@ import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.components.Step
 import studio.kahn.iris.tv.ui.components.StepState
+import studio.kahn.iris.tv.ui.format.codecWord
 import studio.kahn.iris.tv.ui.format.formatSpeed
 import studio.kahn.iris.tv.ui.format.percent
 
@@ -180,25 +181,12 @@ fun playWords(picture: String?, route: PlayRoute): String {
 /** The probed picture in words: "1080p HEVC", "2160p HEVC Dolby Vision". */
 fun pictureWords(height: Int?, codec: String?, hdr: String?): String? = listOfNotNull(
     height?.let { "${it}p" },
-    codec?.let(::codecWord),
+    codec?.let { codecWord(it) ?: it.uppercase(Locale.ROOT) },
     hdr?.let(::hdrWord),
 ).joinToString(" ").ifEmpty { null }
 
 /** How the bytes reach the decoder. */
 enum class PlayRoute { Direct, ServerTranscode, ServerRemux }
-
-private val codecs = listOf(
-    Regex("hevc|hev1|hvc1|h265|x265", RegexOption.IGNORE_CASE) to "HEVC",
-    Regex("h264|avc|x264", RegexOption.IGNORE_CASE) to "H.264",
-    Regex("av1|av01", RegexOption.IGNORE_CASE) to "AV1",
-    Regex("vp9|vp09", RegexOption.IGNORE_CASE) to "VP9",
-    Regex("vp8", RegexOption.IGNORE_CASE) to "VP8",
-    Regex("mpeg2", RegexOption.IGNORE_CASE) to "MPEG-2",
-    Regex("mpeg4|xvid|divx", RegexOption.IGNORE_CASE) to "MPEG-4",
-)
-
-fun codecWord(codec: String): String =
-    codecs.firstOrNull { (re, _) -> re.containsMatchIn(codec) }?.second ?: codec.uppercase(Locale.ROOT)
 
 private fun hdrWord(hdr: String): String? = when (hdr.lowercase(Locale.ROOT)) {
     "hdr10" -> "HDR10"

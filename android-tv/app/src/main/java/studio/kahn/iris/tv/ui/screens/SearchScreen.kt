@@ -112,7 +112,7 @@ import studio.kahn.iris.tv.ui.screens.search.SearchViewModel
 import studio.kahn.iris.tv.ui.screens.search.SummaryLine
 import studio.kahn.iris.tv.ui.screens.search.failedTrackers
 import studio.kahn.iris.tv.ui.screens.search.label
-import studio.kahn.iris.tv.ui.screens.search.languageLabel
+import studio.kahn.iris.tv.ui.format.languageLabel
 import studio.kahn.iris.tv.ui.screens.search.pageWords
 import studio.kahn.iris.tv.ui.screens.search.parsedWords
 import studio.kahn.iris.tv.ui.screens.search.recentWhen
