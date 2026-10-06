@@ -74,6 +74,24 @@ pub(crate) fn scene_query(q: &SearchQuery) -> String {
     }
 }
 
+/// `"{parent} / {sub}"`, or whichever of the two a tracker filled (the
+/// subcategory alone when it repeats the parent).
+pub(crate) fn join_category(parent: Option<String>, sub: Option<String>) -> Option<String> {
+    match (parent, sub) {
+        (Some(p), Some(s)) if p != s => Some(format!("{p} / {s}")),
+        (Some(p), _) => Some(p),
+        (None, s) => s,
+    }
+}
+
+/// An RSS `<pubDate>` (RFC 2822). Feeds drift (missing weekday, `GMT`
+/// instead of `+0000`); `None` is benign, the UI shows "unknown date".
+pub(crate) fn parse_rfc2822(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc2822(s.trim())
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
 /// Best-effort year extraction from a release title: take the first 4-digit
 /// substring in the 1900..=2099 range.
 pub(crate) fn extract_year(title: &str) -> Option<u16> {
@@ -139,7 +157,7 @@ where
 mod tests {
     use iris_core::search::SearchQuery;
 
-    use super::{extract_year, scene_query};
+    use super::{extract_year, join_category, scene_query};
 
     fn parsed(title: Option<&str>, season: Option<u32>, episode: Option<u32>) -> SearchQuery {
         SearchQuery {
@@ -175,6 +193,22 @@ mod tests {
             scene_query(&parsed(None, Some(1), Some(2))),
             "raw query 2017"
         );
+    }
+
+    #[test]
+    fn category_joins_parent_and_distinct_sub() {
+        let s = |v: &str| Some(v.to_owned());
+        assert_eq!(
+            join_category(s("Films"), s("WEB")).as_deref(),
+            Some("Films / WEB")
+        );
+        assert_eq!(
+            join_category(s("Films"), s("Films")).as_deref(),
+            Some("Films")
+        );
+        assert_eq!(join_category(s("Films"), None).as_deref(), Some("Films"));
+        assert_eq!(join_category(None, s("WEB")).as_deref(), Some("WEB"));
+        assert_eq!(join_category(None, None), None);
     }
 
     #[test]

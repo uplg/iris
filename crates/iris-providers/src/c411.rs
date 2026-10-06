@@ -46,7 +46,7 @@ use crate::SearchProvider;
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
+use crate::util::{DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, join_category};
 
 /// Featured shelves are editorial — refreshes are slow. 30 min keeps
 /// the home page cheap without going stale on c411's daily cadence.
@@ -588,12 +588,7 @@ fn build_category(top: Option<&RawNamed>, meta: Option<&TorrentMetadata>) -> Opt
         .and_then(|c| c.name.clone())
         .or_else(|| meta.and_then(|m| m.category.as_ref().and_then(|c| c.name.clone())));
     let sub = meta.and_then(|m| m.subcategory.as_ref().and_then(|c| c.name.clone()));
-    match (parent, sub) {
-        (Some(p), Some(s)) if p != s => Some(format!("{p} / {s}")),
-        (Some(p), _) => Some(p),
-        (None, Some(s)) => Some(s),
-        (None, None) => None,
-    }
+    join_category(parent, sub)
 }
 
 #[cfg(test)]

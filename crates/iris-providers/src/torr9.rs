@@ -28,7 +28,8 @@ use iris_core::search::{
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::util::{
-    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, scene_query,
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, join_category,
+    parse_rfc2822, scene_query,
 };
 use quick_xml::Reader;
 use quick_xml::escape::unescape as xml_unescape;
@@ -459,12 +460,7 @@ impl SearchProvider for Torr9 {
             .await
             .map_err(|e| Error::Provider(format!("torr9 details decode: {e}")))?;
 
-        let category = match (raw.category_name.clone(), raw.parent_category_name.clone()) {
-            (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
-            (Some(c), _) => Some(c),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
+        let category = join_category(raw.parent_category_name.clone(), raw.category_name.clone());
 
         let media_info = raw.nfo.as_deref().and_then(nfo::parse);
 
@@ -721,15 +717,10 @@ struct Torrent {
 
 impl Torrent {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
-        let category = match (
-            self.category_name.clone(),
+        let category = join_category(
             self.parent_category_name.clone(),
-        ) {
-            (Some(c), Some(p)) if c != p => Some(format!("{p} / {c}")),
-            (Some(c), _) => Some(c),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
+            self.category_name.clone(),
+        );
         let year = extract_year(&self.title);
         let kind = derive_kind(
             self.parent_category_name.as_deref(),
@@ -835,11 +826,7 @@ impl RssItem {
         let external_id = self.page_url.as_deref().and_then(torr9_id_from_url)?;
         let title = self.title.filter(|s| !s.is_empty())?;
         let year = extract_year(&title);
-        let uploaded_at = self
-            .pub_date
-            .as_deref()
-            .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822);
         Some(SearchResult {
             provider_id: provider_id.to_string(),
             external_id,

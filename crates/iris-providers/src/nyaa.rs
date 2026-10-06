@@ -36,7 +36,7 @@ use quick_xml::events::Event;
 use scraper::{ElementRef, Html, Selector};
 
 use crate::SearchProvider;
-use crate::util::parse_size;
+use crate::util::{parse_rfc2822, parse_size};
 
 /// Items nyaa puts in one RSS page. Not configurable upstream.
 const PAGE_SIZE: u32 = 75;
@@ -366,12 +366,6 @@ fn torrent_id(url: &str) -> Option<String> {
         .take_while(char::is_ascii_digit)
         .collect();
     (!digits.is_empty()).then_some(digits)
-}
-
-fn parse_rfc2822(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc2822(s.trim())
-        .ok()
-        .map(|d| d.with_timezone(&chrono::Utc))
 }
 
 fn sel(css: &str) -> Selector {

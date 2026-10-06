@@ -43,7 +43,7 @@ use crate::SearchProvider;
 use crate::cache::DetailsCache;
 use crate::nfo;
 use crate::torznab::TorznabProvider;
-use crate::util::{DEFAULT_USER_AGENT, field_or_env, field_str};
+use crate::util::{DEFAULT_USER_AGENT, field_or_env, field_str, join_category};
 
 pub struct Tr4ker {
     id: String,
@@ -276,11 +276,7 @@ impl TorrentDetailRaw {
 
         let nfo = non_empty(self.nfo);
         let media_info = nfo.as_deref().and_then(nfo::parse);
-        let category = match (self.cat_name, self.sub_cat_name) {
-            (Some(p), Some(s)) if p != s => Some(format!("{p} / {s}")),
-            (Some(p), _) => Some(p),
-            (None, s) => s,
-        };
+        let category = join_category(self.cat_name, self.sub_cat_name);
 
         TorrentDetails {
             provider_id: provider_id.to_string(),

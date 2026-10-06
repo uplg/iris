@@ -62,7 +62,9 @@ use url::Url;
 
 use crate::SearchProvider;
 use crate::cache::FifoCache;
-use crate::util::{BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str};
+use crate::util::{
+    BENCODE_DICT_MARKER, DEFAULT_USER_AGENT, extract_year, field_or_env, field_str, parse_rfc2822,
+};
 
 const DEFAULT_API_PATH: &str = "/api";
 const DEFAULT_MOVIE_CATEGORIES: &str = "2000";
@@ -681,7 +683,7 @@ impl RawItem {
     fn into_search_result(self, provider_id: &str) -> SearchResult {
         let year = extract_year(&self.title).or(self.year_attr);
         let kind = derive_kind_from_categories(&self.categories);
-        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822_lenient);
+        let uploaded_at = self.pub_date.as_deref().and_then(parse_rfc2822);
         let leechers = self.leechers.or(match (self.seeders, self.peers) {
             (Some(s), Some(p)) if p >= s => Some(p - s),
             _ => None,
@@ -1047,16 +1049,6 @@ fn attr_value(attr: &Attribute) -> String {
 
 fn text_value(t: &BytesText) -> String {
     xml_unescape(t).map_or_else(|_| t.to_string(), std::borrow::Cow::into_owned)
-}
-
-/// Best-effort RFC 2822 parse — Torznab `<pubDate>` follows RSS, but
-/// indexers sometimes drift (missing weekday, `GMT` instead of `+0000`,
-/// etc.). Returning `None` is benign; the UI just falls back to
-/// "unknown date".
-fn parse_rfc2822_lenient(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc2822(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 #[cfg(test)]
