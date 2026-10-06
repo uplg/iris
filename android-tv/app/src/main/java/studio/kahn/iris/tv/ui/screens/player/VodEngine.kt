@@ -45,6 +45,7 @@ import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.ForcedTextTracks
 import studio.kahn.iris.tv.data.IrisCaps
 import studio.kahn.iris.tv.data.PlayStatus
+import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.SeekHint
 import studio.kahn.iris.tv.data.SubtitlePick
 import studio.kahn.iris.tv.data.bestEffort
@@ -262,13 +263,18 @@ fun VodEngine(
     }.value
 
     // The one way progress reaches the server; it outlives a rebuilt player (the remux fallback).
+    // Its saves go out one after the other, so a heartbeat can't land after the last save; the
+    // queue closes once that last save is in it (it is forgotten after the effects below).
+    val posts = remember(infohash, fileIdx) {
+        Owned(
+            SerialPoster<ProgressUpdate>(container.applicationScope) { body ->
+                bestEffort { container.apiFor(serverUrl).saveProgress(infohash = infohash, idx = fileIdx, body = body) } != null
+            },
+            SerialPoster<ProgressUpdate>::close,
+        )
+    }.value
     val saver = remember(infohash, fileIdx) {
-        ProgressSaver(lastPositionMs.get()) { body, failed ->
-            container.applicationScope.launch {
-                bestEffort { container.apiFor(serverUrl).saveProgress(infohash = infohash, idx = fileIdx, body = body) }
-                    ?: failed()
-            }
-        }.apply {
+        ProgressSaver(lastPositionMs.get(), posts::send).apply {
             audioIdx = setup.savedAudioIdx
             subtitleIdx = setup.savedSubIdx
         }
