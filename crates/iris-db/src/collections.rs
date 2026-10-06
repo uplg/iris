@@ -68,8 +68,9 @@ pub struct CollectionRow {
 pub use iris_core::search::MediaKind as Kind;
 
 impl CollectionRow {
+    /// A series. Same rule as [`Kind::from_stored`]: an unknown kind reads as one.
     pub fn is_tv(&self) -> bool {
-        self.kind == Kind::Tv.as_wire()
+        Kind::from_stored(&self.kind) == Kind::Tv
     }
 }
 

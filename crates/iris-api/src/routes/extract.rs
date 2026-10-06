@@ -87,6 +87,28 @@ where
     }
 }
 
+/// axum's `Path`, answering a malformed segment (a bad infohash, uuid or
+/// index) with the API's JSON `bad_request` envelope instead of axum's plain
+/// text, so clients show the message like any other error.
+#[derive(Debug, Clone, Copy)]
+pub struct Path<T>(pub T);
+
+impl<S, T> FromRequestParts<S> for Path<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::extract::Path::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Path(value)) => Ok(Self(value)),
+            Err(e) if e.status().is_client_error() => Err(ApiError::BadRequest(e.body_text())),
+            Err(e) => Err(ApiError::Internal(anyhow::anyhow!(e.body_text()))),
+        }
+    }
+}
+
 /// An `{infohash}` path parameter: a v1 `BitTorrent` infohash (40 hex
 /// characters), lowercased — the form librqbit stores and every table keys
 /// on. Anything else fails extraction with a 400 before a handler reaches
@@ -133,7 +155,47 @@ impl<'de> serde::Deserialize<'de> for Infohash {
 
 #[cfg(test)]
 mod tests {
-    use super::Infohash;
+    use super::{Infohash, Path};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn a_malformed_segment_answers_the_json_bad_request() {
+        async fn handler(Path(h): Path<Infohash>) -> String {
+            h.into_inner()
+        }
+        let app = axum::Router::new().route("/t/{infohash}", axum::routing::get(handler));
+        let bad = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/t/nope")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(bad.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "bad_request");
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("expected 40 hex characters")
+        );
+
+        let ok = app
+            .oneshot(
+                axum::http::Request::get("/t/98259BA623EEC5F33167C083B51B30122C7FA068")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), axum::http::StatusCode::OK);
+    }
 
     #[test]
     fn infohash_is_validated_and_lowercased() {

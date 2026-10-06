@@ -12,7 +12,7 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum_extra::extract::CookieJar;
 use chrono::{Duration, Utc};
 use iris_core::ids::UserId;
@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::routes::auth::issue_session_for_kind;
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
 pub fn auth_router() -> Router<AppState> {

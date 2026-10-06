@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -26,7 +26,7 @@ use utoipa::ToSchema;
 const STREAM_CHUNK_SIZE: usize = 256 * 1024;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::{AuthUser, Infohash};
+use crate::routes::extract::{AuthUser, Infohash, Path};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {

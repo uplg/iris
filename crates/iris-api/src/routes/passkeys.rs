@@ -5,7 +5,7 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::{get, patch, post};
 use axum_extra::extract::CookieJar;
@@ -21,7 +21,7 @@ use webauthn_rs::prelude::{
 use crate::error::{ApiError, ApiResult};
 use crate::rate_limit::ClientIp;
 use crate::routes::auth::UserResponse;
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
 /// Sign-in ceremonies: mounted with the password login, on its strict lane.

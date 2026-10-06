@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use chrono::{DateTime, Utc};
@@ -34,7 +34,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {

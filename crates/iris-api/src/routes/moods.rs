@@ -7,14 +7,14 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::routing::get;
 use serde::Deserialize;
 use utoipa::IntoParams;
 
 use crate::error::ApiResult;
 use crate::reco;
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 use crate::tmdb::TmdbKind;
 

@@ -2,7 +2,7 @@
 //! guide, and the signed HLS proxy every stream plays through.
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::Response;
 use axum::routing::get;
@@ -13,7 +13,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::error::{ApiError, ApiResult};
 use crate::live_tv::{LiveTvError, LiveTvService, proxy};
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Path};
 use crate::state::AppState;
 
 use axum::routing::post;

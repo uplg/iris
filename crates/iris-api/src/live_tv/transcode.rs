@@ -311,7 +311,12 @@ impl TranscodeManager {
                 // would just trade a decode wedge for an encode/decode CPU
                 // wall.
                 cmd.args(["-vf", "yadif=0:-1:0,scale=-2:720"])
-                    .args(["-c:v", "libx264", "-preset", "veryfast"])
+                    .args([
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        iris_config::DEFAULT_TRANSCODE_PRESET,
+                    ])
                     .args(["-crf", "23"])
                     .args(["-g", "50", "-sc_threshold", "0"])
                     .args(["-pix_fmt", "yuv420p"])

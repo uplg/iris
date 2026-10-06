@@ -12,7 +12,7 @@
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::routing::get;
 use chrono::{DateTime, Utc};
 use iris_core::search::MediaKind;
@@ -21,7 +21,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::AuthUser;
+use crate::routes::extract::{AuthUser, Path};
 use crate::routes::torrents::TorrentView;
 use crate::state::AppState;
 

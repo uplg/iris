@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::routing::get;
 use chrono::{Duration, Utc};
 use iris_auth::new_invitation_token;
@@ -11,7 +11,7 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::extract::{AdminUser, Infohash};
+use crate::routes::extract::{AdminUser, Infohash, Path};
 use crate::routes::library::verified_poster;
 use crate::routes::me::{HistoryItem, history_items};
 use crate::routes::{PageQuery, page_limit};
