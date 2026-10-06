@@ -2,6 +2,7 @@
 // engine loaders (the heavy tiers pulled on demand).
 
 import type { EngineMount } from '@iris/core/engine';
+import { STORAGE } from '#lib/storage.ts';
 import type { DecodeTier } from '@iris/core/manifest-client';
 import { mountTierA } from '@iris/core/tiers/tier-a-native';
 import { stored, type Codec } from '#lib/stored.ts';
@@ -26,7 +27,7 @@ const unit: Codec<number> = {
 };
 
 /** Volume is a device's, not the account's: kept in this browser, for every page that plays. */
-const keptVolume = stored<number | undefined>('iris:volume', undefined, unit as Codec<number | undefined>);
+const keptVolume = stored<number | undefined>(STORAGE.volume, undefined, unit as Codec<number | undefined>);
 export const readStoredVolume = (): number | undefined => keptVolume.get();
 export const writeStoredVolume = (v: number) => keptVolume.set(v);
 

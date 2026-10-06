@@ -28,6 +28,8 @@ export default defineConfig({
 	// pre-bundled up front: a test that imports it first otherwise races Vite's on-the-fly
 	// optimisation and fails once on a cold cache
 	optimizeDeps: { include: ['axe-core'] },
+	// hls.js (~580 kB) is the largest engine chunk, loaded only when Tier F plays
+	build: { chunkSizeWarningLimit: 600 },
 	test: {
 		expect: { requireAssertions: true },
 		restoreMocks: true,

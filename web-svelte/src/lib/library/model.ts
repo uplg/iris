@@ -3,14 +3,15 @@
 // stay markup and the rules are tested in Node.
 
 import type { CollectionListItem, ContinueWatchingItem, HomeSummary, TorrentView } from '@iris/api/client';
+import { STORAGE } from '#lib/storage.ts';
 import { duration, episodeCode, formatSize, percent, plural, prettySceneName, speed } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 
 /** The page's views, remembered per browser. */
 export type View = 'titles' | 'downloads';
 export const VIEWS: readonly View[] = ['titles', 'downloads'];
-export const LIBRARY_VIEW_KEY = 'iris-library-view';
-export const LIBRARY_SORT_KEY = 'iris-library-sort';
+export const LIBRARY_VIEW_KEY = STORAGE.libraryView;
+export const LIBRARY_SORT_KEY = STORAGE.librarySort;
 
 const VIDEO_RE = /\.(mkv|mp4|webm|m4v|avi|mov|ts|mts|m2ts|wmv)$/i;
 

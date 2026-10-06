@@ -7,6 +7,7 @@
 	// (B/C/D/E → E or F), never on a backend outage (a deploy): that holds the tier and remounts it
 	// once the server answers again.
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { STORAGE } from '#lib/storage.ts';
 	import { Dialog } from 'bits-ui';
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -20,6 +21,7 @@
 	import { errorText } from '#lib/errors.ts';
 	import { stored, text as words } from '#lib/stored.ts';
 	import { pageTitle } from '#lib/title.ts';
+	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
 	import { ui } from '#lib/ui.svelte.ts';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
 	import StageTopBar from '#lib/player/StageTopBar.svelte';
@@ -50,7 +52,7 @@
 	const qc = useQueryClient();
 
 	// theater: the stage spans the page, the episodes go under it (a device's choice, like volume)
-	const keptTheater = stored<'1' | '0'>('iris:theater', '0', words(['1', '0']));
+	const keptTheater = stored<'1' | '0'>(STORAGE.theater, '0', words(['1', '0']));
 	let theater = $state(keptTheater.get() === '1');
 	function toggleTheater() {
 		theater = !theater;
@@ -114,19 +116,14 @@
 		staleTime: 0,
 		gcTime: 0
 	}));
-	const prefsQ = createQuery(() => ({
-		queryKey: ['playback-prefs', collectionId ?? 'account'],
-		queryFn: () => (collectionId ? me.seriesPlaybackPreferences(collectionId) : me.playbackPreferences()),
-		enabled: !!data,
-		staleTime: 5 * 60_000
-	}));
+	const prefsQ = createQuery(() => ({ ...read.playbackPrefs(collectionId ?? null), enabled: !!data }));
 	const torrentProgressQ = createQuery(() => ({
-		queryKey: ['torrent-progress', infohash],
+		queryKey: KEYS.progress(infohash),
 		queryFn: () => progressApi.forTorrent(infohash),
 		refetchInterval: 10_000
 	}));
 	const collectionQ = createQuery(() => ({
-		queryKey: ['collection', collectionId],
+		queryKey: KEYS.collection(collectionId ?? ''),
 		queryFn: () => library.collection(collectionId!),
 		enabled: isTv
 	}));
@@ -314,7 +311,7 @@
 		void grab.run(
 			() => library.grabCollectionEpisode(collectionId, season, episode, language),
 			(res) => {
-				void qc.invalidateQueries({ queryKey: ['collection', collectionId] });
+				void qc.invalidateQueries({ queryKey: KEYS.collection(collectionId) });
 				return goto(`/watch/${res.infohash}/${res.file_idx}`);
 			},
 			grabKey(row)
@@ -327,9 +324,8 @@
 		return replace.run(
 			() => torrents.remove(infohash),
 			() => {
-				void qc.invalidateQueries({ queryKey: ['library'] });
-				void qc.invalidateQueries({ queryKey: ['continue-watching'] });
-				if (collectionId) void qc.invalidateQueries({ queryKey: ['collection', collectionId] });
+				void refreshLibrary();
+				if (collectionId) void qc.invalidateQueries({ queryKey: KEYS.collection(collectionId) });
 				return goto(`/search?${new URLSearchParams({ q })}`);
 			},
 			'replace',

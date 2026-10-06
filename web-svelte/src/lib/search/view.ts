@@ -2,11 +2,12 @@
 // per release, or a list of releases.
 
 import { stored, text } from '#lib/stored.ts';
+import { STORAGE } from '#lib/storage.ts';
 
 export type ResultsView = 'titles' | 'grid' | 'list';
 
 /** To move into src/env.ts `STORAGE` with the other keys. */
-export const SEARCH_VIEW_KEY = 'iris-search-view';
+export const SEARCH_VIEW_KEY = STORAGE.searchView;
 
 export const VIEWS: readonly { value: ResultsView; label: string }[] = [
 	{ value: 'titles', label: 'Titles' },
