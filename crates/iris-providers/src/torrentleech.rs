@@ -1011,6 +1011,7 @@ impl TorrentRow {
             tmdb_id: None,
             kind: self.category_id.and_then(category_kind),
             poster_url: None,
+            title_match: None,
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,

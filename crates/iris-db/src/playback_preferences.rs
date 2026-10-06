@@ -71,6 +71,61 @@ pub async fn set(
     Ok(())
 }
 
+/// The preferences for one series: its own row when the user chose for it,
+/// else the account-wide ones. `bool` = the series has its own row.
+pub async fn get_for_collection(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection_id: Uuid,
+) -> Result<(PlaybackPreferences, bool), sqlx::Error> {
+    let uuid: Uuid = user_id.into();
+    let row: Option<PrefRow> = sqlx::query_as(
+        "SELECT audio_language, subtitle_language FROM collection_playback_preferences \
+         WHERE user_id = ?1 AND collection_id = ?2",
+    )
+    .bind(uuid)
+    .bind(collection_id)
+    .fetch_optional(pool)
+    .await?;
+    match row {
+        Some(r) => Ok((
+            PlaybackPreferences {
+                audio_language: r.audio_language,
+                subtitle_language: r.subtitle_language,
+            },
+            true,
+        )),
+        None => Ok((get(pool, user_id).await?, false)),
+    }
+}
+
+/// Insert-or-replace one series' preferences (full state, like [`set`]).
+pub async fn set_for_collection(
+    pool: &SqlitePool,
+    user_id: UserId,
+    collection_id: Uuid,
+    prefs: &PlaybackPreferences,
+) -> Result<(), sqlx::Error> {
+    let uuid: Uuid = user_id.into();
+    sqlx::query(
+        "INSERT INTO collection_playback_preferences \
+           (user_id, collection_id, audio_language, subtitle_language, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(user_id, collection_id) DO UPDATE SET \
+            audio_language = excluded.audio_language, \
+            subtitle_language = excluded.subtitle_language, \
+            updated_at = excluded.updated_at",
+    )
+    .bind(uuid)
+    .bind(collection_id)
+    .bind(&prefs.audio_language)
+    .bind(&prefs.subtitle_language)
+    .bind(Utc::now())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +154,46 @@ mod tests {
         .await
         .expect("insert user");
         UserId::from(id)
+    }
+
+    #[tokio::test]
+    async fn a_series_choice_overrides_the_account_one() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let series = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO collections (id, parsed_title_normalized, display_title, kind, created_at) \
+             VALUES (?1, 'severance', 'Severance', 'tv', ?2)",
+        )
+        .bind(series)
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .expect("insert collection");
+        let account = PlaybackPreferences {
+            audio_language: Some("fr".into()),
+            subtitle_language: Some("off".into()),
+        };
+        set(&pool, user, &account).await.unwrap();
+        let (p, own) = get_for_collection(&pool, user, series).await.unwrap();
+        assert!(!own);
+        assert_eq!(p.audio_language.as_deref(), Some("fr"));
+
+        let mine = PlaybackPreferences {
+            audio_language: Some("en".into()),
+            subtitle_language: Some("en".into()),
+        };
+        set_for_collection(&pool, user, series, &mine)
+            .await
+            .unwrap();
+        let (p, own) = get_for_collection(&pool, user, series).await.unwrap();
+        assert!(own);
+        assert_eq!(p.audio_language.as_deref(), Some("en"));
+        // The account-wide choice is untouched.
+        assert_eq!(
+            get(&pool, user).await.unwrap().audio_language.as_deref(),
+            Some("fr")
+        );
     }
 
     #[tokio::test]

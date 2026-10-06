@@ -193,15 +193,8 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
     let trusted_tmdb = trusted_tmdb_id(state.db(), &row.normalized_name).await;
     // `series_follows` is TV-only — hint the namespace so a numerical
     // id collision with a movie can't serve a stranger's poster.
-    let (poster_path, backdrop_path) = match (state.tmdb(), trusted_tmdb) {
-        (Some(client), Some(tid)) => {
-            let meta = client
-                .lookup_db_id(tid, Some(crate::tmdb::TmdbKind::Tv))
-                .await;
-            meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
-        }
-        _ => (None, None),
-    };
+    let (poster_path, backdrop_path) =
+        crate::routes::library::collection_artwork(state, trusted_tmdb, "tv").await;
     let new_count = iris_db::available_episodes::count_new_for_series(
         state.db(),
         &row.normalized_name,

@@ -22,6 +22,13 @@ pub fn router() -> Router<AppState> {
         )
         .route("/history", get(history))
         .route("/gone/dismiss", axum::routing::post(dismiss_gone))
+        .route("/summary", get(summary))
+        .route(
+            "/recent-searches",
+            get(recent_searches)
+                .post(record_search)
+                .delete(forget_searches),
+        )
         .route("/watchlist", get(watchlist))
         .route("/watchlist/remove", axum::routing::post(remove_watchlist))
         .route("/password", axum::routing::post(change_password))
@@ -272,15 +279,8 @@ async fn watchlist_item(
     // Watchlist is TV-only by construction (we derive it from
     // `series_follows`). Hint the TMDB namespace so the same
     // numerical id can't collide with an unrelated movie.
-    let (poster_path, backdrop_path) = match (state.tmdb(), tmdb_id) {
-        (Some(client), Some(tid)) => {
-            let meta = client
-                .lookup_db_id(tid, Some(crate::tmdb::TmdbKind::Tv))
-                .await;
-            meta.map_or((None, None), |m| (m.poster_path, m.backdrop_path))
-        }
-        _ => (None, None),
-    };
+    let (poster_path, backdrop_path) =
+        crate::routes::library::collection_artwork(state, tmdb_id, "tv").await;
     // "New" cutoff = last ENGAGEMENT (max of page visit and watch)
     // — visit-only kept badging episodes that were already out when
     // the user watched, and badged the whole cache when they had
@@ -312,6 +312,179 @@ async fn watchlist_item(
         last_visited_at: f.last_visited_at,
         created_at: f.created_at,
     }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct RecentSearchView {
+    query: String,
+    searched_at: DateTime<Utc>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/me/recent-searches",
+    responses((status = 200, description = "The account's last searches, newest first", body = [RecentSearchView])),
+    tag = "me",
+)]
+pub(crate) async fn recent_searches(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<Vec<RecentSearchView>>> {
+    let rows = iris_db::recent_searches::list(state.db(), user.id).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| RecentSearchView {
+                query: r.query,
+                searched_at: r.searched_at,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct RecordSearchRequest {
+    query: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/me/recent-searches",
+    request_body = RecordSearchRequest,
+    responses((status = 204), (status = 400, description = "Empty or too long")),
+    tag = "me",
+)]
+pub(crate) async fn record_search(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<RecordSearchRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    let query = req.query.trim();
+    if query.chars().count() < 2 || query.len() > 200 {
+        return Err(ApiError::BadRequest(
+            "a search is 2 to 200 characters".into(),
+        ));
+    }
+    iris_db::recent_searches::record(state.db(), user.id, query).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub(crate) struct ForgetSearchParams {
+    /// The search to forget; every search when absent.
+    q: Option<String>,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/me/recent-searches",
+    params(ForgetSearchParams),
+    responses((status = 204)),
+    tag = "me",
+)]
+pub(crate) async fn forget_searches(
+    State(state): State<AppState>,
+    user: AuthUser,
+    axum::extract::Query(params): axum::extract::Query<ForgetSearchParams>,
+) -> ApiResult<axum::http::StatusCode> {
+    iris_db::recent_searches::forget(state.db(), user.id, params.q.as_deref()).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// The "right now" line of the home page: disk, downloads, seeding, new
+/// episodes. For every account (the admin storage view is quota-based and
+/// admin-only).
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct HomeSummary {
+    /// The filesystem holding the downloads; `None` when it can't be read.
+    disk: Option<DiskSpace>,
+    /// Torrents still downloading.
+    downloading: u32,
+    /// Overall progress of those downloads, by bytes (0–100).
+    downloading_pct: f64,
+    /// Seconds until they all finish at the current speed; `None` when
+    /// nothing moves.
+    downloading_eta_seconds: Option<u64>,
+    /// Finished torrents still sharing with the swarm.
+    seeding: u32,
+    /// New episodes across the caller's watchlist, as its badges count them.
+    new_episodes: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct DiskSpace {
+    total_bytes: u64,
+    free_bytes: u64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/me/summary",
+    responses((status = 200, body = HomeSummary)),
+    tag = "me",
+)]
+pub(crate) async fn summary(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<HomeSummary>> {
+    let torrents = state.engine().list();
+    let active: Vec<_> = torrents
+        .iter()
+        .filter(|t| !t.finished && t.state != iris_torrent::TorrentState::Error)
+        .collect();
+    let total: u64 = active.iter().map(|t| t.total_size_bytes).sum();
+    let done: u64 = active.iter().map(|t| t.progress_bytes).sum();
+    let speed: u64 = active.iter().map(|t| t.download_speed_bps).sum();
+    #[allow(clippy::cast_precision_loss)]
+    let downloading_pct = if total > 0 {
+        done as f64 / total as f64 * 100.0
+    } else {
+        0.0
+    };
+    let downloading_eta_seconds = (speed > 0).then(|| total.saturating_sub(done) / speed);
+    let seeding = torrents
+        .iter()
+        .filter(|t| t.finished && t.state == iris_torrent::TorrentState::Live)
+        .count();
+
+    let follows = iris_db::follows::list_for_user(state.db(), user.id).await?;
+    let state_ref = &state;
+    let new_episodes =
+        crate::fanout::map_ordered(follows, |f| watchlist_item(state_ref, user.id, f))
+            .await
+            .iter()
+            .map(|w| w.new_count)
+            .sum();
+
+    let dir = state.cfg().storage.download_dir.clone();
+    let disk = tokio::task::spawn_blocking(move || disk_space(&dir))
+        .await
+        .ok()
+        .flatten();
+    Ok(Json(HomeSummary {
+        disk,
+        downloading: u32::try_from(active.len()).unwrap_or(u32::MAX),
+        downloading_pct,
+        downloading_eta_seconds,
+        seeding: u32::try_from(seeding).unwrap_or(u32::MAX),
+        new_episodes,
+    }))
+}
+
+/// Size and free space of the filesystem holding `dir`, as an unprivileged
+/// user sees it.
+fn disk_space(dir: &std::path::Path) -> Option<DiskSpace> {
+    let st = rustix::fs::statvfs(dir).ok()?;
+    let block = to_u64(st.f_frsize);
+    Some(DiskSpace {
+        total_bytes: to_u64(st.f_blocks).saturating_mul(block),
+        free_bytes: to_u64(st.f_bavail).saturating_mul(block),
+    })
+}
+
+/// `statvfs` field widths differ across platforms (`u32` on macOS, `u64`
+/// or `c_long` on Linux).
+fn to_u64<T: TryInto<u64>>(v: T) -> u64 {
+    v.try_into().unwrap_or(0)
 }
 
 #[derive(Debug, serde::Deserialize, ToSchema)]

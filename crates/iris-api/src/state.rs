@@ -30,6 +30,7 @@ struct Inner {
     pub anilist: Option<AniListClient>,
     pub presence: Presence,
     pub live_tv: Option<LiveTvService>,
+    pub passkeys: Option<crate::passkeys::Passkeys>,
 }
 
 impl AppState {
@@ -81,6 +82,15 @@ impl AppState {
                 None
             }
         };
+        // Passkeys hang off `public_url` (the RP ID can't change without
+        // losing every passkey): an unusable URL turns them off, never boot.
+        let passkeys = match crate::passkeys::Passkeys::new(&cfg.server.public_url) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!(error = %e, "passkeys disabled");
+                None
+            }
+        };
         Self {
             inner: Arc::new(Inner {
                 cfg,
@@ -95,10 +105,18 @@ impl AppState {
                 anilist,
                 presence: Presence::new(),
                 live_tv,
+                passkeys,
             }),
         }
     }
 
+    /// The passkey service, or 404 when this server can't offer passkeys.
+    pub fn passkeys(&self) -> crate::error::ApiResult<&crate::passkeys::Passkeys> {
+        self.inner
+            .passkeys
+            .as_ref()
+            .ok_or(crate::error::ApiError::NotFound)
+    }
     pub fn cfg(&self) -> &AppConfig {
         &self.inner.cfg
     }

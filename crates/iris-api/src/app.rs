@@ -64,6 +64,7 @@ pub fn build_router(state: AppState) -> Router {
     // overlapping nest paths like `/auth` and `/auth/device`. Each subtree
     // keeps its own governor across the merge.
     let auth = routes::auth::strict_router()
+        .merge(routes::passkeys::auth_router())
         .layer(GovernorLayer::new(login_governor))
         .merge(
             routes::auth::session_router()
@@ -72,6 +73,7 @@ pub fn build_router(state: AppState) -> Router {
         );
     let me = routes::me::router()
         .nest("/devices", routes::devices::me_router())
+        .nest("/passkeys", routes::passkeys::me_router())
         .nest("/follows", routes::follows::router())
         .nest("/preferences", routes::preferences::router())
         .nest(

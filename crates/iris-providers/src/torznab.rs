@@ -751,6 +751,7 @@ impl RawItem {
             tmdb_id,
             kind,
             poster_url: None,
+            title_match: None,
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,

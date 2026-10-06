@@ -1036,13 +1036,29 @@ pub struct TorrentView {
     /// Additive field; older clients ignore it.
     #[serde(default)]
     pub downloaded_bytes_total: u64,
+    /// Whether the caller may delete this torrent: admins, and whoever
+    /// added it. Additive — older clients ignore it (a refused delete
+    /// answers 403).
+    #[serde(default)]
+    pub can_delete: bool,
     #[serde(flatten)]
     pub snapshot: TorrentSnapshot,
 }
 
+/// Who may delete a torrent: an admin, or the user who added it. Everyone
+/// else in the household plays and seeds it but can't take it away.
+pub(crate) fn may_delete(viewer: &AuthUser, added_by: uuid::Uuid) -> bool {
+    viewer.is_admin || uuid::Uuid::from(viewer.id) == added_by
+}
+
 impl TorrentView {
-    pub(crate) fn new(row: iris_db::torrents::TorrentRow, snapshot: TorrentSnapshot) -> Self {
+    pub(crate) fn new(
+        viewer: &AuthUser,
+        row: iris_db::torrents::TorrentRow,
+        snapshot: TorrentSnapshot,
+    ) -> Self {
         Self {
+            can_delete: may_delete(viewer, row.added_by),
             tmdb_id: row.effective_tmdb_id(),
             id: row.id,
             added_by: row.added_by,
@@ -1062,9 +1078,13 @@ impl TorrentView {
 
     /// The view of a row whose torrent the engine still manages; `None` once
     /// the engine has dropped it.
-    pub(crate) fn live(state: &AppState, row: iris_db::torrents::TorrentRow) -> Option<Self> {
+    pub(crate) fn live(
+        state: &AppState,
+        viewer: &AuthUser,
+        row: iris_db::torrents::TorrentRow,
+    ) -> Option<Self> {
         let snapshot = state.engine().get_by_infohash(&row.infohash)?;
-        Some(Self::new(row, snapshot))
+        Some(Self::new(viewer, row, snapshot))
     }
 }
 
@@ -1077,12 +1097,12 @@ impl TorrentView {
 )]
 pub(crate) async fn list(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
 ) -> ApiResult<Json<Vec<TorrentView>>> {
     let rows = iris_db::torrents::list_active(state.db()).await?;
     let out = rows
         .into_iter()
-        .filter_map(|row| TorrentView::live(&state, row))
+        .filter_map(|row| TorrentView::live(&state, &user, row))
         .collect();
     Ok(Json(out))
 }
@@ -1096,13 +1116,13 @@ pub(crate) async fn list(
 )]
 pub(crate) async fn get_one(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(infohash): Path<String>,
 ) -> ApiResult<Json<TorrentView>> {
     let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
         .await?
         .ok_or(ApiError::NotFound)?;
-    TorrentView::live(&state, row)
+    TorrentView::live(&state, &user, row)
         .map(Json)
         .ok_or(ApiError::NotFound)
 }
@@ -1126,6 +1146,9 @@ pub(crate) async fn remove(
     let row = iris_db::torrents::find_by_infohash(state.db(), &infohash.to_ascii_lowercase())
         .await?
         .ok_or(ApiError::NotFound)?;
+    if !may_delete(&user, row.added_by) {
+        return Err(ApiError::Forbidden);
+    }
     // Capture the final upload delta before the engine drops the torrent —
     // otherwise the bytes uploaded since the last 30 s reconcile tick are
     // lost forever.

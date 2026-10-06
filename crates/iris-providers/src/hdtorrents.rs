@@ -899,6 +899,7 @@ fn parse_search_page(provider_id: &str, base_url: &Url, html: &str) -> Vec<Searc
             tmdb_id: None,
             kind: category_id.and_then(category_kind),
             poster_url: None,
+            title_match: None,
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,

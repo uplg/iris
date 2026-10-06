@@ -11,6 +11,7 @@ pub mod live_tv;
 pub mod me;
 pub mod metadata;
 pub mod moods;
+pub mod passkeys;
 pub mod playback_preferences;
 pub mod preferences;
 pub mod providers;

@@ -499,13 +499,6 @@ async fn build(state: &AppState, user_id: UserId, surface: Surface) -> Result<Fo
     Ok(result)
 }
 
-fn kind_str(kind: TmdbKind) -> &'static str {
-    match kind {
-        TmdbKind::Movie => "movie",
-        TmdbKind::Tv => "tv",
-    }
-}
-
 /// A mood's grabbable titles for `kind`, best first: its TMDB discover list
 /// joined with the catalogue, plus every catalogue title its genre rule
 /// matches. Popularity, swarm and recency — the mood itself is the taste.
@@ -517,7 +510,7 @@ fn mood_ranking<'a>(
     rule: GenreRule,
     kind: TmdbKind,
 ) -> Vec<&'a CatalogItem> {
-    let kind = kind_str(kind);
+    let kind = kind.as_wire();
     let list = mood.list();
     let listed: HashSet<Uuid> = signals
         .iter()
@@ -618,7 +611,7 @@ pub async fn mood_results(
 ) -> Result<MoodResults, sqlx::Error> {
     let mut out = MoodResults {
         mood: mood_id.to_string(),
-        kind: kind_str(kind).to_string(),
+        kind: kind.as_wire().to_string(),
         items: Vec::new(),
     };
     let Some((mood, rule)) = MOODS

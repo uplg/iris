@@ -780,6 +780,7 @@ impl TorrentEnvelope {
             tmdb_id,
             kind,
             poster_url,
+            title_match: None,
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,

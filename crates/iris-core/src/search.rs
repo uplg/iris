@@ -60,6 +60,15 @@ impl MediaKind {
             _ => None,
         }
     }
+
+    /// The wire / DB token, the inverse of [`Self::from_wire`].
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Tv => "tv",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -95,6 +104,18 @@ pub struct ProviderCapabilities {
     pub returns_infohash: bool,
 }
 
+/// A release's TMDB title, as resolved from its SCENE name.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TitleMatch {
+    pub tmdb_id: u64,
+    pub kind: MediaKind,
+    pub title: String,
+    pub year: Option<u32>,
+    /// TMDB image path; the full URL is
+    /// `https://image.tmdb.org/t/p/<size><poster_path>`.
+    pub poster_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SearchResult {
     pub provider_id: String,
@@ -124,12 +145,18 @@ pub struct SearchResult {
     /// provider's category taxonomy.
     #[serde(default)]
     pub kind: Option<MediaKind>,
-    /// Pre-resolved poster URL when the indexer ships one (torr9
-    /// includes it on featured items). Trusted because the indexer
-    /// curates these editorially — much higher confidence than a
-    /// TMDB-id round-trip.
+    /// The poster to show. Providers set it when the tracker ships one
+    /// (picked by the uploader for this release: trusted first); the
+    /// search layer resizes TMDB thumbnails and, when the tracker had
+    /// none, fills it from [`Self::title_match`].
     #[serde(default)]
     pub poster_url: Option<String>,
+    /// API-layer enrichment: the title this release resolves to on TMDB,
+    /// from its SCENE name (the indexer's own `tmdb_id` is unreliable).
+    /// Clients take the poster from here and group releases by title.
+    /// Providers always emit `None`.
+    #[serde(default)]
+    pub title_match: Option<TitleMatch>,
     /// API-layer enrichment: `true` when the result's SCENE-parsed
     /// (title, season, episode) matches an existing `episode_files`
     /// row. UI uses this to disable the "Add to library" CTA and
@@ -399,6 +426,7 @@ mod tests {
             tmdb_id: None,
             kind,
             poster_url: None,
+            title_match: None,
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,

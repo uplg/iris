@@ -258,6 +258,7 @@ impl C411 {
                 tmdb_id: item.tmdb_id.filter(|n| *n > 0),
                 kind: Some(kind),
                 poster_url: item.poster_url,
+                title_match: None,
                 already_in_library: false,
                 library_infohash: None,
                 library_file_idx: None,

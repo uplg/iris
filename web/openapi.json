@@ -680,6 +680,75 @@
         }
       }
     },
+    "/api/auth/passkey/login/finish": {
+      "post": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "login_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in; session cookies set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The ceremony expired"
+          },
+          "401": {
+            "description": "Passkey unknown or refused"
+          }
+        }
+      }
+    },
+    "/api/auth/passkey/login/start": {
+      "post": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "login_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginOptions"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Passkeys aren't available on this server"
+          }
+        }
+      }
+    },
     "/api/auth/refresh": {
       "post": {
         "tags": [
@@ -1964,6 +2033,150 @@
         }
       }
     },
+    "/api/me/passkeys": {
+      "get": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PasskeyView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/passkeys/register/finish": {
+      "post": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "register_finish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterFinishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The ceremony expired"
+          },
+          "401": {
+            "description": "The authenticator's answer was refused"
+          }
+        }
+      }
+    },
+    "/api/me/passkeys/register/start": {
+      "post": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "register_start",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterOptions"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Passkeys aren't available on this server"
+          }
+        }
+      }
+    },
+    "/api/me/passkeys/{id}": {
+      "delete": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "Not one of the caller's passkeys"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "passkeys"
+        ],
+        "operationId": "rename",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenamePasskeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "Not one of the caller's passkeys"
+          }
+        }
+      }
+    },
     "/api/me/password": {
       "post": {
         "tags": [
@@ -1999,6 +2212,21 @@
           "preferences"
         ],
         "operationId": "get_playback_preferences",
+        "parameters": [
+          {
+            "name": "collection_id",
+            "in": "query",
+            "description": "The series (collection) to read the choice of.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "The caller's preferred audio + subtitle languages",
@@ -2081,6 +2309,98 @@
           },
           "400": {
             "description": "Unknown language in the request"
+          }
+        }
+      }
+    },
+    "/api/me/recent-searches": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "recent_searches",
+        "responses": {
+          "200": {
+            "description": "The account's last searches, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecentSearchView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "record_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "400": {
+            "description": "Empty or too long"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "forget_searches",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "The search to forget; every search when absent.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/api/me/summary": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "summary",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummary"
+                }
+              }
+            }
           }
         }
       }
@@ -2372,6 +2692,20 @@
                 }
               ]
             }
+          },
+          {
+            "name": "tmdb_id",
+            "in": "query",
+            "description": "Keep only releases of this TMDB title (a title picked in the Titles\nview → its releases).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -2431,6 +2765,39 @@
           },
           "404": {
             "description": "Provider exposes no detail page for this id"
+          }
+        }
+      }
+    },
+    "/api/search/titles": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "operationId": "titles",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TMDB titles for the query, library ones flagged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TitleCard"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -4024,6 +4391,13 @@
           "kind": {
             "$ref": "#/components/schemas/MediaKind"
           },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path (`/abc.jpg`), so clients don't resolve it per\ncard. Additive — older clients ignore it."
+          },
           "representative_infohash": {
             "type": [
               "string",
@@ -4277,6 +4651,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "DiskSpace": {
+        "type": "object",
+        "required": [
+          "total_bytes",
+          "free_bytes"
+        ],
+        "properties": {
+          "free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -5143,6 +5536,60 @@
           }
         }
       },
+      "HomeSummary": {
+        "type": "object",
+        "description": "The \"right now\" line of the home page: disk, downloads, seeding, new\nepisodes. For every account (the admin storage view is quota-based and\nadmin-only).",
+        "required": [
+          "downloading",
+          "downloading_pct",
+          "seeding",
+          "new_episodes"
+        ],
+        "properties": {
+          "disk": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DiskSpace",
+                "description": "The filesystem holding the downloads; `None` when it can't be read."
+              }
+            ]
+          },
+          "downloading": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Torrents still downloading.",
+            "minimum": 0
+          },
+          "downloading_eta_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds until they all finish at the current speed; `None` when\nnothing moves.",
+            "minimum": 0
+          },
+          "downloading_pct": {
+            "type": "number",
+            "format": "double",
+            "description": "Overall progress of those downloads, by bytes (0–100)."
+          },
+          "new_episodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "New episodes across the caller's watchlist, as its badges count them."
+          },
+          "seeding": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Finished torrents still sharing with the swarm.",
+            "minimum": 0
+          }
+        }
+      },
       "IngestResponse": {
         "type": "object",
         "required": [
@@ -5289,6 +5736,13 @@
           "kind": {
             "type": "string",
             "description": "`\"movie\"` | `\"tv\"` — same vocabulary as `MediaKind`."
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB poster path (`/abc.jpg`). Additive — older clients resolve it\nthemselves."
           },
           "representative_infohash": {
             "type": [
@@ -5659,6 +6113,39 @@
           }
         }
       },
+      "LoginFinishRequest": {
+        "type": "object",
+        "required": [
+          "ceremony",
+          "credential"
+        ],
+        "properties": {
+          "ceremony": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "object",
+            "description": "`PublicKeyCredential.toJSON()` of the assertion."
+          }
+        }
+      },
+      "LoginOptions": {
+        "type": "object",
+        "required": [
+          "ceremony",
+          "options"
+        ],
+        "properties": {
+          "ceremony": {
+            "type": "string",
+            "description": "Send back with the answer."
+          },
+          "options": {
+            "type": "object",
+            "description": "For `navigator.credentials.get()`: `publicKey` through\n`PublicKeyCredential.parseRequestOptionsFromJSON`, and `mediation`\nwhen conditional."
+          }
+        }
+      },
       "LoginRequest": {
         "type": "object",
         "required": [
@@ -5671,6 +6158,15 @@
           },
           "password": {
             "type": "string"
+          }
+        }
+      },
+      "LoginStartRequest": {
+        "type": "object",
+        "properties": {
+          "conditional": {
+            "type": "boolean",
+            "description": "Autofill (`mediation: \"conditional\"`), or a modal request from a\nbutton."
           }
         }
       },
@@ -6115,6 +6611,39 @@
           }
         }
       },
+      "PasskeyView": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "backed_up",
+          "created_at"
+        ],
+        "properties": {
+          "backed_up": {
+            "type": "boolean",
+            "description": "Synced by the provider (iCloud Keychain, Google Password Manager…)\nrather than bound to one device."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "PlayStatus": {
         "type": "object",
         "description": "State of the per-file remux job exposed to the player UI. Polled\nbefore mounting the `<video>` so we can render a meaningful loading\nstep (\"downloading 47 %\", \"remuxing\", \"ready\").",
@@ -6206,6 +6735,10 @@
               "null"
             ],
             "description": "Preferred audio language (ISO 639-1 / BCP-47), or null = no preference."
+          },
+          "for_collection": {
+            "type": "boolean",
+            "description": "`true` when these come from the series' own choice rather than the\naccount-wide one. Additive — always `false` without `collection_id`."
           },
           "subtitle_language": {
             "type": [
@@ -6501,6 +7034,72 @@
           }
         }
       },
+      "RecentSearchView": {
+        "type": "object",
+        "required": [
+          "query",
+          "searched_at"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "searched_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecordSearchRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterFinishRequest": {
+        "type": "object",
+        "required": [
+          "ceremony",
+          "credential"
+        ],
+        "properties": {
+          "ceremony": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "object",
+            "description": "`PublicKeyCredential.toJSON()` of the new credential."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the user calls it; named after the device when absent."
+          }
+        }
+      },
+      "RegisterOptions": {
+        "type": "object",
+        "required": [
+          "ceremony",
+          "options"
+        ],
+        "properties": {
+          "ceremony": {
+            "type": "string"
+          },
+          "options": {
+            "type": "object",
+            "description": "For `navigator.credentials.create()`: `publicKey` through\n`PublicKeyCredential.parseCreationOptionsFromJSON`."
+          }
+        }
+      },
       "RegisterRequest": {
         "type": "object",
         "required": [
@@ -6581,6 +7180,17 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "RenamePasskeyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -6759,7 +7369,7 @@
               "string",
               "null"
             ],
-            "description": "Pre-resolved poster URL when the indexer ships one (torr9\nincludes it on featured items). Trusted because the indexer\ncurates these editorially — much higher confidence than a\nTMDB-id round-trip."
+            "description": "The poster to show. Providers set it when the tracker ships one\n(picked by the uploader for this release: trusted first); the\nsearch layer resizes TMDB thumbnails and, when the tracker had\nnone, fills it from [`Self::title_match`]."
           },
           "provider_id": {
             "type": "string"
@@ -6788,6 +7398,17 @@
           },
           "title": {
             "type": "string"
+          },
+          "title_match": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TitleMatch",
+                "description": "API-layer enrichment: the title this release resolves to on TMDB,\nfrom its SCENE name (the indexer's own `tmdb_id` is unreliable).\nClients take the poster from here and group releases by title.\nProviders always emit `None`."
+              }
+            ]
           },
           "tmdb_id": {
             "type": [
@@ -7138,6 +7759,93 @@
           "url": {
             "type": "string",
             "description": "Relative URL the client should GET to receive the extracted track.\nSuffix is `.vtt` for text subs, `.sup` for PGS, `.ass` for ASS/SSA."
+          }
+        }
+      },
+      "TitleCard": {
+        "type": "object",
+        "description": "One title for the Titles view: what the query could mean on TMDB, and\nwhether the library already holds it.",
+        "required": [
+          "tmdb_id",
+          "kind",
+          "title"
+        ],
+        "properties": {
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The library collection holding this title, when there is one."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "overview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "poster_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TitleMatch": {
+        "type": "object",
+        "description": "A release's TMDB title, as resolved from its SCENE name.",
+        "required": [
+          "tmdb_id",
+          "kind",
+          "title"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "poster_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "TMDB image path; the full URL is\n`https://image.tmdb.org/t/p/<size><poster_path>`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "tmdb_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -7682,6 +8390,10 @@
                 "type": "string",
                 "description": "Public display name of the uploader (NOT the email — that stays\nprivate). Backfilled from the email's local-part for accounts\nthat pre-date migration 0006; users edit it from /account."
               },
+              "can_delete": {
+                "type": "boolean",
+                "description": "Whether the caller may delete this torrent: admins, and whoever\nadded it. Additive — older clients ignore it (a refused delete\nanswers 403)."
+              },
               "collection_id": {
                 "type": [
                   "string",
@@ -7759,6 +8471,14 @@
               "string",
               "null"
             ]
+          },
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Save as this series' own choice instead of the account-wide one."
           },
           "subtitle_language": {
             "type": [

@@ -50,20 +50,6 @@ pub(crate) fn candidate_of(r: &SearchResult, is_multi: bool) -> iris_core::ranki
     }
 }
 
-pub(crate) const fn tmdb_kind(kind: MediaKind) -> TmdbKind {
-    match kind {
-        MediaKind::Movie => TmdbKind::Movie,
-        MediaKind::Tv => TmdbKind::Tv,
-    }
-}
-
-pub(crate) const fn kind_str(kind: MediaKind) -> &'static str {
-    match kind {
-        MediaKind::Movie => "movie",
-        MediaKind::Tv => "tv",
-    }
-}
-
 pub fn spawn(
     pool: SqlitePool,
     tmdb: TmdbClient,
@@ -149,7 +135,7 @@ async fn run_slice(
 
     let window_start = Utc::now() - chrono::Duration::weeks(cfg.poll_window_weeks.max(1));
     let best = collect_best(pool, tmdb, providers, kind, page.results, window_start).await;
-    let source = format!("freshness:{provider_id}:{}", kind_str(kind));
+    let source = format!("freshness:{provider_id}:{}", kind.as_wire());
     let upserted = upsert_window_rows(
         pool,
         tmdb,
@@ -179,7 +165,7 @@ async fn collect_best(
     results: Vec<SearchResult>,
     window_start: DateTime<Utc>,
 ) -> HashMap<i64, (SearchResult, Language)> {
-    let tk = tmdb_kind(kind);
+    let tk = TmdbKind::from(kind);
     let mut best: HashMap<i64, (SearchResult, Language)> = HashMap::new();
     for r in results {
         // Rolling window: skip anything older than the poll horizon. Releases
@@ -229,7 +215,7 @@ pub(crate) async fn upsert_window_rows(
     best: HashMap<i64, (SearchResult, Language)>,
     max_content_age_years: i64,
 ) -> usize {
-    let tk = tmdb_kind(kind);
+    let tk = TmdbKind::from(kind);
     // Movies older than this content-year are kept out of the discovery window
     // (the window is about recent *releases*, not old re-uploads). TV is exempt
     // — a long-running series airing a new episode is legitimately fresh.
@@ -279,7 +265,7 @@ pub(crate) async fn upsert_window_rows(
         let mut item = iris_db::catalog::NewCatalogItem {
             tmdb_id: Some(tmdb_id),
             anilist_id: None,
-            kind: kind_str(kind).to_string(),
+            kind: kind.as_wire().to_string(),
             title: meta.title,
             original_language: meta.original_language,
             genres: meta.genre_ids.iter().map(|&g| i64::from(g)).collect(),

@@ -320,6 +320,7 @@ impl RawItem {
             // which actually knows.
             kind: None,
             poster_url: None,
+            title_match: None,
             already_in_library: false,
             library_infohash: None,
             library_file_idx: None,

@@ -18,6 +18,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(search))
+        .route("/titles", get(titles))
         .route("/details", get(details))
 }
 
@@ -29,6 +30,9 @@ pub struct SearchParams {
     pub sort_by: Option<SortField>,
     pub order: Option<SortOrder>,
     pub kind: Option<MediaKind>,
+    /// Keep only releases of this TMDB title (a title picked in the Titles
+    /// view → its releases).
+    pub tmdb_id: Option<u64>,
 }
 
 /// A library item matching the search query, surfaced ABOVE tracker
@@ -58,6 +62,10 @@ pub struct LibraryMatch {
     /// Set when the query was season-scoped ("vikings s03"): how many
     /// episodes of that season the library holds.
     pub season_episode_count: Option<i64>,
+    /// TMDB poster path (`/abc.jpg`). Additive — older clients resolve it
+    /// themselves.
+    #[serde(default)]
+    pub poster_path: Option<String>,
 }
 
 /// `AggregatedResults` + the library rows. `flatten` keeps the wire
@@ -149,12 +157,116 @@ pub(crate) async fn search(
             r.tags.insert(0, dubious_tag(src));
         }
     }
+    match_titles(&state, &mut agg.results).await;
+    if let Some(id) = params.tmdb_id {
+        agg.results
+            .retain(|r| r.title_match.as_ref().is_some_and(|m| m.tmdb_id == id));
+    }
     agg.parsed_query = ranking::parsed_query_summary(&q);
     let library_matches = library_matches_for(&state, &q).await;
     Ok(Json(SearchResponse {
         agg,
         library_matches,
     }))
+}
+
+/// Resolve every release to its TMDB title (cached: DB, then memory, then
+/// TMDB), and settle the poster each card shows, in one place:
+///
+/// 1. the tracker's own poster, when it ships one: the uploader picked it
+///    for this exact release (resized when it is a tiny TMDB thumbnail);
+/// 2. else the poster of the title the SCENE name resolves to.
+async fn match_titles(state: &AppState, results: &mut [iris_core::search::SearchResult]) {
+    let Some(tmdb) = state.tmdb() else {
+        return;
+    };
+    let wanted: Vec<_> = results.iter().map(|r| (r.title.clone(), r.kind)).collect();
+    let matches = crate::fanout::map_ordered(wanted, |(title, kind)| async move {
+        crate::tmdb_resolve::resolve_release_name(state.db(), tmdb, &title, kind.map(Into::into))
+            .await
+    })
+    .await;
+    for (r, m) in results.iter_mut().zip(matches) {
+        r.poster_url = r
+            .poster_url
+            .as_deref()
+            .map(|url| crate::tmdb::resized_poster(url, crate::tmdb::POSTER_SIZE))
+            .or_else(|| {
+                let path = m.as_ref()?.poster_path.as_deref()?;
+                Some(crate::tmdb::image_url(path, crate::tmdb::POSTER_SIZE))
+            });
+        r.title_match = m.map(|m| iris_core::search::TitleMatch {
+            tmdb_id: m.tmdb_id,
+            kind: m.kind.into(),
+            title: m.title,
+            year: m.year,
+            poster_path: m.poster_path,
+        });
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct TitlesParams {
+    pub q: String,
+}
+
+/// One title for the Titles view: what the query could mean on TMDB, and
+/// whether the library already holds it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TitleCard {
+    pub tmdb_id: u64,
+    pub kind: MediaKind,
+    pub title: String,
+    pub year: Option<u32>,
+    pub overview: Option<String>,
+    pub poster_url: Option<String>,
+    /// The library collection holding this title, when there is one.
+    pub collection_id: Option<uuid::Uuid>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/search/titles",
+    params(TitlesParams),
+    responses((status = 200, description = "TMDB titles for the query, library ones flagged", body = [TitleCard])),
+    tag = "search",
+)]
+pub(crate) async fn titles(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(params): Query<TitlesParams>,
+) -> ApiResult<Json<Vec<TitleCard>>> {
+    let Some(tmdb) = state.tmdb() else {
+        return Ok(Json(Vec::new()));
+    };
+    let suggestions = tmdb.multi_search(&params.q).await.unwrap_or_default();
+    let state = &state;
+    let cards = crate::fanout::map_ordered(suggestions, |s| async move {
+        let kind = MediaKind::from(s.kind);
+        let collection_id = match i64::try_from(s.tmdb_id) {
+            Ok(id) => iris_db::collections::list_by_tmdb(state.db(), id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|c| c.kind == kind.as_wire())
+                .map(|c| c.id),
+            Err(_) => None,
+        };
+        TitleCard {
+            poster_url: s
+                .poster_path
+                .as_deref()
+                .map(|p| crate::tmdb::image_url(p, crate::tmdb::POSTER_SIZE)),
+            tmdb_id: s.tmdb_id,
+            kind,
+            title: s.title,
+            year: s.year,
+            overview: s.overview,
+            collection_id,
+        }
+    })
+    .await;
+    Ok(Json(cards))
 }
 
 /// Library rows relevant to this query — pertinence rules, so a series
@@ -214,6 +326,7 @@ async fn library_match(
         episode_infohash: None,
         episode_file_idx: None,
         season_episode_count: None,
+        poster_path: None,
     };
     match (summary.kind.as_str(), query.season, query.episode) {
         ("tv", season, Some(episode)) => {
@@ -250,6 +363,9 @@ async fn library_match(
         (_, s, e) if s.is_some() || e.is_some() => return None,
         _ => {}
     }
+    hit.poster_path = crate::routes::library::collection_artwork(state, hit.tmdb_id, &hit.kind)
+        .await
+        .0;
     Some(hit)
 }
 

@@ -90,10 +90,32 @@ impl TmdbKind {
     /// Parse the `"movie"` / `"tv"` wire form used by collections, query
     /// params and TMDB's own `media_type`.
     pub fn from_wire(s: &str) -> Option<Self> {
-        match s {
-            "movie" => Some(Self::Movie),
-            "tv" => Some(Self::Tv),
-            _ => None,
+        iris_core::search::MediaKind::from_wire(s).map(Self::from)
+    }
+
+    /// The wire form, which is also TMDB's path segment (`/movie/…`, `/tv/…`).
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Tv => "tv",
+        }
+    }
+}
+
+impl From<iris_core::search::MediaKind> for TmdbKind {
+    fn from(kind: iris_core::search::MediaKind) -> Self {
+        match kind {
+            iris_core::search::MediaKind::Movie => Self::Movie,
+            iris_core::search::MediaKind::Tv => Self::Tv,
+        }
+    }
+}
+
+impl From<TmdbKind> for iris_core::search::MediaKind {
+    fn from(kind: TmdbKind) -> Self {
+        match kind {
+            TmdbKind::Movie => Self::Movie,
+            TmdbKind::Tv => Self::Tv,
         }
     }
 }
@@ -222,11 +244,25 @@ impl TmdbClient {
     }
 }
 
-const fn kind_marker(k: TmdbKind) -> &'static str {
-    match k {
-        TmdbKind::Movie => "movie",
-        TmdbKind::Tv => "tv",
-    }
+/// Poster width for cards (search, library): sharp at TV distance, light
+/// on phones.
+pub const POSTER_SIZE: &str = "w342";
+const IMAGE_BASE: &str = "https://image.tmdb.org/t/p/";
+
+/// Full URL of a TMDB image path (`/abc.jpg`) at `size`.
+pub fn image_url(path: &str, size: &str) -> String {
+    format!("{IMAGE_BASE}{size}{path}")
+}
+
+/// A poster URL at `size` when it is a TMDB image (trackers often ship
+/// `w92`, unreadable on a card); any other URL is kept as is.
+pub fn resized_poster(url: &str, size: &str) -> String {
+    url.strip_prefix(IMAGE_BASE)
+        .and_then(|rest| rest.split_once('/'))
+        .map_or_else(
+            || url.to_owned(),
+            |(_, path)| image_url(&format!("/{path}"), size),
+        )
 }
 
 /// Year of a TMDB `YYYY-MM-DD` date.
@@ -313,7 +349,7 @@ impl TmdbClient {
         if trimmed.is_empty() {
             return Some(Vec::new());
         }
-        let marker = kind_marker(kind);
+        let marker = kind.as_wire();
         let cache_key = format!("{marker}:{}:{}", year.unwrap_or(0), trimmed.to_lowercase());
         self.inner
             .searches
@@ -354,7 +390,7 @@ impl TmdbClient {
     /// error (the caller renders an empty picker rather than failing
     /// onboarding).
     pub async fn genre_list(&self, kind: TmdbKind) -> Vec<Genre> {
-        let marker = kind_marker(kind);
+        let marker = kind.as_wire();
         self.inner
             .genres
             .get_or_fetch(marker, || async {
@@ -385,7 +421,7 @@ impl TmdbClient {
     /// "what's hot now" signal. French titles (`fr-FR`) so the pulse job can
     /// also search francophone trackers by their local title.
     pub async fn trending(&self, kind: TmdbKind, page: u32) -> Vec<MediaMetadata> {
-        let endpoint = kind_marker(kind);
+        let endpoint = kind.as_wire();
         let page = page.to_string();
         self.fetch_list(
             &format!("trending/{endpoint}/week"),
@@ -446,7 +482,7 @@ impl TmdbClient {
         filter: &DiscoverFilter,
         page: u32,
     ) -> Vec<MediaMetadata> {
-        let endpoint = kind_marker(kind);
+        let endpoint = kind.as_wire();
         let date_param = match kind {
             TmdbKind::Movie => "primary_release_date.gte",
             TmdbKind::Tv => "first_air_date.gte",
@@ -567,7 +603,7 @@ impl TmdbClient {
     ) -> Option<MediaMetadata> {
         // Cache key includes the kind so a /movie/X lookup doesn't
         // serve a stale /tv/X entry from a previous call.
-        let cache_key = (tmdb_id, kind_hint.map(kind_marker));
+        let cache_key = (tmdb_id, kind_hint.map(TmdbKind::as_wire));
         let entry = self
             .inner
             .typed_cache
@@ -600,7 +636,7 @@ impl TmdbClient {
 
     async fn fetch(&self, tmdb_id: u64, kind: TmdbKind) -> Result<MediaMetadata, Miss> {
         let raw: TmdbRaw = self
-            .get_json(&format!("{}/{tmdb_id}", kind_marker(kind)), &[], "lookup")
+            .get_json(&format!("{}/{tmdb_id}", kind.as_wire()), &[], "lookup")
             .await?;
         let date = raw.release_date.or(raw.first_air_date);
         let title = raw.title.or(raw.name).unwrap_or_default();
@@ -774,5 +810,26 @@ impl std::fmt::Debug for TmdbKind {
             TmdbKind::Movie => f.write_str("movie"),
             TmdbKind::Tv => f.write_str("tv"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{POSTER_SIZE, image_url, resized_poster};
+
+    #[test]
+    fn tracker_posters_on_tmdb_are_resized() {
+        assert_eq!(
+            resized_poster("https://image.tmdb.org/t/p/w92/gw.jpg", POSTER_SIZE),
+            "https://image.tmdb.org/t/p/w342/gw.jpg"
+        );
+        assert_eq!(
+            resized_poster("https://cdn.tracker.example/p/123.jpg", POSTER_SIZE),
+            "https://cdn.tracker.example/p/123.jpg"
+        );
+        assert_eq!(
+            image_url("/x.jpg", "w185"),
+            "https://image.tmdb.org/t/p/w185/x.jpg"
+        );
     }
 }

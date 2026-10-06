@@ -39,21 +39,41 @@ impl KeyExtractor for CloudflareIpKeyExtractor {
     type Key = IpAddr;
 
     fn extract<T>(&self, req: &http::Request<T>) -> Result<Self::Key, GovernorError> {
-        if let Some(hdr) = req.headers().get(&CF_CONNECTING_IP)
-            && let Ok(s) = hdr.to_str()
-            && let Ok(ip) = s.trim().parse::<IpAddr>()
-        {
-            return Ok(ip);
-        }
-        // No CF header => the request didn't come through the tunnel. Key on
-        // the real peer socket IP so each LAN device gets its own bucket
-        // (see module docs). Tunnelled traffic always carries the CF header
-        // and is handled above; everything reaching here is a direct peer.
-        if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
-            return Ok(addr.ip());
-        }
-        // Connect-info absent (server not serving with connect-info) — collapse
-        // onto one bucket rather than handing out unlimited fresh quota.
-        Ok(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        Ok(client_ip(req.headers(), req.extensions()))
+    }
+}
+
+/// The client a request comes from, as the module docs describe: the
+/// `CF-Connecting-IP` set by the tunnel, else the peer socket, else loopback.
+pub fn client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> IpAddr {
+    if let Some(hdr) = headers.get(&CF_CONNECTING_IP)
+        && let Ok(s) = hdr.to_str()
+        && let Ok(ip) = s.trim().parse::<IpAddr>()
+    {
+        return ip;
+    }
+    // No CF header => the request didn't come through the tunnel. Key on
+    // the real peer socket IP so each LAN device gets its own bucket
+    // (see module docs). Tunnelled traffic always carries the CF header
+    // and is handled above; everything reaching here is a direct peer.
+    if let Some(ConnectInfo(addr)) = extensions.get::<ConnectInfo<SocketAddr>>() {
+        return addr.ip();
+    }
+    // Connect-info absent (server not serving with connect-info) — collapse
+    // onto one bucket rather than handing out unlimited fresh quota.
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
+
+/// [`client_ip`] as a handler argument.
+pub struct ClientIp(pub IpAddr);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    fn from_request_parts(
+        parts: &mut http::request::Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        std::future::ready(Ok(Self(client_ip(&parts.headers, &parts.extensions))))
     }
 }

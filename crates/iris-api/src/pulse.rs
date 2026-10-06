@@ -26,7 +26,7 @@ use iris_media::filename::Language;
 use iris_providers::ProviderRegistry;
 
 use crate::anilist::AniListClient;
-use crate::freshness_scheduler::{candidate_of, kind_str, tmdb_kind, upsert_window_rows};
+use crate::freshness_scheduler::{candidate_of, upsert_window_rows};
 use crate::simkl::SimklClient;
 use crate::tmdb::{DiscoverFilter, MediaMetadata, TmdbClient, TmdbKind};
 
@@ -232,7 +232,7 @@ fn signals_of(metas: Vec<MediaMetadata>) -> Vec<NewSignal> {
 }
 
 async fn store(deps: &Deps, list: &str, kind: TmdbKind, entries: &[NewSignal]) {
-    let kind = kind_str(media_kind(kind));
+    let kind = kind.as_wire();
     if let Err(e) = iris_db::pulse::replace_list(&deps.pool, list, kind, entries).await {
         tracing::warn!(error = %e, list, kind, "pulse: storing list failed");
     }
@@ -309,13 +309,6 @@ fn mood_filter(rule: GenreRule, kind: TmdbKind, today: chrono::NaiveDate) -> Dis
     }
 }
 
-const fn media_kind(kind: TmdbKind) -> MediaKind {
-    match kind {
-        TmdbKind::Movie => MediaKind::Movie,
-        TmdbKind::Tv => MediaKind::Tv,
-    }
-}
-
 struct Target {
     tmdb_id: i64,
     kind: MediaKind,
@@ -380,7 +373,7 @@ async fn join_batch(deps: &Deps) -> usize {
         let found = join_one(deps, &catalog_ids, target).await;
         joined += usize::from(found);
         if let Err(e) =
-            iris_db::pulse::record_check(&deps.pool, target.tmdb_id, kind_str(target.kind), found)
+            iris_db::pulse::record_check(&deps.pool, target.tmdb_id, target.kind.as_wire(), found)
                 .await
         {
             tracing::warn!(error = %e, "pulse: recording a join failed");
@@ -392,7 +385,7 @@ async fn join_batch(deps: &Deps) -> usize {
 /// Search the trackers for one listed title and upsert its best verified
 /// release. `true` when a row was written.
 async fn join_one(deps: &Deps, catalog_ids: &HashSet<String>, target: &Target) -> bool {
-    let tk = tmdb_kind(target.kind);
+    let tk = TmdbKind::from(target.kind);
     let Ok(id) = u64::try_from(target.tmdb_id) else {
         return false;
     };

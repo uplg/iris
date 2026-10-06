@@ -97,6 +97,27 @@ pub(crate) struct CollectionListItem {
     /// clients render them as ordinary (empty) cards.
     #[serde(default)]
     ghost: bool,
+    /// TMDB poster path (`/abc.jpg`), so clients don't resolve it per
+    /// card. Additive — older clients ignore it.
+    #[serde(default)]
+    poster_path: Option<String>,
+}
+
+/// A collection's TMDB poster and backdrop paths. `kind` (`"movie"` /
+/// `"tv"`) picks the namespace: `/tv/60573` and `/movie/60573` are two
+/// unrelated entries.
+pub(crate) async fn collection_artwork(
+    state: &AppState,
+    tmdb_id: Option<i64>,
+    kind: &str,
+) -> (Option<String>, Option<String>) {
+    match (state.tmdb(), tmdb_id) {
+        (Some(client), Some(tid)) => client
+            .lookup_db_id(tid, crate::tmdb::TmdbKind::from_wire(kind))
+            .await
+            .map_or((None, None), |m| (m.poster_path, m.backdrop_path)),
+        _ => (None, None),
+    }
 }
 
 #[utoipa::path(
@@ -116,9 +137,8 @@ pub(crate) async fn list_library(
         let rows = iris_db::torrents::list_active(state.db()).await?;
         let out: Vec<TorrentView> = rows
             .into_iter()
-            .filter_map(|row| TorrentView::live(&state, row))
+            .filter_map(|row| TorrentView::live(&state, &user, row))
             .collect();
-        let _ = user; // keep the auth gate, no per-user filtering yet
         let total_uploaded_bytes = iris_db::torrents::total_uploaded_bytes(state.db())
             .await
             .unwrap_or(0);
@@ -153,12 +173,20 @@ pub(crate) async fn list_library(
         episode_count: s.episode_count,
         representative_infohash: s.representative_infohash,
         ghost,
+        poster_path: None,
     };
     let items = summaries
         .into_iter()
         .map(|s| to_item(s, false))
-        .chain(ghosts.into_iter().map(|s| to_item(s, true)))
-        .collect();
+        .chain(ghosts.into_iter().map(|s| to_item(s, true)));
+    let state = &state;
+    let items = crate::fanout::map_ordered(items, |mut item| async move {
+        item.poster_path = collection_artwork(state, item.tmdb_id, item.kind.as_wire())
+            .await
+            .0;
+        item
+    })
+    .await;
     Ok(Json(LibraryResponse::Collections { items }))
 }
 
@@ -435,7 +463,7 @@ pub(crate) async fn collection_detail(
     let torrents: Vec<TorrentView> = iris_db::torrents::list_in_collection(state.db(), id)
         .await?
         .into_iter()
-        .filter_map(|row| TorrentView::live(&state, row))
+        .filter_map(|row| TorrentView::live(&state, &user, row))
         .collect();
 
     // Everything below only reads the collection: run the lookups at once.
@@ -453,19 +481,7 @@ pub(crate) async fn collection_detail(
             .await
             .unwrap_or(None)
     };
-    // TMDB lookup for the hero poster — same gating as the Watchlist
-    // endpoint: only fires when a tmdb_id is attached. The collection's
-    // `kind` picks the namespace: `/tv/60573` vs `/movie/60573` are two
-    // unrelated entries.
-    let artwork = async {
-        match (state.tmdb(), collection.tmdb_id) {
-            (Some(client), Some(tid)) => client
-                .lookup_db_id(tid, crate::tmdb::TmdbKind::from_wire(&collection.kind))
-                .await
-                .map_or((None, None), |m| (m.poster_path, m.backdrop_path)),
-            _ => (None, None),
-        }
-    };
+    let artwork = collection_artwork(&state, collection.tmdb_id, &collection.kind);
     // Gone view first — its languages count as "owned" coverage below.
     let (follow, user_last_watched, (poster_path, backdrop_path), (gone_releases, gone_episodes)) = tokio::join!(
         follow,

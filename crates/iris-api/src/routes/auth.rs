@@ -286,7 +286,7 @@ pub(crate) async fn logout(State(state): State<AppState>, jar: CookieJar) -> Api
     Ok(jar)
 }
 
-async fn issue_session(
+pub(crate) async fn issue_session(
     state: &AppState,
     jar: &CookieJar,
     user_id: UserId,
