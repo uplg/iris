@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import type { CollectionListItem, ContinueWatchingItem, WatchlistItem } from '@iris/api/client';
+import '../styles/app.css';
 import { stubApi } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
 import Provided from '#lib/home/test/Provided.svelte';

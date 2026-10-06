@@ -2,6 +2,8 @@ import axe from 'axe-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
+import '../../styles/app.css';
+import { controlAt } from '#lib/test/hit.ts';
 import { stubApi } from '#lib/test/api.ts';
 import { ui } from '#lib/ui.svelte.ts';
 import { collection, torrent } from './fixtures.ts';
@@ -119,6 +121,21 @@ describe('Library', () => {
 		const attention = page.getByRole('region', { name: 'Needs attention' });
 		await expect.element(attention.getByText('Paused after download · nyaa releases never seed')).toBeVisible();
 		await expect.element(page.getByRole('region', { name: 'Seeding' }).getByRole('link', { name: 'Severance' })).toBeVisible();
+	});
+
+	it('a title or a release opens from its poster; a release keeps its own buttons', async () => {
+		backend();
+		await render(LibraryHarness);
+		const card = page.getByRole('link', { name: 'Arrival' });
+		await expect.element(card).toBeVisible();
+		expect(controlAt(card.element().closest('li')!.querySelector('.art'))).toBe(card.element());
+		await page.getByRole('button', { name: 'Downloads and seeding' }).click();
+		const seeding = page.getByRole('region', { name: 'Seeding' });
+		const title = seeding.getByRole('link', { name: 'Severance' });
+		await expect.element(title).toBeVisible();
+		const row = title.element().closest('li')!;
+		expect(controlAt(row.querySelector('.thumb'))).toBe(title.element());
+		for (const control of row.querySelectorAll('.actions a, .actions button')) expect(controlAt(control)).toBe(control);
 	});
 
 	it('delete is not operable without the right, and says why', async () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
-	// A title in a row or a grid: its artwork, its name (the one link), one line of facts and
-	// its state in words. A still (16:9) for what is being watched, with what is left.
+	// A title in a row or a grid: its artwork, its name (the one link, opened from anywhere on
+	// the card), one line of facts and its state in words. A still (16:9) for what is being
+	// watched, with what is left.
 	import Meter from '#lib/components/Meter.svelte';
 	import type { Snippet } from 'svelte';
 	import Poster from './Poster.svelte';
@@ -22,18 +23,18 @@
 	let { href, title, art, shape = 'poster', meta, status, progress, actions }: Props = $props();
 </script>
 
-<li class="card {shape}">
+<li class="card whole-card {shape}">
 	<Poster src={art} {title} {shape} />
 	{#if progress !== undefined}
 		<Meter share={progress} />
 	{/if}
 	<div class="text">
 		<div class="lines">
-			<a class="name" {href}>{title}</a>
+			<a class="name card-link" {href}>{title}</a>
 			{#if meta}<span class="meta">{meta}</span>{/if}
 			{#if status}<StatusLine tone={status.tone} text={status.text} />{/if}
 		</div>
-		{#if actions}{@render actions()}{/if}
+		{#if actions}<div class="actions">{@render actions()}</div>{/if}
 	</div>
 </li>
 
@@ -62,6 +63,11 @@
 		display: flex;
 		gap: var(--s-2);
 		align-items: flex-start;
+	}
+	.actions {
+		display: flex;
+		flex: none;
+		gap: var(--s-2);
 	}
 	.lines {
 		flex: 1;

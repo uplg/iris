@@ -29,7 +29,7 @@
 		<ul class="plain-list rows">
 			{#each sessions.data ?? [] as s (s.user_id)}
 				{@const playing = s.state === 'playing'}
-				<li class="row">
+				<li class="row whole-card">
 					<TitlePoster posterPath={s.poster_path} title={what(s)} />
 					<div class="text">
 						<span class="name">
@@ -38,7 +38,7 @@
 								><Icon name={playing ? 'play' : 'pause'} size={12} />{playing ? 'Playing' : 'Paused'}</span
 							>
 						</span>
-						<a class="what" href="/watch/{s.infohash}/{s.file_idx}">{what(s)}</a>
+						<a class="what card-link" href="/watch/{s.infohash}/{s.file_idx}">{what(s)}</a>
 						<span class="meta">{progressWords(s.position_seconds, s.duration_seconds)} · {app(s)} · {since(s.started_at)}</span>
 						<Meter share={watchedShare(s.position_seconds, s.duration_seconds)} --meter-max="16rem" />
 					</div>

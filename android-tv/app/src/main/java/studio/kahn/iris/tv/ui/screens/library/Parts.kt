@@ -41,6 +41,7 @@ import studio.kahn.iris.tv.ui.components.Meter
 import studio.kahn.iris.tv.ui.components.PanelOption
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
+import studio.kahn.iris.tv.ui.components.touchClick
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
@@ -86,6 +87,10 @@ fun ReleaseItem(
     actionsBeside: Boolean = false,
 ) {
     val wide = actionsBeside
+    val open = actions.onOpenTitle
+    val collection = row.collectionId
+    // A tap on its poster or its title opens the title (as on the web); its buttons stay its own.
+    val openTitle = Modifier.touchClick(enabled = open != null && collection != null) { if (open != null && collection != null) open(collection) }
     Row(
         modifier
             .fillMaxWidth()
@@ -97,11 +102,11 @@ fun ReleaseItem(
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
     ) {
         if (showTitle) {
-            Artwork(title = row.title, imageUrl = row.posterUrl, width = IrisSize.posterMini, showTitle = false)
+            Artwork(title = row.title, imageUrl = row.posterUrl, width = IrisSize.posterMini, showTitle = false, modifier = openTitle)
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
             if (showTitle) {
-                Text(row.title, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(row.title, style = IrisType.bodyStrong, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = openTitle)
             }
             Text(row.release, style = IrisType.mono, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (row.progress != null) {

@@ -50,6 +50,7 @@ import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.Meter
 import studio.kahn.iris.tv.ui.components.RowCard
+import studio.kahn.iris.tv.ui.components.touchClick
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.screens.library.HistoryGroupUi
@@ -221,7 +222,17 @@ private fun HistoryGroupRow(
             .padding(vertical = IrisSpace.s3),
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s5),
     ) {
-        Artwork(group.title, group.posterUrl, width = IrisSize.posterMini, showTitle = false)
+        // A tap on the poster plays the film, else opens the title (as on the web); never a
+        // download again, which stays its line's own action.
+        val solo = group.lines.first().takeIf { group.solo && it.action == LineAction.Play }
+        val artClick = if (solo != null) lineClick(group, solo, actions) else group.collectionId?.let { id -> { actions.onOpenTitle(id) } }
+        Artwork(
+            group.title,
+            group.posterUrl,
+            width = IrisSize.posterMini,
+            showTitle = false,
+            modifier = Modifier.touchClick(enabled = artClick != null) { artClick?.invoke() },
+        )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
             if (group.solo) {
                 val line = group.lines.first()
@@ -245,6 +256,14 @@ private fun HistoryGroupRow(
     }
 }
 
+/** What OK on a line does, null when it does nothing. */
+private fun lineClick(group: HistoryGroupUi, line: HistoryLine, actions: HistoryActions): (() -> Unit)? = when (line.action) {
+    LineAction.Play -> { { actions.onPlay(line.infohash, line.fileIdx) } }
+    LineAction.Restore -> { { actions.onRestore(line) } }
+    LineAction.OpenTitle -> group.collectionId?.let { id -> { actions.onOpenTitle(id) } }
+    LineAction.None -> null
+}
+
 @Composable
 private fun LineCard(
     group: HistoryGroupUi,
@@ -254,16 +273,10 @@ private fun LineCard(
     modifier: Modifier = Modifier,
 ) {
     val restoring = "restore:${line.key}" in busy
+    val click = lineClick(group, line, actions)
     RowCard(
-        onClick = {
-            when (line.action) {
-                LineAction.Play -> actions.onPlay(line.infohash, line.fileIdx)
-                LineAction.Restore -> actions.onRestore(line)
-                LineAction.OpenTitle -> group.collectionId?.let(actions.onOpenTitle)
-                LineAction.None -> Unit
-            }
-        },
-        enabled = line.action != LineAction.None,
+        onClick = { click?.invoke() },
+        enabled = click != null,
         modifier = modifier,
     ) { _ ->
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {

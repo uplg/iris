@@ -36,9 +36,13 @@
 		<div class="text">
 			<span class="name">
 				{#if !it.deleted}
-					<a href={watchHref(it.infohash, it.file_idx)} aria-label="Play {group.solo ? name : `${group.title}, ${name}`}">{name}</a>
+					<a
+						class={[group.solo && 'card-link']}
+						href={watchHref(it.infohash, it.file_idx)}
+						aria-label="Play {group.solo ? name : `${group.title}, ${name}`}">{name}</a
+					>
 				{:else if group.solo && collections && group.collectionId}
-					<a href="/collection/{group.collectionId}">{name}</a>
+					<a class="card-link" href="/collection/{group.collectionId}">{name}</a>
 				{:else}
 					{name}
 				{/if}
@@ -62,7 +66,7 @@
 
 <ul class="plain-list history">
 	{#each groups as group (group.key)}
-		<li class="title-row">
+		<li class="title-row whole-card">
 			<TitlePoster posterPath={group.posterPath} title={group.title} gone={group.ghost} />
 			{#if group.solo}
 				{@render line(group, group.items[0])}
@@ -70,7 +74,7 @@
 				<div class="series">
 					<h2 class="series-title">
 						{#if collections && group.collectionId}
-							<a href="/collection/{group.collectionId}">{group.title}</a>
+							<a class="card-link" href="/collection/{group.collectionId}">{group.title}</a>
 						{:else}
 							{group.title}
 						{/if}
