@@ -78,7 +78,6 @@ import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.components.StatusLine
-import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
 import studio.kahn.iris.tv.ui.screens.library.CollectionPage
 import studio.kahn.iris.tv.ui.screens.library.CollectionUiState
 import studio.kahn.iris.tv.ui.screens.library.CollectionViewModel
@@ -680,7 +679,7 @@ internal fun LanguagesPanel(
             modifier = Modifier.padding(horizontal = IrisSpace.s4),
         )
         PanelLabel("Audio")
-        ChosenPanelOptions(
+        PanelOptions(
             options = listOf("") + langs.audioOptions,
             selected = audio,
             onSelect = { audio = it },

@@ -56,6 +56,7 @@ import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.LoadingState
 import studio.kahn.iris.tv.ui.components.PanelOptions
+import studio.kahn.iris.tv.ui.components.PanelParagraphs
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
@@ -200,12 +201,12 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
         when (panel) {
             ReleasePanel.Notes -> state.notes?.let { notes ->
                 SidePanel("Release notes from ${state.providerId}", onDismiss = { panel = null }, footer = "Written by the uploader") {
-                    Paragraphs(paragraphsOf(notes), IrisType.reading)
+                    PanelParagraphs(paragraphsOf(notes), IrisType.reading)
                 }
             }
             ReleasePanel.Nfo -> state.details?.nfo?.let { nfo ->
                 SidePanel("Technical sheet (NFO)", onDismiss = { panel = null }) {
-                    Paragraphs(nfoChunks(nfo), IrisType.mono)
+                    PanelParagraphs(nfoChunks(nfo), IrisType.mono)
                 }
             }
             ReleasePanel.Files -> SidePanel("File to play", onDismiss = { panel = null }) {
@@ -217,6 +218,7 @@ fun ReleaseContent(state: ReleaseUiState, grab: GrabUi, actions: ReleaseActions,
                         panel = null
                     },
                     label = { "${it.path.substringAfterLast('/')} · ${formatSize(it.sizeBytes)}" },
+                    focusOnOpen = true,
                 )
             }
             null -> Unit
@@ -373,30 +375,6 @@ private fun Notes(state: ReleaseUiState, modifier: Modifier, onPanel: (ReleasePa
             if (notes != null) ActionButton("Read all", { onPanel(ReleasePanel.Notes) }, style = ActionStyle.Secondary, size = ActionSize.Small)
             if (nfo != null) ActionButton("Technical sheet (NFO)", { onPanel(ReleasePanel.Nfo) }, style = ActionStyle.Secondary, size = ActionSize.Small)
         }
-    }
-}
-
-/** Long text in a side panel, one focusable block at a time so the D-pad scrolls it. */
-@Composable
-private fun Paragraphs(blocks: List<AnnotatedString>, style: androidx.compose.ui.text.TextStyle) {
-    val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
-    blocks.forEachIndexed { i, block ->
-        var focused by remember { mutableStateOf(false) }
-        Text(
-            block,
-            style = style,
-            color = IrisColor.ink,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(IrisFocus.ringWidth + IrisFocus.ringOffset)
-                .then(if (i == 0) Modifier.focusRequester(first) else Modifier)
-                .onFocusChanged { focused = it.isFocused }
-                .focusRing(focused, IrisShape.key)
-                .focusable()
-                .padding(horizontal = 10.dp, vertical = IrisSpace.s1),
-        )
-        Spacer(Modifier.height(IrisSpace.s1))
     }
 }
 

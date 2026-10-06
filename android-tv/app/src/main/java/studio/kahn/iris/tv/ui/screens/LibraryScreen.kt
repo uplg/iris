@@ -68,7 +68,6 @@ import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.SidePanel
 import studio.kahn.iris.tv.ui.components.StaleNotice
 import studio.kahn.iris.tv.ui.components.TextInput
-import studio.kahn.iris.tv.ui.screens.library.ChosenPanelOptions
 import studio.kahn.iris.tv.ui.screens.library.DownloadsUi
 import studio.kahn.iris.tv.ui.components.FocusReturn
 import studio.kahn.iris.tv.ui.components.rememberFocusReturn
@@ -94,6 +93,7 @@ import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 import studio.kahn.iris.tv.ui.components.NoticeLine
+import studio.kahn.iris.tv.ui.components.PanelOptions
 
 /** Everything the library screen hands back to its ViewModel and to navigation. */
 @Immutable
@@ -611,7 +611,7 @@ internal fun FindAndSortPanel(
                 .focusRequester(first),
         )
         PanelLabel("Sort")
-        ChosenPanelOptions(
+        PanelOptions(
             options = Sort.entries,
             selected = f.sort,
             onSelect = { onFilters(f.copy(sort = it)) },

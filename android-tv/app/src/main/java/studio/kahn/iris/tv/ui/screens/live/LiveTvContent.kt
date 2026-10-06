@@ -165,6 +165,7 @@ fun LiveTvContent(
                         onPickCountry(it.code)
                     },
                     label = { "${it.flag} ${it.name}" },
+                    focusOnOpen = true,
                 )
             }
         }

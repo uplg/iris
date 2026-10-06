@@ -90,6 +90,7 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
+import studio.kahn.iris.tv.ui.components.PanelOptions
 
 /**
  * Settings and the account: the web's account page (who I am, playback
@@ -488,18 +489,7 @@ private fun LanguagePanel(
         addAll(languageOptions(current))
     }
     SidePanel(title = title, onDismiss = onDismiss, footer = "Saved for every device at once.") {
-        val first = remember { FocusRequester() }
-        LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
         if (error != null) StatusLine(error, tone = StatusTone.Down, modifier = Modifier.padding(horizontal = 10.dp))
-        Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-            options.forEach { option ->
-                PanelOption(
-                    words(option),
-                    selected = option == current,
-                    onClick = { onPick(option) },
-                    modifier = if (option == current) Modifier.focusRequester(first) else Modifier,
-                )
-            }
-        }
+        PanelOptions(options, selected = current, onSelect = onPick, label = words, focusOnOpen = true)
     }
 }

@@ -4,6 +4,19 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import studio.kahn.iris.tv.ui.theme.IrisFocus
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -93,7 +106,9 @@ fun SidePanel(
             Column(
                 Modifier
                     .weight(1f)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScroll(rememberScrollState())
+                    // The scroll clips: room for the focus ring of the first and last options.
+                    .padding(vertical = IrisFocus.ringWidth + IrisFocus.ringOffset),
                 verticalArrangement = Arrangement.spacedBy(IrisSpace.s1),
                 content = content,
             )
@@ -152,7 +167,11 @@ fun PanelOption(
     }
 }
 
-/** A radio group of [PanelOption]s. */
+/**
+ * A radio group of [PanelOption]s. The chosen option (the first when none is) carries
+ * [selectedFocus]: a panel opens on what is chosen. [focusOnOpen] focuses it at once (a panel
+ * with one group); with several groups, pass the group's [selectedFocus] and focus it yourself.
+ */
 @Composable
 fun <T> PanelOptions(
     options: List<T>,
@@ -160,11 +179,50 @@ fun <T> PanelOptions(
     onSelect: (T) -> Unit,
     label: (T) -> String,
     modifier: Modifier = Modifier,
+    focusOnOpen: Boolean = false,
+    selectedFocus: FocusRequester? = null,
 ) {
+    val own = remember { FocusRequester() }
+    val focus = selectedFocus ?: own
+    val target = selected?.takeIf { it in options } ?: options.firstOrNull()
+    if (focusOnOpen) LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Column(modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
         options.forEach { option ->
-            PanelOption(label(option), selected = option == selected, onClick = { onSelect(option) })
+            PanelOption(
+                label(option),
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                modifier = if (option == target) Modifier.focusRequester(focus) else Modifier,
+            )
         }
+    }
+}
+
+/**
+ * Long text in a [SidePanel] (release notes, an NFO), one block per paragraph. Each block takes
+ * focus, its ring around it, so the D-pad scrolls the text a paragraph at a time; the first is
+ * focused when the panel opens.
+ */
+@Composable
+fun PanelParagraphs(blocks: List<AnnotatedString>, style: TextStyle) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    blocks.forEachIndexed { i, block ->
+        var focused by remember { mutableStateOf(false) }
+        Text(
+            block,
+            style = style,
+            color = IrisColor.ink,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(IrisFocus.ringWidth + IrisFocus.ringOffset)
+                .then(if (i == 0) Modifier.focusRequester(first) else Modifier)
+                .onFocusChanged { focused = it.isFocused }
+                .focusRing(focused, IrisShape.key)
+                .focusable()
+                .padding(horizontal = 10.dp, vertical = IrisSpace.s1),
+        )
+        Spacer(Modifier.height(IrisSpace.s1))
     }
 }
 

@@ -57,30 +57,6 @@ fun StatusTone.cardTone(): StatusTone = when (this) {
     StatusTone.Ok, StatusTone.Busy, StatusTone.Info, StatusTone.Muted -> StatusTone.Muted
 }
 
-/**
- * [studio.kahn.iris.tv.ui.components.PanelOptions] whose chosen option carries [selectedFocus],
- * so a panel opens on what is chosen (the shared one has no way to reach an option).
- */
-@Composable
-fun <T> ChosenPanelOptions(
-    options: List<T>,
-    selected: T?,
-    onSelect: (T) -> Unit,
-    label: (T) -> String,
-    selectedFocus: FocusRequester,
-) {
-    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(IrisSpace.s1)) {
-        options.forEach { option ->
-            PanelOption(
-                label(option),
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                modifier = if (option == selected) Modifier.focusRequester(selectedFocus) else Modifier,
-            )
-        }
-    }
-}
-
 /** What a release row can do; a null callback hides the action. */
 @Immutable
 data class ReleaseActions(
