@@ -40,6 +40,10 @@ pub mod nfo;
 pub trait SearchProvider: Send + Sync {
     fn id(&self) -> &str;
     fn capabilities(&self) -> ProviderCapabilities;
+    /// The provider's configured client (pinned TLS roots, timeouts,
+    /// user-agent). Every request — `.torrent` downloads included — goes
+    /// through it.
+    fn http(&self) -> &reqwest::Client;
     async fn search(&self, q: &SearchQuery) -> Result<ProviderPage>;
     async fn resolve(&self, external_id: &str) -> Result<TorrentSource>;
 
@@ -92,12 +96,15 @@ pub trait SearchProvider: Send + Sync {
     /// which evaporates on restart, while a URL persisted on
     /// `available_episodes.download_url` survives forever.
     ///
-    /// Default implementation: plain GET via a fresh `reqwest`
-    /// client. Sufficient for Torznab + UNIT3D layouts where the
-    /// URL is signed with an `api_token=` query parameter. Providers
-    /// with cookie / header auth needs override this.
+    /// Default implementation: plain GET through [`Self::http`].
+    /// Sufficient for Torznab + UNIT3D layouts where the URL is signed
+    /// with an `api_token=` query parameter. Providers with cookie /
+    /// header auth needs override this.
     async fn fetch_bytes(&self, url: &str) -> Result<bytes::Bytes> {
-        let resp = reqwest::get(url)
+        let resp = self
+            .http()
+            .get(url)
+            .send()
             .await
             .map_err(|e| Error::Provider(format!("fetch_bytes get: {e}")))?;
         let status = resp.status();

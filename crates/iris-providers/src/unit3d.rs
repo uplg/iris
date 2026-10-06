@@ -286,6 +286,10 @@ impl SearchProvider for Unit3dProvider {
         &self.id
     }
 
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             returns_magnet: false,

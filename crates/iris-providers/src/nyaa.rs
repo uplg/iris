@@ -165,6 +165,10 @@ impl SearchProvider for NyaaProvider {
         &self.id
     }
 
+    fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             returns_magnet: false,
@@ -843,6 +847,53 @@ mod tests {
             ..q
         };
         assert_eq!(NyaaProvider::query_text(&raw), "One Piece S01E1174");
+    }
+
+    /// The default `fetch_bytes` must go through the provider's own client
+    /// (its pinned TLS roots and headers), not a bare `reqwest::get`.
+    #[tokio::test]
+    async fn resolve_downloads_through_the_provider_client() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
+            let body = b"d4:infod4:name1:xee";
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            sock.write_all(head.as_bytes()).await.unwrap();
+            sock.write_all(body).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-iris-test",
+            reqwest::header::HeaderValue::from_static("1"),
+        );
+        let p = NyaaProvider {
+            id: "nyaa".into(),
+            base_url: format!("http://{addr}"),
+            category: "1_0".into(),
+            filter: 0,
+            http: reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .unwrap(),
+        };
+        let source = p.resolve("123").await.expect("resolve");
+        assert!(matches!(source, TorrentSource::TorrentFile(_)));
+        let request = server.await.unwrap();
+        assert!(
+            request.starts_with("GET /download/123.torrent"),
+            "{request}"
+        );
+        assert!(request.contains("x-iris-test: 1"), "{request}");
     }
 
     #[test]
