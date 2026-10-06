@@ -28,6 +28,7 @@
 	import { readStoredVolume, writeStoredVolume } from '#lib/player/browser.ts';
 	import EpisodesPanel from './EpisodesPanel.svelte';
 	import GettingReady from './GettingReady.svelte';
+	import { isTheaterKey } from './keys.ts';
 	import { listsEpisodes, retrySearchQuery, sideRows, type SideRow } from './episodes.ts';
 	import { factsLine } from './facts.ts';
 	import { keptForText, PlaybackChoices } from './prefs.ts';
@@ -58,23 +59,21 @@
 		theater = !theater;
 		keptTheater.set(theater ? '1' : '0');
 	}
+	// T, while the focus is in the player only (keys.ts)
+	let screen = $state<HTMLElement>();
 	$effect(() => {
+		const el = screen;
+		if (!el) return;
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 't' || e.ctrlKey || e.metaKey || e.altKey) return;
-			const t = e.target;
-			if (t instanceof HTMLElement && (t.isContentEditable || t.closest('input, textarea, select'))) return;
+			if (!isTheaterKey(e)) return;
 			e.preventDefault();
 			toggleTheater();
 		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
+		el.addEventListener('keydown', onKey);
+		return () => el.removeEventListener('keydown', onKey);
 	});
 
-	const torrentQ = createQuery(() => ({
-		queryKey: ['torrent', infohash],
-		queryFn: () => torrents.get(infohash),
-		refetchInterval: 3000
-	}));
+	const torrentQ = createQuery(() => read.torrent(infohash));
 	const data = $derived(torrentQ.data);
 	const file = $derived(data?.files.find((f) => f.index === fileIdx));
 	const videoFiles = $derived((data?.files ?? []).filter((f) => isVideo(f.path)));
@@ -98,14 +97,17 @@
 		queryFn: () => torrents.probe(infohash, fileIdx),
 		retry: (count: number, e: Error) => notOnDisk(e) && count < 30,
 		retryDelay: 2000,
-		refetchInterval: (q) => (q.state.data ? false : notOnDisk(q.state.error) ? 2000 : false)
+		refetchInterval: (q) => (q.state.data ? false : notOnDisk(q.state.error) ? 2000 : false),
+		// a file's streams never change under it (a regrab invalidates them)
+		staleTime: Infinity
 	}));
 	const manifestQ = createQuery(() => ({
 		queryKey: ['manifest', infohash, fileIdx],
 		queryFn: () => fetchManifest(infohash, fileIdx),
 		retry: (count: number, e: Error) => e instanceof ManifestNotReadyError && count < 30,
 		retryDelay: 2000,
-		refetchInterval: (q) => (q.state.data ? false : q.state.error instanceof ManifestNotReadyError ? 2000 : false)
+		refetchInterval: (q) => (q.state.data ? false : q.state.error instanceof ManifestNotReadyError ? 2000 : false),
+		staleTime: Infinity
 	}));
 	const manifest = $derived(manifestQ.data);
 
@@ -127,11 +129,7 @@
 		queryFn: () => library.collection(collectionId!),
 		enabled: isTv
 	}));
-	const episodeContextQ = createQuery(() => ({
-		queryKey: ['episode-context', infohash, fileIdx],
-		queryFn: () => follows.episodeContext(infohash, fileIdx),
-		staleTime: 5 * 60_000
-	}));
+	const episodeContextQ = createQuery(() => read.episodeContext(infohash, fileIdx));
 
 	// tier: picked from the manifest, `?tier=` pins it; a demoted tier never comes back
 	const demotions = new Demotions();
@@ -176,13 +174,9 @@
 		playerError = null;
 		tier = to;
 		if (m) {
-			void fetch(`/api/torrents/${m.infohash}/files/${m.file_idx}/playback-error`, {
-				method: 'POST',
-				credentials: 'include',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ tier: from, reason, codec: m.video[0]?.codec ?? null, browser: navigator.userAgent }),
-				keepalive: true
-			}).catch(() => undefined);
+			void torrents
+				.reportPlaybackError(m.infohash, m.file_idx, { tier: from, reason, codec: m.video[0]?.codec ?? null, browser: navigator.userAgent })
+				.catch(() => undefined);
 		}
 	}
 
@@ -258,9 +252,13 @@
 			? { infohash: nextEp.infohash, fileIdx: nextEp.file_idx, season: nextEp.season, episode: nextEp.episode }
 			: null
 	);
+	// the next episode may have come on disk since the page opened (prepared here, or elsewhere)
+	$effect(() => {
+		if (nearEnd) void untrack(() => qc.invalidateQueries({ queryKey: KEYS.episodeContext(infohash, fileIdx) }));
+	});
 	function maybePromptNext() {
 		const ctx = episodeContextQ.data;
-		if (!ctx?.followed || ctx.next?.status !== 'available' || nextDismissed || nextPrompted) return;
+		if (!ctx?.followed || ctx.next?.status !== 'available' || !ctx.next.follow_id || nextDismissed || nextPrompted) return;
 		nextPrompted = true;
 		nextDialog = true;
 	}
@@ -273,7 +271,7 @@
 			() => torrents.regrab(infohash),
 			() => {
 				regrabbed = true;
-				void qc.invalidateQueries({ queryKey: ['torrent', infohash] });
+				void qc.invalidateQueries({ queryKey: KEYS.torrent(infohash) });
 				void qc.invalidateQueries({ queryKey: ['play-status', infohash, fileIdx] });
 				void qc.invalidateQueries({ queryKey: ['probe', infohash, fileIdx] });
 			},
@@ -424,7 +422,7 @@
 {:else if data}
 	<div class="watch" class:theater class:with-side={rows.length > 1 && !theater}>
 		<div class="main">
-			<div class="screen">
+			<div class="screen" bind:this={screen}>
 				{#if ready && manifest && tier && source}
 					<IrisPlayer
 						{tier}
@@ -578,6 +576,7 @@
 											nextDismissed = true;
 											nextDialog = false;
 											ui.say(`${episodeCode(ep.season, ep.episode)} is being prepared.`);
+											void qc.invalidateQueries({ queryKey: KEYS.episodeContext(infohash, fileIdx) });
 										}
 									);
 								}}><Icon name="download" busy={prepare.is()} />Prepare</button
