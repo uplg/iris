@@ -104,7 +104,7 @@
 					<div class="poster"><Poster src={tmdbImage(c.poster_path, 'w342')} title={c.display_title} eager /></div>
 					<Hero collection={c} meta={info.data} resume={resumeOf(c, watching.data)} {rows} />
 					<aside class="side" aria-label="Releases and languages">
-						<OnDisk collection={c} />
+						<OnDisk collection={c} watching={watching.data ?? []} />
 						{#if series}<Languages collectionId={c.id} title={c.display_title} {known} />{/if}
 					</aside>
 				</div>

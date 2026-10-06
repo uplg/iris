@@ -106,7 +106,6 @@ function series(over: Partial<CollectionDetail> = {}): CollectionDetail {
 
 function backend(c: CollectionDetail = series(), extra: Parameters<typeof stubApi>[0] = {}) {
 	return stubApi({
-		...extra,
 		[`GET /library/collections/${c.id}`]: () => c,
 		'/me/continue-watching?include_grabbable=true': [
 			{
@@ -138,7 +137,9 @@ function backend(c: CollectionDetail = series(), extra: Parameters<typeof stubAp
 		'/me/playback-preferences?collection_id=c1': { audio_language: 'en', subtitle_language: 'off', for_collection: false },
 		'PUT /me/playback-preferences': new Response(null, { status: 204 }),
 		'POST /library/collections/c1/grab/2/5?language=english': { already_grabbed: false, infohash: 't9', file_idx: 3 },
-		'DELETE /torrents/t2': new Response(null, { status: 204 })
+		'DELETE /torrents/t2': new Response(null, { status: 204 }),
+		// a test's own answers win over these defaults
+		...extra
 	});
 }
 
@@ -297,6 +298,50 @@ describe('Collection', () => {
 		expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(320);
 		const result = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } });
 		expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+	});
+
+	it("a movie's copies say where their viewer stands: resume, watch again, play", async () => {
+		const file = (i: number) => ({ files: [{ index: i, path: `Dune.2021.${i}.mkv`, size_bytes: 9 }] });
+		backend(
+			series({
+				id: 'm2',
+				kind: 'movie',
+				tmdb_id: null,
+				torrents: [torrent('t2', file(1)), torrent('done', file(4)), torrent('new', file(5))],
+				episodes: [],
+				available_episodes: []
+			}),
+			{
+				'/me/continue-watching?include_grabbable=true': [
+					{
+						infohash: 't2',
+						file_idx: 1,
+						completed: false,
+						grabbable: false,
+						next_up: false,
+						position_seconds: 1930,
+						last_watched_at: '2026-10-05T20:00:00Z',
+						tmdb_verified: true,
+						torrent_name: 'x'
+					},
+					{
+						infohash: 'done',
+						file_idx: 4,
+						completed: true,
+						grabbable: false,
+						next_up: false,
+						position_seconds: 9000,
+						last_watched_at: '2026-10-04T20:00:00Z',
+						tmdb_verified: true,
+						torrent_name: 'y'
+					}
+				]
+			}
+		);
+		await render(Collection, { id: 'm2' });
+		await expect.element(page.getByRole('link', { name: /^Resume at 32:10: / })).toBeVisible();
+		await expect.element(page.getByRole('link', { name: /^Watch again: / })).toBeVisible();
+		await expect.element(page.getByRole('link', { name: /^Play: / })).toBeVisible();
 	});
 
 	it('takes a movie with a single copy straight to the player', async () => {

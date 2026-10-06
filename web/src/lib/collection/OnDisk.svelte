@@ -2,8 +2,9 @@
 	// The releases on disk for this title: what each one is, who added it, how far its download
 	// is; a movie's copies play from here. Deleting is for an admin or whoever added it (the
 	// server says so per release, `can_delete`): others see the control, not operable, and why.
-	import { torrents as torrentsApi, type CollectionDetail, type TorrentView } from '@iris/api/client';
-	import { ago, formatSize, percent, plural } from '@iris/api/format';
+	import { torrents as torrentsApi, type CollectionDetail, type ContinueWatchingItem, type TorrentView } from '@iris/api/client';
+	import { ago, clock, formatSize, percent, plural } from '@iris/api/format';
+	import { isResumable } from '#lib/watched.ts';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
 	import { refocus } from '#lib/focus.ts';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -16,7 +17,15 @@
 	import { isFetching } from '#lib/torrent.ts';
 	import { watchHref } from '#lib/paths.ts';
 
-	let { collection: c }: { collection: CollectionDetail } = $props();
+	let { collection: c, watching = [] }: { collection: CollectionDetail; watching?: ContinueWatchingItem[] } = $props();
+
+	/** A copy's play button follows where its viewer stands, like the TV: resume, again, or play. */
+	function verb(t: TorrentView, fileIdx: number): string {
+		const w = watching.find((x) => x.infohash === t.infohash && x.file_idx === fileIdx);
+		if (w?.completed) return 'Watch again';
+		if (w && isResumable(w.position_seconds)) return `Resume at ${clock(w.position_seconds)}`;
+		return 'Play';
+	}
 	const id = $props.id();
 	const g = new Gesture();
 	let heading = $state<HTMLElement>();
@@ -60,8 +69,9 @@
 					{/if}
 					<div class="actions">
 						{#if c.kind === 'movie' && main}
-							<a class="btn primary" href={watchHref(t.infohash, main.index)} aria-label="Play: {nameOf(t)}"
-								><Icon name="play" size={16} />Play</a
+							{@const action = verb(t, main.index)}
+							<a class="btn primary" href={watchHref(t.infohash, main.index)} aria-label="{action}: {nameOf(t)}"
+								><Icon name="play" size={16} />{action}</a
 							>
 						{/if}
 						{#if t.can_delete}
