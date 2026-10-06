@@ -11,7 +11,7 @@ use std::io::Read;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesRef, Event};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Programme {
@@ -89,8 +89,10 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
     let window_start = now - chrono::Duration::hours(36);
     let window_end = now + chrono::Duration::hours(48);
 
+    // Not `trim_text(true)`: quick-xml splits element text at every entity
+    // reference and trims each fragment, so "Tom &amp; Jerry" arrived as
+    // "Tom" / GeneralRef / "Jerry". Fragments are joined and trimmed at End.
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut index = EpgIndex::default();
     let mut buf = Vec::new();
@@ -99,50 +101,37 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
     let mut current: Option<(String, Programme)> = None;
     // Which child element's text we're inside (title/desc/category/display-name).
     let mut field: Option<&'static str> = None;
+    let mut text_acc = String::new();
     // Lowercased id of the <channel> element being parsed (for display-name).
     let mut current_channel_id: Option<String> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => match e.name().as_ref() {
-                "channel" => {
-                    current_channel_id = e
-                        .attributes()
-                        .flatten()
-                        .find(|a| a.key.as_ref() == "id")
-                        .map(|a| a.value.to_lowercase());
+            Ok(Event::Start(e)) => {
+                text_acc.clear();
+                match e.name().as_ref() {
+                    "channel" => {
+                        current_channel_id = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.as_ref() == "id")
+                            .map(|a| a.value.to_lowercase());
+                    }
+                    "display-name" if current_channel_id.is_some() => {
+                        field = Some("display-name");
+                    }
+                    "programme" => current = programme_open(&e, window_start, window_end),
+                    "title" if current.is_some() => field = Some("title"),
+                    "desc" if current.is_some() => field = Some("desc"),
+                    "category" if current.is_some() => field = Some("category"),
+                    _ => {}
                 }
-                "display-name" if current_channel_id.is_some() => field = Some("display-name"),
-                "programme" => current = programme_open(&e, window_start, window_end),
-                "title" if current.is_some() => field = Some("title"),
-                "desc" if current.is_some() => field = Some("desc"),
-                "category" if current.is_some() => field = Some("category"),
-                _ => {}
-            },
-            Ok(Event::Text(t)) => {
-                let text = || t.to_string();
-                // <display-name> inside a <channel>: fold name → id (first wins).
-                if field == Some("display-name")
-                    && let Some(id) = &current_channel_id
-                {
-                    let name = text();
-                    if !name.is_empty() {
-                        index
-                            .id_by_name
-                            .entry(super::channels::normalize(&name))
-                            .or_insert_with(|| id.clone());
-                    }
-                } else if let (Some(field), Some((_, prog))) = (field, current.as_mut()) {
-                    let text = text();
-                    if !text.is_empty() {
-                        match field {
-                            "title" => prog.title = text,
-                            // first <desc> / <category> wins
-                            "desc" if prog.description.is_none() => prog.description = Some(text),
-                            "category" if prog.category.is_none() => prog.category = Some(text),
-                            _ => {}
-                        }
-                    }
+            }
+            Ok(Event::Text(t)) if field.is_some() => text_acc.push_str(&t),
+            Ok(Event::CData(c)) if field.is_some() => text_acc.push_str(&c),
+            Ok(Event::GeneralRef(r)) if field.is_some() => {
+                if let Some(ch) = resolve_general_ref(&r) {
+                    text_acc.push(ch);
                 }
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
@@ -155,7 +144,18 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
                     field = None;
                 }
                 "channel" => current_channel_id = None,
-                "title" | "desc" | "category" | "display-name" => field = None,
+                "title" | "desc" | "category" | "display-name" => {
+                    if let Some(name) = field.take() {
+                        apply_field(
+                            &mut index,
+                            name,
+                            text_acc.trim(),
+                            current_channel_id.as_ref(),
+                            current.as_mut().map(|(_, p)| p),
+                        );
+                    }
+                    text_acc.clear();
+                }
                 _ => {}
             },
             // EOF ends the parse; a mid-document error salvages what parsed
@@ -170,6 +170,52 @@ pub fn parse_xmltv(xml: &str, now: DateTime<Utc>) -> EpgIndex {
         programmes.sort_by_key(|p| p.start);
     }
     index
+}
+
+/// Store one finished text element: `<display-name>` folds name → id (first
+/// wins), `<title>` keeps the last one, the first `<desc>` / `<category>` wins.
+fn apply_field(
+    index: &mut EpgIndex,
+    field: &str,
+    text: &str,
+    channel_id: Option<&String>,
+    prog: Option<&mut Programme>,
+) {
+    if text.is_empty() {
+        return;
+    }
+    if field == "display-name" {
+        if let Some(id) = channel_id {
+            index
+                .id_by_name
+                .entry(super::channels::normalize(text))
+                .or_insert_with(|| id.clone());
+        }
+        return;
+    }
+    let Some(prog) = prog else { return };
+    match field {
+        "title" => text.clone_into(&mut prog.title),
+        "desc" if prog.description.is_none() => prog.description = Some(text.to_owned()),
+        "category" if prog.category.is_none() => prog.category = Some(text.to_owned()),
+        _ => {}
+    }
+}
+
+/// An entity reference inside element text: numeric refs plus the five
+/// predefined XML entities.
+fn resolve_general_ref(r: &BytesRef<'_>) -> Option<char> {
+    if let Ok(Some(ch)) = r.resolve_char_ref() {
+        return Some(ch);
+    }
+    match &**r {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => None,
+    }
 }
 
 /// Open a `<programme>` element into `(lowercase channel id, empty Programme)`
@@ -295,6 +341,26 @@ mod tests {
         assert_eq!(index.id_for_name("Empty Chan"), None);
         // unknown name
         assert_eq!(index.id_for_name("Nope"), None);
+    }
+
+    #[test]
+    fn entities_do_not_truncate_text() {
+        let xml = r#"<tv>
+  <channel id="C.fr"><display-name>France &amp; Co</display-name></channel>
+  <programme start="20260705200000 +0000" stop="20260705210000 +0000" channel="C.fr">
+    <title>Tom &amp; Jerry</title>
+    <desc>L&apos;amour est dans le pr&#233;</desc>
+    <category>Jeunesse &amp; dessins</category>
+  </programme>
+</tv>"#;
+        let now = ts("2026-07-05T20:30:00Z");
+        let index = parse_xmltv(xml, now);
+        let (cur, _) = index.now_next("c.fr", now);
+        let cur = cur.unwrap();
+        assert_eq!(cur.title, "Tom & Jerry");
+        assert_eq!(cur.description.as_deref(), Some("L'amour est dans le pré"));
+        assert_eq!(cur.category.as_deref(), Some("Jeunesse & dessins"));
+        assert_eq!(index.id_for_name("France & Co"), Some("c.fr"));
     }
 
     #[test]
