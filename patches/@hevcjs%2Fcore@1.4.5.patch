@@ -1,0 +1,30 @@
+diff --git a/dist/index.js b/dist/index.js
+index cc78e51cdacc05e653e78e7e9ae442151caa5e66..bfd37226f0813e0be6bd606446da6ceb055c5343 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -245,7 +245,9 @@ var H264Encoder = class {
+       // ~0.1 bpp
+       framerate: this._fps,
+       hardwareAcceleration: "no-preference",
+-      latencyMode: "realtime",
++      // [iris patch] Gecko refuses realtime H.264 encoding ("The given encoding is not supported",
++      // every profile, measured on Zen 1.23b / Firefox 155) and takes quality mode.
++      latencyMode: typeof navigator !== "undefined" && /Firefox\//.test(navigator.userAgent) ? "quality" : "realtime",
+       avc: { format: "avc" }
+     });
+   }
+diff --git a/dist/transcode-worker.js b/dist/transcode-worker.js
+index e5d9d1bba36c5ccad3dd9434a86d0a6cbef5d9e5..1dc395c0508ed0fdc21e5158386967801acce264 100644
+--- a/dist/transcode-worker.js
++++ b/dist/transcode-worker.js
+@@ -9899,7 +9899,9 @@
+         // ~0.1 bpp
+         framerate: this._fps,
+         hardwareAcceleration: "no-preference",
+-        latencyMode: "realtime",
++        // [iris patch] Gecko refuses realtime H.264 encoding ("The given encoding is not supported",
++        // every profile, measured on Zen 1.23b / Firefox 155) and takes quality mode.
++        latencyMode: typeof navigator !== "undefined" && /Firefox\//.test(navigator.userAgent) ? "quality" : "realtime",
+         avc: { format: "avc" }
+       });
+     }
