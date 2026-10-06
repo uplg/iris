@@ -110,35 +110,32 @@ pub struct NewTorrent {
     pub added_by: UserId,
 }
 
-/// Insert if the infohash is new, otherwise return the existing row
-/// (un-soft-deleting it). The torrent's own `tmdb_id` is no longer written —
+/// Insert if the infohash is new, otherwise return the existing row. A live
+/// row is returned as is. A soft-deleted one is brought back as the new
+/// grab: the re-grabber becomes `added_by` and the release's provenance is
+/// the new one. One statement, so two concurrent grabs of the same
+/// infohash both succeed. The torrent's own `tmdb_id` is no longer written —
 /// the parent collection's id is the single source of truth (resolved from the
 /// collection's SCENE identity); see `collection_assign::resolve_collection_tmdb`.
 pub async fn upsert(pool: &SqlitePool, new: NewTorrent) -> Result<TorrentRow, sqlx::Error> {
-    if let Some(existing) = find_by_infohash(pool, &new.infohash).await? {
-        if existing.deleted_at.is_some() {
-            // Re-grab of an evicted/deleted torrent: the payload is gone from
-            // disk (librqbit re-preallocates zero-filled files), so the old
-            // `finished_at` no longer reflects reality. Reset it — endpoints
-            // like `play_asset` trust `finished_at` as "complete on disk" and
-            // would otherwise probe a zero-filled preallocation. It gets
-            // re-stamped by `set_finished` when the re-download completes.
-            sqlx::query("UPDATE torrents SET deleted_at = NULL, finished_at = NULL WHERE id = ?1")
-                .bind(existing.id)
-                .execute(pool)
-                .await?;
-        }
-        return find_by_infohash(pool, &new.infohash)
-            .await?
-            .ok_or(sqlx::Error::RowNotFound);
-    }
     let id = Uuid::new_v4();
     let now = Utc::now();
     let added_by: Uuid = new.added_by.into();
+    // On a resurrect the payload is gone from disk (librqbit re-preallocates
+    // zero-filled files), so `finished_at` is reset: `play_asset` trusts it
+    // as "complete on disk". `set_finished` re-stamps it later.
     sqlx::query(
         "INSERT INTO torrents (id, infohash, name, total_size_bytes, source_provider, \
          source_external_id, added_by, added_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT(infohash) DO UPDATE SET \
+            source_provider = COALESCE(excluded.source_provider, torrents.source_provider), \
+            source_external_id = \
+                COALESCE(excluded.source_external_id, torrents.source_external_id), \
+            added_by = excluded.added_by, \
+            finished_at = NULL, \
+            deleted_at = NULL \
+         WHERE torrents.deleted_at IS NOT NULL",
     )
     .bind(id)
     .bind(&new.infohash)
@@ -571,6 +568,49 @@ mod tests {
         let again = upsert(&pool, new).await.unwrap();
         assert_eq!(again.id, row.id);
         assert!(again.finished_at.is_some(), "live dup keeps finished_at");
+    }
+
+    #[tokio::test]
+    async fn regrab_of_a_deleted_torrent_belongs_to_the_new_grab() {
+        let pool = migrated_pool().await;
+        let first = crate::test_support::make_named_user(&pool, "A").await;
+        let second = crate::test_support::make_named_user(&pool, "B").await;
+        let grab = |by: UserId, provider: &str| NewTorrent {
+            infohash: "cc".repeat(20),
+            name: "Heat 1995".into(),
+            total_size_bytes: 1,
+            source_provider: Some(provider.into()),
+            source_external_id: Some(format!("{provider}-1")),
+            added_by: by,
+        };
+        let row = upsert(&pool, grab(first, "c411")).await.unwrap();
+
+        let live = upsert(&pool, grab(second, "seedpool")).await.unwrap();
+        assert_eq!(live.added_by, row.added_by, "a live row keeps its grabber");
+        assert_eq!(live.source_provider.as_deref(), Some("c411"));
+
+        soft_delete(&pool, TorrentId(row.id)).await.unwrap();
+        let back = upsert(&pool, grab(second, "seedpool")).await.unwrap();
+        assert_eq!(back.id, row.id);
+        assert_eq!(back.added_by, Uuid::from(second));
+        assert_eq!(back.source_provider.as_deref(), Some("seedpool"));
+        assert_eq!(back.source_external_id.as_deref(), Some("seedpool-1"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_grabs_share_one_row() {
+        let pool = migrated_pool().await;
+        let user = make_user(&pool).await;
+        let new = NewTorrent {
+            infohash: "dd".repeat(20),
+            name: "Twice".into(),
+            total_size_bytes: 1,
+            source_provider: None,
+            source_external_id: None,
+            added_by: user,
+        };
+        let (a, b) = tokio::join!(upsert(&pool, new.clone()), upsert(&pool, new));
+        assert_eq!(a.unwrap().id, b.unwrap().id);
     }
 
     /// Upsert a row then overwrite its lifetime counters — test helper
