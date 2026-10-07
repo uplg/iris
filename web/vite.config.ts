@@ -4,6 +4,7 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
+import type { Plugin } from 'vite';
 
 // The version the `X-Iris-Client: web/<version>` header carries (@iris/api).
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
@@ -22,8 +23,29 @@ function buildId(): string {
 	}
 }
 
+const BUILD_ID = buildId();
+
+// `/version.json`, as the React app before 1.6.0 polls it (`{ buildId }`): a tab left open on
+// that bundle reads a new id and offers its reload. Without the file the SPA fallback answered
+// HTML, which the old tab took for "no update" and stayed on the old app.
+function legacyVersionJson(): Plugin {
+	return {
+		name: 'iris-legacy-version-json',
+		apply: 'build',
+		applyToEnvironment: (env) => env.name === 'client',
+		generateBundle() {
+			this.emitFile({
+				type: 'asset',
+				fileName: 'version.json',
+				source: `${JSON.stringify({ buildId: BUILD_ID, version: pkg.version })}\n`
+			});
+		}
+	};
+}
+
 export default defineConfig({
 	plugins: [
+		legacyVersionJson(),
 		sveltekit({
 			compilerOptions: {
 				// runes everywhere except in libraries
@@ -33,7 +55,7 @@ export default defineConfig({
 			adapter: adapter({ fallback: 'index.html' }),
 			// a deploy is noticed within a minute, taken at the next harmless moment
 			// (+layout.svelte: a navigation, or the app seen again)
-			version: { name: buildId(), pollInterval: 60_000 },
+			version: { name: BUILD_ID, pollInterval: 60_000 },
 			serviceWorker: { register: false }
 		})
 	],
