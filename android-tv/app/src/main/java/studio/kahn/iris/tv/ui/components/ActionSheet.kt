@@ -100,19 +100,27 @@ fun <T> ActionSheet(
 }
 
 /**
+ * The remote's Back, taken before Compose sees it: unhandled, its press moves the focus out of
+ * the focus group that holds it (`FocusDirection.Exit`) and is spent there, so the back
+ * dispatcher only hears the second press. Both halves are swallowed while [enabled]; [onBack]
+ * runs on the release, as the platform's Back does. A gesture Back on a phone sends no key:
+ * keep a `BackHandler` beside it for that one.
+ */
+fun Modifier.backKey(enabled: Boolean = true, onBack: () -> Unit): Modifier = onPreviewKeyEvent { event ->
+    if (!enabled || event.key != Key.Back) return@onPreviewKeyEvent false
+    if (event.type == KeyEventType.KeyUp) onBack()
+    true
+}
+
+/**
  * The keys of a dialog or a sheet, which may open from a hold of OK: OK still down (its
  * auto-repeats, its release) must not press what takes focus, so Select is swallowed until
- * that press is released; a fresh press (not a repeat) goes through. Back closes ([onBack]),
- * handled here rather than by the dispatcher, which lost the first press with focus inside.
+ * that press is released; a fresh press (not a repeat) goes through. Back closes ([backKey]).
  */
 @Composable
 fun Modifier.dialogKeys(onBack: () -> Unit): Modifier {
     var openingPressReleased by remember { mutableStateOf(false) }
-    return onPreviewKeyEvent { event ->
-        if (event.key == Key.Back) {
-            if (event.type == KeyEventType.KeyUp) onBack()
-            return@onPreviewKeyEvent true
-        }
+    return backKey(onBack = onBack).onPreviewKeyEvent { event ->
         if (openingPressReleased) return@onPreviewKeyEvent false
         val select = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
         if (!select) return@onPreviewKeyEvent false

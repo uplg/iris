@@ -69,6 +69,7 @@ import studio.kahn.iris.tv.data.buildPlayer
 import studio.kahn.iris.tv.data.humanizePlaybackError
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.backKey
 import studio.kahn.iris.tv.ui.components.KeyHint
 import studio.kahn.iris.tv.ui.components.KeyHints
 import studio.kahn.iris.tv.ui.components.Keys
@@ -439,7 +440,8 @@ fun LiveTvWatchScreen(
             }
         }
     }
-    BackHandler(enabled = actionsShown && errorMessage == null) { actionsShown = false }
+    val actionsHide = actionsShown && errorMessage == null
+    BackHandler(enabled = actionsHide) { actionsShown = false }
 
     val touchscreen = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) }
     val clock: (OffsetDateTime) -> String = ::clockTime
@@ -448,6 +450,7 @@ fun LiveTvWatchScreen(
         Modifier
             .fillMaxSize()
             .background(IrisColor.stage)
+            .backKey(actionsHide) { actionsShown = false }
             .onPreviewKeyEvent { event ->
                 val code = event.nativeKeyEvent.keyCode
                 val centre = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER ||
