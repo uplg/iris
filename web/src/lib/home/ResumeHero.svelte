@@ -1,25 +1,21 @@
 <script lang="ts">
 	// The first thing to resume: where it stopped, what is left, the one button that plays it
-	// from there, the series' episodes (a film has none), starting over; and the languages the
-	// play will use. A tile whose file is not on disk gets it first, then plays it while it
-	// downloads.
-	import { createQuery } from '@tanstack/svelte-query';
+	// from there, the series' episodes (a film has none), starting over. A tile whose file is
+	// not on disk gets it first, then plays it while it downloads.
 	import { tmdbImage, type ContinueWatchingItem } from '@iris/api/client';
 	import { clock, duration, episodeCode, kindLabel, percent, prettySceneName, timeLeft } from '@iris/api/format';
 	import Icon from '#lib/components/Icon.svelte';
 	import Progress from '#lib/components/Progress.svelte';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
 	import Hero from './Hero.svelte';
-	import { languagesLine, secondsLeft } from './data.ts';
+	import { secondsLeft } from './data.ts';
 	import { isResumable, watchedShare } from '#lib/watched.ts';
-	import { read } from '#lib/queries.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
 	import { getAndPlay, nextName, startOver, tileKey } from './continue.ts';
 	import { watchHref } from '#lib/paths.ts';
 
 	let { item }: { item: ContinueWatchingItem } = $props();
 	const md = tmdbMeta(() => ({ id: item.tmdb_id, kind: item.kind, trusted: item.tmdb_verified }));
-	const prefs = createQuery(() => read.playbackPrefs(item.collection_id ?? null));
 	const g = new Gesture();
 
 	const title = $derived(md.data?.title ?? prettySceneName(item.torrent_name));
@@ -33,7 +29,6 @@
 			: [md.data?.year ? String(md.data.year) : null, kindLabel(item.kind), item.duration_seconds ? duration(item.duration_seconds) : null]
 	);
 	const getting = $derived(g.is(`get:${tileKey(item)}`));
-	const languages = $derived(languagesLine(prefs.data, item.kind));
 </script>
 
 <Hero
@@ -70,9 +65,6 @@
 				<Icon name="rotate-ccw" busy={g.is(`over:${tileKey(item)}`)} />Start over
 			</button>
 		{/if}
-	{/snippet}
-	{#snippet footer()}
-		{#if languages}<p class="hint"><Icon name="languages" size={16} />{languages}</p>{/if}
 	{/snippet}
 </Hero>
 

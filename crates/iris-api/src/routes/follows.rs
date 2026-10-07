@@ -330,6 +330,7 @@ async fn summarize(state: &AppState, row: &iris_db::follows::FollowRow) -> Follo
         crate::routes::library::collection_artwork(state, trusted_tmdb, "tv").await;
     let new_count = iris_db::available_episodes::count_new_for_series(
         state.db(),
+        row.user_id.into(),
         &row.normalized_name,
         row.last_visited_at,
     )

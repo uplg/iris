@@ -1,6 +1,6 @@
 <script lang="ts">
-	// "Right now": what the house's Iris is doing, in a few words (downloads, new episodes,
-	// room on disk, what it shares). Read again every few seconds while something downloads.
+	// "Right now": what is downloading, in a few words, and nothing when nothing is. Read again
+	// every few seconds while something downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import { loadable } from '#lib/query.ts';
@@ -12,7 +12,7 @@
 	const value = loadable(summary);
 </script>
 
-{#if value.loading || value.failed || facts.length}
+{#if facts.length}
 	<section class="now" aria-labelledby="now-title">
 		<h2 id="now-title" class="eyebrow">Right now</h2>
 		<Loaded {value}>

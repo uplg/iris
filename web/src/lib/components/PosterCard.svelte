@@ -19,12 +19,17 @@
 		progress?: number;
 		/** A menu beside the name (remove from the row…). */
 		actions?: Snippet;
+		/** A short fact on the art's corner ("3 new"), read with the card. */
+		badge?: string;
 	}
-	let { href, title, art, shape = 'poster', meta, status, progress, actions }: Props = $props();
+	let { href, title, art, shape = 'poster', meta, status, progress, actions, badge }: Props = $props();
 </script>
 
 <li class="card whole-card {shape}">
-	<Poster src={art} {title} {shape} />
+	<div class="art-wrap">
+		<Poster src={art} {title} {shape} />
+		{#if badge}<span class="badge">{badge}</span>{/if}
+	</div>
 	{#if progress !== undefined}
 		<Meter share={progress} />
 	{/if}
@@ -39,6 +44,21 @@
 </li>
 
 <style>
+	.art-wrap {
+		position: relative;
+	}
+	.badge {
+		position: absolute;
+		top: var(--s-2);
+		left: var(--s-2);
+		padding: var(--s-half) var(--s-2);
+		border-radius: var(--radius-pill);
+		background: var(--accent);
+		color: var(--on-accent);
+		font: var(--t-meta);
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+	}
 	/* one column no wider than the card: a title that is one long word (a release name)
 	   would otherwise widen it to the word, the art with it */
 	.card {

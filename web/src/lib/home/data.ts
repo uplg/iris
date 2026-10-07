@@ -1,9 +1,8 @@
 // The words the home and discover screens say about what they read: the "Right now" facts,
-// the downloads per collection, a title's kind and the playback languages, said once.
+// the downloads per collection, a title's kind, said once.
 
-import type { ContinueWatchingItem, HomeSummary, MediaKind, PlaybackPrefs, TorrentView } from '@iris/api/client';
-import { formatSize, percent, plural, thisTitle, timeLeft } from '@iris/api/format';
-import { languagesPhrase } from '#lib/language.ts';
+import type { ContinueWatchingItem, HomeSummary, TorrentView } from '@iris/api/client';
+import { percent, plural, timeLeft } from '@iris/api/format';
 import { isFetching } from '#lib/torrent.ts';
 
 const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
@@ -15,9 +14,6 @@ export function rightNow(s: HomeSummary): string[] {
 		const eta = known(s.downloading_eta_seconds) && s.downloading_eta_seconds > 0 ? ` · ${timeLeft(s.downloading_eta_seconds)}` : '';
 		facts.push(`${plural(s.downloading, 'download')} · ${percent(s.downloading_pct)}${eta}`);
 	}
-	if (s.new_episodes > 0) facts.push(`${plural(s.new_episodes, 'new episode')} on your watchlist`);
-	if (s.disk) facts.push(`${formatSize(s.disk.free_bytes)} free on disk`);
-	if (s.seeding > 0) facts.push(`Seeding ${plural(s.seeding, 'release')}`);
 	return facts;
 }
 
@@ -37,12 +33,4 @@ export function downloadsByCollection(list: readonly TorrentView[]): Map<string,
 /** Seconds left to watch, when the length is known. */
 export function secondsLeft(it: Pick<ContinueWatchingItem, 'duration_seconds' | 'position_seconds'>): number | null {
 	return known(it.duration_seconds) && it.duration_seconds > 0 ? Math.max(0, it.duration_seconds - it.position_seconds) : null;
-}
-
-/** The languages a play will use, when the account (or the title) chose them. */
-export function languagesLine(p: PlaybackPrefs | undefined, kind: MediaKind | null | undefined): string | null {
-	if (!p) return null;
-	const phrase = languagesPhrase(p);
-	if (!phrase) return null;
-	return `Plays with ${phrase}${p.for_collection ? `, as chosen for ${thisTitle(kind)}` : ''}.`;
 }

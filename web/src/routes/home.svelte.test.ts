@@ -94,7 +94,7 @@ describe('home', () => {
 		await expect.element(hero.getByRole('link', { name: 'Resume at 32:10' })).toHaveAttribute('href', '/watch/abc/3');
 		await expect.element(hero.getByRole('link', { name: 'All episodes' })).toHaveAttribute('href', '/collection/c1');
 		await expect.element(hero.getByRole('button', { name: 'Start over' })).toBeVisible();
-		await expect.element(hero.getByText('Plays with audio in French, subtitles off.')).toBeVisible();
+		await expect.element(hero.getByText(/^Plays with/)).not.toBeInTheDocument();
 		await expect.element(shelf('Continue watching').getByText('S2:E4')).toBeVisible();
 		await expect.poll(() => document.title).toBe('Iris');
 	});
@@ -109,7 +109,6 @@ describe('home', () => {
 		await show();
 		const hero = page.getByRole('region', { name: 'Avatar (2009)' });
 		await expect.element(hero.getByRole('link', { name: 'Resume at 32:10' })).toBeVisible();
-		await expect.element(hero.getByText('Plays with audio in French, subtitles off, as chosen for this film.')).toBeVisible();
 		expect(hero.getByRole('link', { name: 'All episodes' }).elements()).toHaveLength(0);
 	});
 
@@ -214,8 +213,10 @@ describe('home', () => {
 		});
 		await show();
 		const now = page.getByRole('region', { name: 'Right now' });
-		for (const fact of ['2 downloads · 64%', '3 new episodes on your watchlist', '412 GB free on disk', 'Seeding 18 releases'])
-			await expect.element(now.getByText(fact)).toBeVisible();
+		// only what downloads: new episodes, room on disk and seeding are not said here
+		await expect.element(now.getByText('2 downloads · 64%')).toBeVisible();
+		for (const gone of ['3 new episodes on your watchlist', '412 GB free on disk', 'Seeding 18 releases'])
+			await expect.element(now.getByText(gone)).not.toBeInTheDocument();
 	});
 
 	it('the watchlist: fresh episodes first, what downloads said in words', async () => {
@@ -228,20 +229,24 @@ describe('home', () => {
 		});
 		await show();
 		const row = shelf('Your watchlist');
-		await expect.element(row.getByText('3 new episodes')).toBeVisible();
+		// new episodes on the poster's corner, a line only while one downloads, nothing for nothing new
+		await expect.element(row.getByText('3 new', { exact: true })).toBeVisible();
 		await expect.element(row.getByText('Downloading · 42%')).toBeVisible();
+		await expect.element(row.getByText('No new episodes')).not.toBeInTheDocument();
 		const names = [...row.element().querySelectorAll('.name')].map((a) => a.textContent);
 		expect(names).toEqual(['The Bear', 'Andor']);
 	});
 
-	it('with nothing to resume, the library leads; its row says what is on disk', async () => {
+	it('with nothing to resume, the library leads; its row says only what is not plainly there', async () => {
 		home({
 			'/library?view=collections': { view: 'collections', items: [title(), title({ id: 'c5', display_title: 'Alien', ghost: true })] }
 		});
 		await show();
 		await expect.element(page.getByRole('region', { name: 'Dune' }).getByText('In your library')).toBeVisible();
 		const row = shelf('Your library');
-		await expect.element(row.getByText('On disk')).toBeVisible();
+		// on disk goes without saying, and so does its size; a reclaimed title is still said
+		await expect.element(row.getByText('On disk', { exact: true })).not.toBeInTheDocument();
+		await expect.element(row.getByText(/\d+(\.\d+)? (GB|MB)/)).not.toBeInTheDocument();
 		await expect.element(row.getByText('No longer on disk')).toBeVisible();
 		await expect.element(row.getByRole('link', { name: 'See all' })).toHaveAttribute('href', '/library');
 	});

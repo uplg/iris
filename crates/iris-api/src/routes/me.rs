@@ -358,9 +358,14 @@ async fn follow_new_count(
             .await
             .unwrap_or(None);
     let engaged_at = library::engaged_at(f.last_visited_at, last_watched);
-    iris_db::available_episodes::count_new_for_series(state.db(), &f.normalized_name, engaged_at)
-        .await
-        .unwrap_or(0)
+    iris_db::available_episodes::count_new_for_series(
+        state.db(),
+        user_id,
+        &f.normalized_name,
+        engaged_at,
+    )
+    .await
+    .unwrap_or(0)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -439,12 +444,14 @@ pub(crate) async fn forget_searches(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// The "right now" line of the home page: disk, downloads, seeding, new
-/// episodes. For every account (the admin storage view is quota-based and
-/// admin-only).
+/// The "right now" line of the home page: what is downloading. Disk,
+/// seeding and new episodes are no longer said there (the household found
+/// them noise; the watchlist cards carry their own new-episode badges): the
+/// fields stay for the apps that require them, empty, so those apps hide them.
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct HomeSummary {
-    /// The filesystem holding the downloads; `None` when it can't be read.
+    /// Deprecated: always `None`.
+    #[schema(deprecated)]
     disk: Option<DiskSpace>,
     /// Torrents still downloading.
     downloading: u32,
@@ -453,9 +460,11 @@ pub(crate) struct HomeSummary {
     /// Seconds until they all finish at the current speed; `None` when
     /// nothing moves.
     downloading_eta_seconds: Option<u64>,
-    /// Finished torrents still sharing with the swarm.
+    /// Deprecated: always `0`.
+    #[schema(deprecated)]
     seeding: u32,
-    /// New episodes across the caller's watchlist, as its badges count them.
+    /// Deprecated: always `0` (the watchlist cards count their own).
+    #[schema(deprecated)]
     new_episodes: i64,
 }
 
@@ -473,7 +482,7 @@ pub(crate) struct DiskSpace {
 )]
 pub(crate) async fn summary(
     State(state): State<AppState>,
-    user: AuthUser,
+    _user: AuthUser,
 ) -> ApiResult<Json<HomeSummary>> {
     let torrents = state.engine().list();
     let active: Vec<_> = torrents
@@ -490,53 +499,14 @@ pub(crate) async fn summary(
         0.0
     };
     let downloading_eta_seconds = (speed > 0).then(|| total.saturating_sub(done) / speed);
-    let seeding = torrents
-        .iter()
-        .filter(|t| t.finished && t.state == iris_torrent::TorrentState::Live)
-        .count();
-
-    // The badges alone: no artwork, no titles.
-    let follows = iris_db::follows::list_for_user(state.db(), user.id).await?;
-    let state_ref = &state;
-    let new_episodes = crate::fanout::map_ordered(follows, |f| async move {
-        let collection_id = iris_db::collections::find_by_parsed_title(
-            state_ref.db(),
-            &f.normalized_name,
-            iris_db::collections::Kind::Tv,
-        )
-        .await
-        .ok()
-        .flatten()
-        .map_or(f.id, |c| c.id);
-        follow_new_count(state_ref, user.id, &f, collection_id).await
-    })
-    .await
-    .iter()
-    .sum();
-
-    let dir = state.cfg().storage.download_dir.clone();
-    let disk = tokio::task::spawn_blocking(move || disk_space(&dir))
-        .await
-        .ok()
-        .flatten();
     Ok(Json(HomeSummary {
-        disk,
+        disk: None,
         downloading: u32::try_from(active.len()).unwrap_or(u32::MAX),
         downloading_pct,
         downloading_eta_seconds,
-        seeding: u32::try_from(seeding).unwrap_or(u32::MAX),
-        new_episodes,
+        seeding: 0,
+        new_episodes: 0,
     }))
-}
-
-/// Size and free space of the filesystem holding `dir`, as an unprivileged
-/// user sees it.
-fn disk_space(dir: &std::path::Path) -> Option<DiskSpace> {
-    let (total_bytes, free_bytes) = iris_torrent::disk_space(dir)?;
-    Some(DiskSpace {
-        total_bytes,
-        free_bytes,
-    })
 }
 
 #[derive(Debug, serde::Deserialize, ToSchema)]
@@ -1063,7 +1033,7 @@ mod summary_tests {
     use crate::routes::auth::tests::{app_with_member, call};
 
     #[tokio::test]
-    async fn the_home_summary_counts_the_watchlist_badges() {
+    async fn the_watchlist_keeps_its_badges_and_the_home_summary_no_longer_repeats_them() {
         let (state, app, user, _) = app_with_member().await;
         let db = state.db();
         iris_db::collections::find_or_create(
@@ -1118,8 +1088,12 @@ mod summary_tests {
             .map(|w| w["new_count"].as_i64().unwrap())
             .sum();
         assert_eq!(badges, 3);
+        // the fields stay for the apps that require them, empty, so those apps hide them
         let summary = call(&app, "GET", "/api/me/summary", Some(&token), None, None).await;
-        assert_eq!(summary.json["new_episodes"], badges);
+        assert_eq!(summary.json["new_episodes"], 0);
+        assert_eq!(summary.json["seeding"], 0);
+        assert!(summary.json["disk"].is_null());
+        assert!(summary.json["downloading"].is_number());
     }
 }
 

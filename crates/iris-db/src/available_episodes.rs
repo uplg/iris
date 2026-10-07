@@ -341,8 +341,12 @@ pub async fn set_seeders(pool: &SqlitePool, id: Uuid, seeders: i64) -> Result<()
 /// offer cache produced "48 new" badges. Only grabbable episodes the
 /// household doesn't own count: no season packs (episode 0), no dead
 /// offers, and a new release of an owned episode is not a new episode.
+/// Nor is an old one a tracker only now indexed: an episode counts only
+/// past the furthest one this user watched in the series (a new tracker
+/// reporting whole back seasons made "23 new" out of episodes long seen).
 pub async fn count_new_for_series(
     pool: &SqlitePool,
+    user_id: iris_core::ids::UserId,
     normalized_name: &str,
     since: Option<DateTime<Utc>>,
 ) -> Result<i64, sqlx::Error> {
@@ -359,10 +363,17 @@ pub async fn count_new_for_series(
                JOIN collections c ON c.id = ef.collection_id \
                JOIN torrents t ON t.infohash = ef.infohash AND t.deleted_at IS NULL \
                WHERE c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
-                 AND ef.season = ae.season AND ef.episode = ae.episode)",
+                 AND ef.season = ae.season AND ef.episode = ae.episode) \
+           AND ae.season * 100000 + ae.episode > COALESCE(( \
+               SELECT MAX(ef.season * 100000 + ef.episode) FROM playback_progress p \
+               JOIN episode_files ef ON ef.infohash = p.infohash AND ef.file_idx = p.file_idx \
+               JOIN collections c ON c.id = ef.collection_id \
+               WHERE p.user_id = ?3 AND c.parsed_title_normalized = ?1 AND c.kind = 'tv' \
+                 AND ef.episode > 0), 0)",
     ))
     .bind(normalized_name)
     .bind(cutoff)
+    .bind(Uuid::from(user_id))
     .fetch_one(pool)
     .await?;
     Ok(row.0)
@@ -629,10 +640,43 @@ mod count_new_tests {
         .await
         .unwrap();
 
-        let n = count_new_for_series(&pool, "severance", Some(since))
+        let n = count_new_for_series(&pool, user, "severance", Some(since))
             .await
             .unwrap();
         assert_eq!(n, 1, "only S02E02 is new and grabbable");
+
+        // watching S02E01 puts the frontier there: S02E02 is still ahead
+        crate::playback::upsert(
+            &pool,
+            crate::playback::UpsertProgress {
+                user_id: user,
+                infohash: "a".repeat(40),
+                file_idx: 0,
+                position_seconds: 3000.0,
+                duration_seconds: Some(3100.0),
+                audio_track_idx: None,
+                subtitle_track_idx: None,
+                completed: true,
+            },
+        )
+        .await
+        .unwrap();
+        let n = count_new_for_series(&pool, user, "severance", Some(since))
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "S02E02 is past the frontier");
+
+        // a tracker indexing the back catalogue now: S01E05 is behind, not new
+        upsert(&pool, offer(1, 5, "old-season", Some(10)))
+            .await
+            .unwrap();
+        let n = count_new_for_series(&pool, user, "severance", Some(since))
+            .await
+            .unwrap();
+        assert_eq!(
+            n, 1,
+            "an old episode a tracker just indexed is not a new episode"
+        );
     }
 
     #[tokio::test]
@@ -678,7 +722,7 @@ mod count_new_tests {
         assert_eq!(visible(pool.clone()).await, (1, 0, 0, 0, false));
         let since = Utc::now() - chrono::TimeDelta::hours(1);
         assert_eq!(
-            count_new_for_series(&pool, "severance", Some(since))
+            count_new_for_series(&pool, admin, "severance", Some(since))
                 .await
                 .unwrap(),
             1,

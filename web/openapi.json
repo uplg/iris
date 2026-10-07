@@ -6010,7 +6010,7 @@
       },
       "HomeSummary": {
         "type": "object",
-        "description": "The \"right now\" line of the home page: disk, downloads, seeding, new\nepisodes. For every account (the admin storage view is quota-based and\nadmin-only).",
+        "description": "The \"right now\" line of the home page: what is downloading. Disk,\nseeding and new episodes are no longer said there (the household found\nthem noise; the watchlist cards carry their own new-episode badges): the\nfields stay for the apps that require them, empty, so those apps hide them.",
         "required": [
           "downloading",
           "downloading_pct",
@@ -6025,7 +6025,7 @@
               },
               {
                 "$ref": "#/components/schemas/DiskSpace",
-                "description": "The filesystem holding the downloads; `None` when it can't be read."
+                "description": "Deprecated: always `None`."
               }
             ]
           },
@@ -6052,12 +6052,14 @@
           "new_episodes": {
             "type": "integer",
             "format": "int64",
-            "description": "New episodes across the caller's watchlist, as its badges count them."
+            "description": "Deprecated: always `0` (the watchlist cards count their own).",
+            "deprecated": true
           },
           "seeding": {
             "type": "integer",
             "format": "int32",
-            "description": "Finished torrents still sharing with the swarm.",
+            "description": "Deprecated: always `0`.",
+            "deprecated": true,
             "minimum": 0
           }
         }
