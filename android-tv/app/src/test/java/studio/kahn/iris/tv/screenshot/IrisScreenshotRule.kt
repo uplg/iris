@@ -23,6 +23,8 @@ import org.junit.rules.RuleChain
 import org.junit.rules.TestRule
 import org.junit.runner.Description
 import org.junit.runners.model.Statement
+import studio.kahn.iris.tv.data.InterfaceSize
+import studio.kahn.iris.tv.ui.theme.InterfaceScale
 import studio.kahn.iris.tv.ui.theme.IrisColor
 import studio.kahn.iris.tv.ui.theme.IrisLayout
 import studio.kahn.iris.tv.ui.theme.IrisTheme
@@ -62,29 +64,34 @@ class IrisScreenshotRule : TestRule {
     private var frame by mutableStateOf<Frame?>(null)
     private var started = false
 
-    private class Frame(val size: ScreenSize, val content: @Composable () -> Unit)
+    private class Frame(val size: ScreenSize, val scale: InterfaceSize, val content: @Composable () -> Unit)
 
     override fun apply(base: Statement, description: Description): Statement =
         RuleChain.outerRule(compose).apply(base, description)
 
-    /** Records [content] filling a [size] frame on the ground color. */
-    fun snap(name: String, size: ScreenSize = ScreenSize.Tv, content: @Composable () -> Unit) {
+    /**
+     * Records [content] filling a [size] frame on the ground color, drawn at the interface
+     * [scale] (Settings → Interface size): the same pixels, that many fewer dp.
+     */
+    fun snap(name: String, size: ScreenSize = ScreenSize.Tv, scale: InterfaceSize = InterfaceSize.Default, content: @Composable () -> Unit) {
         if (!started) {
             started = true
             // D-pad mode: tv-material surfaces and focus rings behave as on a TV.
             InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
             compose.setContent {
                 val current = frame ?: return@setContent
-                val layout = IrisLayout(current.size.width, current.size.height)
-                IrisTheme(layoutOverride = layout) {
-                    Box(
-                        Modifier
-                            .requiredSize(current.size.width, current.size.height)
-                            .background(IrisColor.ground)
-                            .testTag(ROOT),
-                    ) {
-                        // A new key per frame resets focus and remembered state between snaps.
-                        androidx.compose.runtime.key(current) { current.content() }
+                val layout = IrisLayout(current.size.width / current.scale.scale, current.size.height / current.scale.scale)
+                InterfaceScale(current.scale) {
+                    IrisTheme(layoutOverride = layout) {
+                        Box(
+                            Modifier
+                                .requiredSize(layout.width, layout.height)
+                                .background(IrisColor.ground)
+                                .testTag(ROOT),
+                        ) {
+                            // A new key per frame resets focus and remembered state between snaps.
+                            androidx.compose.runtime.key(current) { current.content() }
+                        }
                     }
                 }
             }
@@ -92,14 +99,17 @@ class IrisScreenshotRule : TestRule {
             // a focus request in that frame is lost.
             compose.waitForIdle()
         }
-        frame = Frame(size, content)
+        frame = Frame(size, scale, content)
         compose.waitForIdle()
         compose.onNodeWithTag(ROOT).captureRoboImage("src/test/screenshots/$name.png")
     }
 
     /** [snap] at every [ScreenSize], named `<name>_tv`, `<name>_phone915`, `<name>_phone800`. */
-    fun snapEverySize(name: String, content: @Composable () -> Unit) {
-        ScreenSize.entries.forEach { size -> snap("${name}_${size.id}", size, content) }
+    fun snapEverySize(name: String, content: @Composable () -> Unit) = snapEverySize(name, InterfaceSize.Default, content)
+
+    /** [snapEverySize] at the interface [scale]. */
+    fun snapEverySize(name: String, scale: InterfaceSize, content: @Composable () -> Unit) {
+        ScreenSize.entries.forEach { size -> snap("${name}_${size.id}", size, scale, content) }
     }
 
     private companion object {

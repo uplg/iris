@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.data.InterfaceSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import org.junit.Rule
@@ -145,6 +146,10 @@ class HomeScreenshots {
 
     @Test
     fun home() = shots.snapEverySize("home") { Home(home) }
+
+    // The largest interface size: the header, the hero and the rows still fit, the rows scroll.
+    @Test
+    fun homeLargest() = shots.snapEverySize("home_largest", InterfaceSize.Largest) { Home(home) }
 
     // Two lines at the hero's size: the title grows the hero downward, never into the header.
     @Test

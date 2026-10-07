@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.data.InterfaceSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -89,6 +90,11 @@ class PlayerScreenshots {
 
     @Test
     fun controls() = shots.snapEverySize("player_controls") { Controls(nextLabel = "Next: Trojan's Horse", focusPlay = true) }
+
+    @Test
+    fun controlsLargest() = shots.snapEverySize("player_controls_largest", InterfaceSize.Largest) {
+        Controls(nextLabel = "Next: Trojan's Horse", focusPlay = true)
+    }
 
     @Test
     fun controlsPeek() = shots.snap("player_controls_peek") { Controls(nextLabel = null, focusPlay = false) }

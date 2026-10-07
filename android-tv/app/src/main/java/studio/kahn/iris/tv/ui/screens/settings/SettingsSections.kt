@@ -26,7 +26,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,6 +45,7 @@ import studio.kahn.iris.tv.ui.update.UpdateActions
 import studio.kahn.iris.tv.ui.update.UpdateButton
 import studio.kahn.iris.tv.ui.update.UpdateProgress
 import studio.kahn.iris.tv.data.DeviceView
+import studio.kahn.iris.tv.data.InterfaceSize
 import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
@@ -85,6 +88,7 @@ class SettingsActions(
     val onRevoke: (DeviceView) -> Unit = {},
     val onChangePassword: (current: String, next: String) -> Unit = { _, _ -> },
     val onSignOut: () -> Unit = {},
+    val onInterfaceSize: (InterfaceSize) -> Unit = {},
     val onOpenHistory: () -> Unit = {},
     val onOpenTorrents: () -> Unit = {},
     val update: UpdateActions = UpdateActions(),
@@ -386,19 +390,37 @@ private fun LatestLine(update: UpdateState) {
 @Composable
 private fun ThisTvSection(state: SettingsUiState, actions: SettingsActions, facts: TvFacts) {
     val layout = IrisLayout.current
-    SettingsGroup("This TV", "What to tell whoever helps you when something goes wrong.") {
-        SettingRow(
-            "Server",
-            state.serverUrl ?: "None",
-            onClick = { actions.onOpen(SettingsDialog.ChangeServer) },
-            action = "Use another",
-        )
-        Column {
-            FactRow("Signed in as", state.account.valueOrNull?.email ?: "Unknown")
-            FactRow("Iris", facts.iris)
-            FactRow("Device", facts.device)
-            FactRow("Android", facts.android)
-            FactRow("Screen", "${layout.width.value.toInt()} × ${layout.height.value.toInt()} dp")
+    Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s8)) {
+        InterfaceSizeGroup(state.interfaceSize, actions.onInterfaceSize)
+        SettingsGroup("This TV", "What to tell whoever helps you when something goes wrong.") {
+            SettingRow(
+                "Server",
+                state.serverUrl ?: "None",
+                onClick = { actions.onOpen(SettingsDialog.ChangeServer) },
+                action = "Use another",
+            )
+            Column {
+                FactRow("Signed in as", state.account.valueOrNull?.email ?: "Unknown")
+                FactRow("Iris", facts.iris)
+                FactRow("Device", facts.device)
+                FactRow("Android", facts.android)
+                FactRow("Screen", "${layout.width.value.toInt()} × ${layout.height.value.toInt()} dp")
+            }
+        }
+    }
+}
+
+@Composable
+private fun InterfaceSizeGroup(current: InterfaceSize, onChoose: (InterfaceSize) -> Unit) {
+    SettingsGroup("Interface size", "Bigger words, buttons and spacing on this TV, for a screen watched from far away. Videos keep their size.") {
+        FlowRow(
+            Modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+        ) {
+            InterfaceSize.entries.forEach { size ->
+                Pill(size.label, selected = size == current, onClick = { onChoose(size) }, role = Role.RadioButton)
+            }
         }
     }
 }

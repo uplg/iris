@@ -15,10 +15,28 @@ import kotlinx.coroutines.flow.map
  */
 enum class SearchViewMode { TITLES, GRID, LIST }
 
+/**
+ * How big the whole interface draws on this device (Settings → This TV): words, buttons and
+ * spacing grow together by [scale]; the picture of a video does not. For a TV watched from
+ * far away. Kept per device.
+ */
+enum class InterfaceSize(val label: String, val scale: Float) {
+    Default("Default", 1f),
+    Larger("Larger", 1.15f),
+    Largest("Largest", 1.3f),
+    ;
+
+    companion object {
+        /** Unknown or missing reads as [Default]: a value written by a newer build degrades instead of crashing. */
+        fun named(name: String?): InterfaceSize = entries.firstOrNull { it.name == name } ?: Default
+    }
+}
+
 private val Context.prefsDataStore by preferencesDataStore("iris_prefs")
 
 private val KEY_SEARCH_VIEW_MODE = stringPreferencesKey("search_view_mode")
 private val KEY_LIBRARY_VIEW = stringPreferencesKey("library_view")
+private val KEY_INTERFACE_SIZE = stringPreferencesKey("interface_size")
 
 /**
  * Small client-side UI preferences — NOT session / auth state (that's
@@ -45,5 +63,11 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setLibraryView(name: String) {
         context.prefsDataStore.edit { it[KEY_LIBRARY_VIEW] = name }
+    }
+
+    val interfaceSize: Flow<InterfaceSize> = context.prefsDataStore.data.map { InterfaceSize.named(it[KEY_INTERFACE_SIZE]) }
+
+    suspend fun setInterfaceSize(size: InterfaceSize) {
+        context.prefsDataStore.edit { it[KEY_INTERFACE_SIZE] = size.name }
     }
 }

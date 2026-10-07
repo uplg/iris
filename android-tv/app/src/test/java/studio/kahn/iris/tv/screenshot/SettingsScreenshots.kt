@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.data.InterfaceSize
 import androidx.compose.runtime.Composable
 import java.io.File
 import java.time.ZoneId
@@ -86,6 +87,11 @@ class SettingsScreenshots {
 
     @Test
     fun you() = shots.snapEverySize("settings_you") { Settings(section = SettingsSection.You) }
+
+    @Test
+    fun thisTvLargest() = shots.snapEverySize("settings_this_tv_largest", InterfaceSize.Largest) {
+        Settings(ready.copy(interfaceSize = InterfaceSize.Largest), SettingsSection.ThisTv)
+    }
 
     @Test
     fun youRenamed() = shots.snap("settings_you_renamed") {
