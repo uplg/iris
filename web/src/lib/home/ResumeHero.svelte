@@ -37,7 +37,7 @@
 </script>
 
 <Hero
-	eyebrow={item.next_up || item.grabbable ? 'Up next' : 'Continue where you left off'}
+	eyebrow={item.next_up || item.grabbable ? 'Up next' : undefined}
 	{title}
 	{meta}
 	overview={md.data?.overview}

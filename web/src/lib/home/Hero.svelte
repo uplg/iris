@@ -1,13 +1,15 @@
 <script lang="ts">
-	// The home's first block: what to watch now, in words on the left (an eyebrow, the title
-	// large in Fraunces, a line of facts, the overview at a reading measure, the actions), its
+	// The home's first block: what to watch now, in words on the left (an eyebrow when it adds
+	// something, the title large in Fraunces, a line of facts, the overview at a reading measure,
+	// the actions), its
 	// still framed at 16:9 on the right on a wide screen, under it on a phone. Not a full-bleed
 	// picture under the text: the words stay on the ground, legible in both themes.
 	import type { Snippet } from 'svelte';
 	import Poster from '#lib/components/Poster.svelte';
 
 	interface Props {
-		eyebrow: string;
+		/** A kicker above the title, when it adds something ("Up next"). */
+		eyebrow?: string;
 		title: string;
 		/** "Season 2 · Episode 4 · 55 min" */
 		meta: readonly (string | null | undefined)[];
@@ -26,7 +28,7 @@
 
 <section class="hero" aria-labelledby="{id}-title">
 	<div class="words">
-		<p class="eyebrow">{eyebrow}</p>
+		{#if eyebrow}<p class="eyebrow">{eyebrow}</p>{/if}
 		<h2 id="{id}-title" class="title">{title}</h2>
 		{#if facts.length}<p class="facts">{facts.join(' · ')}</p>{/if}
 		{#if progress}{@render progress()}{/if}

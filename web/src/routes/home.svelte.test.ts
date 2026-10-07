@@ -88,7 +88,7 @@ describe('home', () => {
 		home({ '/me/continue-watching?include_grabbable=true': [tile()] });
 		await show();
 		const hero = page.getByRole('region', { name: 'Severance' });
-		await expect.element(hero.getByText('Continue where you left off')).toBeVisible();
+		await expect.element(hero.getByText('Continue where you left off')).not.toBeInTheDocument();
 		await expect.element(hero.getByText('Season 2 · Episode 4 · 55 min')).toBeVisible();
 		await expect.element(hero.getByText('23 min left')).toBeVisible();
 		await expect.element(hero.getByRole('link', { name: 'Resume at 32:10' })).toHaveAttribute('href', '/watch/abc/3');
