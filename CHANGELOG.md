@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-07
+
+The redesign: Iris rethought from the web to the TV. Apps on 1.5.0 keep
+working against this server (checked by decoding the new server's real
+responses with the 1.5.0 app's own models); paired TVs don't re-pair.
+
+### Added
+
+- **A new look**: the synthe.se design (the sleepy little TV on its petrol
+  tile, Fraunces, Cal Sans and Borel), light and dark themes, the new mark on
+  the Android TV launcher icon and banner.
+- **Passkeys** (webauthn-rs): sign in with Face ID, Touch ID or a
+  fingerprint, alongside passwords; managed from the account page.
+- **Search by title first**: `GET /api/search/titles` (TMDB joined with the
+  library), then a title's releases; library matches on top; recent searches
+  stored per account (`/api/me/recent-searches`) and shared by web and TV;
+  Titles, Grid and List views; per-tracker errors with Retry.
+- **Live TV as a guide**: now and next with a progress bar, a country picker
+  with search and channel counts (`LiveCountry.channel_count`, countries with
+  no channel left out), category filters, steadier sources with automatic
+  fallback: dlive.sx (`[live_tv.dlive]`, off by default), Vavoo, iptv-org,
+  Free-TV; DRM-locked channels flagged (`LiveChannel.encrypted`, 409
+  `live_encrypted`) instead of looping.
+- **Admin, rebuilt**: a glance line, then Activity (who's watching what now:
+  title, position, state incl. buffering, app and version), People,
+  System (disk, trackers, upkeep) and Log; named, paged and filterable watch
+  history; per-tracker runtime switches (`/api/admin/providers`, 409
+  `provider_off`) with each tracker's last search.
+- **Per-title playback languages** (`/api/me/playback-preferences` with
+  `collection_id`): a choice applies to that title only, every unset field
+  following the account.
+- **TV app updates on the home screen**, with "Update now", the progress and
+  the install in place; also on the "update needed" lock.
+- `just rehearsal-fetch` / `just rehearsal`: a local copy of production with
+  no torrent state, to try a release on real data.
+
+### Changed
+
+- **The web app is rewritten** in SvelteKit (Svelte 5, Bits UI, TanStack
+  Query) on shared packages (`@iris/api`, `@iris/core`): faster, lighter,
+  fully keyboard and screen-reader usable, one wording everywhere.
+- **Every TV screen is redesigned**; the app reconnects on its own after a
+  network drop, bounds its buffer for 2 GB boxes, never holds two players,
+  and shows a single keyboard in search.
+- **No wrong poster**: TMDB artwork only behind a trusted match (the
+  tracker's id cross-checked, or a strict SCENE match that also reads TMDB's
+  French titles); `tmdb-trust` re-evaluates the existing library.
+- **Playback**: more files start before the download ends (HEVC, AC-3,
+  E-AC-3, DTS through libav.js, PGS subtitles); the player fits the window,
+  Theater mode (T) fills it.
+- **Library**: a card opens from anywhere on it; season packs read as packs;
+  a refused "Download again" lands on a search for the title, with the
+  reason; delete is for an admin or whoever added the release.
+- **Disk**: the GC reads real free space (`storage.min_free_gb`) and lists
+  orphan files (deleted only with `delete_orphan_files`); two identical
+  releases share their files, and removing one keeps the other's.
+- **Trackers**: one that times out three searches in a row is skipped for
+  five minutes, then probed.
+- **A release its tracker never seeds** (nyaa) is reported as `held`
+  (additive `TorrentState`) and shown on disk; « Needs attention » is for
+  admins only.
+
+### Fixed
+
+- Doubled subtitle lines on Firefox after toggling subtitles while their
+  WebVTT was still arriving.
+- A server on plain HTTP over the LAN was unreachable from the release APK.
+- A language choice on a film copied the account's audio language onto it
+  (cleaned up by migration 0046).
+- Follows created from a release name never met their collection (repaired
+  at boot).
+- The invitations rebuild survives a reference to an account deleted while
+  foreign keys weren't enforced.
+- Plus a full pre-release audit of the server, the web app and the TV app.
+
+### Security
+
+- Changing or resetting a password signs that account out everywhere
+  (`users.sessions_valid_after`); refresh tokens rotate as families
+  (a late replay revokes the family); sign-in attempts are rate-limited per
+  /64 on IPv6; `/me/password` shares the sign-in limit.
+
 ## [1.5.0] - 2026-10-01
 
 ### Added
@@ -1204,7 +1286,8 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.5.0...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.6.0...HEAD
+[1.6.0]: https://github.com/uplg/iris/compare/1.5.0...1.6.0
 [1.5.0]: https://github.com/uplg/iris/compare/1.4.2...1.5.0
 [1.4.2]: https://github.com/uplg/iris/compare/1.4.1...1.4.2
 [1.4.1]: https://github.com/uplg/iris/compare/1.4.0...1.4.1
