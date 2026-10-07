@@ -52,6 +52,8 @@ data class CardModel(
     val status: String? = null,
     val tone: StatusTone = StatusTone.Muted,
     val progress: Float? = null,
+    /** A short fact on the art's corner ("3 new"). */
+    val badge: String? = null,
     val primary: CardAction = CardAction.Open,
     val menu: List<CardAction> = emptyList(),
 )
@@ -129,12 +131,10 @@ fun continueCard(item: ContinueWatchingItem, md: MediaMetadata?): CardModel {
     )
 }
 
+/** A followed series (web `WatchlistCard`): new episodes on the poster's corner, a line only
+ *  while one downloads, nothing when nothing is new. */
 fun watchlistCard(item: WatchlistItem, downloading: Double?): CardModel {
-    val (status, tone) = when {
-        downloading != null -> "Downloading · ${percent(downloading)}" to StatusTone.Muted
-        item.newCount > 0 -> plural(item.newCount, "new episode") to StatusTone.Ok
-        else -> "No new episodes" to StatusTone.Muted
-    }
+    val status = downloading?.let { "Downloading · ${percent(it)}" }
     return CardModel(
         key = WATCHLIST_PREFIX + item.id,
         title = item.name,
@@ -142,7 +142,7 @@ fun watchlistCard(item: WatchlistItem, downloading: Double?): CardModel {
         kind = "Series",
         meta = "Series",
         status = status,
-        tone = tone,
+        badge = item.newCount.takeIf { it > 0 }?.let { "$it new" },
         primary = CardAction.Open,
         menu = listOf(CardAction.Open, CardAction.RemoveFromWatchlist),
     )

@@ -77,7 +77,14 @@ class HomeScreenshots {
         cw("c:3", "Frieren", "E20", null, "Up next · E20 · Not downloaded"),
     )
 
-    private fun poster(prefix: String, i: Int, title: String, status: String, tone: StatusTone = StatusTone.Muted) = CardModel(
+    private fun poster(
+        prefix: String,
+        i: Int,
+        title: String,
+        status: String? = null,
+        tone: StatusTone = StatusTone.Muted,
+        badge: String? = null,
+    ) = CardModel(
         key = "$prefix$i",
         title = title,
         art = null,
@@ -85,18 +92,19 @@ class HomeScreenshots {
         meta = "Series",
         status = status,
         tone = tone,
+        badge = badge,
         menu = listOf(CardAction.Open),
     )
 
     private val watchlist = listOf(
-        poster("wl:", 1, "The Bear", "3 new episodes", StatusTone.Ok),
+        poster("wl:", 1, "The Bear", badge = "3 new"),
         poster("wl:", 2, "Slow Horses", "Downloading · 42%"),
-        poster("wl:", 3, "Andor", "No new episodes"),
-        poster("wl:", 4, "Pachinko", "No new episodes"),
-        poster("wl:", 5, "Dune: Prophecy", "1 new episode", StatusTone.Ok),
-        poster("wl:", 6, "Silo", "No new episodes"),
-        poster("wl:", 7, "Fallout", "No new episodes"),
-        poster("wl:", 8, "Blue Eye Samurai", "No new episodes"),
+        poster("wl:", 3, "Andor"),
+        poster("wl:", 4, "Pachinko"),
+        poster("wl:", 5, "Dune: Prophecy", badge = "1 new"),
+        poster("wl:", 6, "Silo"),
+        poster("wl:", 7, "Fallout"),
+        poster("wl:", 8, "Blue Eye Samurai"),
     )
 
     private val home = HomeUiState(
