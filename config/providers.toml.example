@@ -35,6 +35,11 @@ kind = "unit3d"
 enabled = true
 base_url = "https://seedpool.org"
 api_key_env = "SEEDPOOL_API_KEY"
+# Mainline UNIT3D numbers movies 1 and TV 2 (`movie_category_id` /
+# `tv_category_id` override them). A tracker with more video categories
+# lists them all, and only those are searched (books, games left out):
+# movie_category_ids = [1, 7, 13]
+# tv_category_ids = [2, 6, 14, 15]
 default_language = "english"
 
 # HD-Torrents — English private HD tracker with no API at all: the

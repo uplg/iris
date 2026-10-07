@@ -56,14 +56,9 @@ pub struct Unit3dProvider {
     base_url: Url,
     api_path: String,
     api_token: String,
-    /// Numeric `category_id` filter for movies (mainline `UNIT3D`
-    /// default is `1`). Override per provider in `providers.toml`
-    /// when a fork reorders the categories.
-    movie_category_id: u32,
-    /// Same for TV. Mainline default is `2`. theoldschool exposes
-    /// the same category as `"Series"` in the response `category`
-    /// field but the underlying `category_id` is still `2`.
-    tv_category_id: u32,
+    /// The categories a movie or a TV search asks for, and how a result's
+    /// category reads as a kind (see [`Categories`]).
+    categories: Categories,
     http: Client,
     /// Torrent id (UNIT3D's numeric `id`) -> direct `.torrent` URL,
     /// captured from `attributes.download_link` in search responses.
@@ -86,18 +81,7 @@ impl Unit3dProvider {
             .and_then(|v| v.as_str())
             .unwrap_or(DEFAULT_API_PATH)
             .to_string();
-        let movie_category_id = entry
-            .fields
-            .get("movie_category_id")
-            .and_then(toml::Value::as_integer)
-            .and_then(|n| u32::try_from(n).ok())
-            .unwrap_or(1);
-        let tv_category_id = entry
-            .fields
-            .get("tv_category_id")
-            .and_then(toml::Value::as_integer)
-            .and_then(|n| u32::try_from(n).ok())
-            .unwrap_or(2);
+        let categories = Categories::from_entry(entry);
         let user_agent = entry
             .fields
             .get("user_agent")
@@ -132,8 +116,7 @@ impl Unit3dProvider {
             base_url,
             api_path,
             api_token,
-            movie_category_id,
-            tv_category_id,
+            categories,
             http,
             link_cache: Mutex::new(FifoCache::new()),
         }))
@@ -341,11 +324,7 @@ impl SearchProvider for Unit3dProvider {
         //   * the caller explicitly asked for it, OR
         //   * the parser saw an SxxExx marker (an unambiguous TV signal).
         let inferred_kind = q.kind.or_else(|| q.season.map(|_| MediaKind::Tv));
-        if let Some(cat_id) = match inferred_kind {
-            Some(MediaKind::Movie) => Some(self.movie_category_id),
-            Some(MediaKind::Tv) => Some(self.tv_category_id),
-            None => None,
-        } {
+        for cat_id in self.categories.asked(inferred_kind) {
             qs.push(("categories[]", cat_id.to_string()));
         }
 
@@ -379,7 +358,15 @@ impl SearchProvider for Unit3dProvider {
                 cache.put(item.id.clone(), item.attributes.download_link.clone());
             }
             for item in parsed.data {
-                results.push(item.into_search_result(&self.id));
+                let category_id = item.attributes.category_id;
+                if !self.categories.keeps(category_id) {
+                    continue;
+                }
+                let mut result = item.into_search_result(&self.id);
+                if let Some(kind) = self.categories.kind_of(category_id) {
+                    result.kind = Some(kind);
+                }
+                results.push(result);
             }
         }
 
@@ -469,6 +456,8 @@ struct TorrentAttributes {
     name: String,
     #[serde(default)]
     category: Option<String>,
+    #[serde(default, deserialize_with = "flexible_u32")]
+    category_id: Option<u32>,
     /// "Encode" / "Remux" / "WEB-DL" / "Full Disc" — release type.
     /// Surfaced as a tag so the user sees it in the result row.
     #[serde(default, rename = "type")]
@@ -581,6 +570,14 @@ where
     })
 }
 
+/// [`flexible_u64`], narrowed to a `u32` (a category id).
+fn flexible_u32<'de, D>(deserializer: D) -> std::result::Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(flexible_u64(deserializer)?.and_then(|n| u32::try_from(n).ok()))
+}
+
 /// Freeleech as a flag, true only at 100 %: anything below still charges the
 /// user some download credit. `"100%"`, `"true"`/`"yes"`, `true` or `100`.
 fn flexible_freeleech<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
@@ -616,6 +613,80 @@ struct FileEntry {
     #[serde(default)]
     #[allow(dead_code)]
     size: Option<u64>,
+}
+
+/// Which `category_id`s a provider searches for each kind. Mainline `UNIT3D`
+/// numbers movies `1` and TV `2` (`movie_category_id` / `tv_category_id`
+/// override them); a tracker that splits its video into more categories
+/// (animation, documentaries, TV shows) lists them all with
+/// `movie_category_ids` / `tv_category_ids`. Declared lists are the
+/// tracker's whole video catalogue: a search with no kind asks for all of
+/// them, a result in another category (books, games) is dropped, and a
+/// result's kind follows its category's list rather than its fork-specific
+/// name (`"Séries"`).
+#[derive(Debug, Clone)]
+struct Categories {
+    movie: Vec<u32>,
+    tv: Vec<u32>,
+    declared: bool,
+}
+
+impl Categories {
+    fn from_entry(entry: &ProviderEntry) -> Self {
+        let list = |many: &str, one: &str, fallback: u32| -> (Vec<u32>, bool) {
+            if let Some(arr) = entry.fields.get(many).and_then(toml::Value::as_array) {
+                let ids: Vec<u32> = arr
+                    .iter()
+                    .filter_map(toml::Value::as_integer)
+                    .filter_map(|n| u32::try_from(n).ok())
+                    .collect();
+                if !ids.is_empty() {
+                    return (ids, true);
+                }
+            }
+            let single = entry
+                .fields
+                .get(one)
+                .and_then(toml::Value::as_integer)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(fallback);
+            (vec![single], false)
+        };
+        let (movie, m) = list("movie_category_ids", "movie_category_id", 1);
+        let (tv, t) = list("tv_category_ids", "tv_category_id", 2);
+        Self {
+            movie,
+            tv,
+            declared: m || t,
+        }
+    }
+
+    /// The `categories[]` a search sends: its kind's, every declared one
+    /// when it has no kind, nothing otherwise (the tracker's whole catalogue).
+    fn asked(&self, kind: Option<MediaKind>) -> Vec<u32> {
+        match kind {
+            Some(MediaKind::Movie) => self.movie.clone(),
+            Some(MediaKind::Tv) => self.tv.clone(),
+            None if self.declared => self.movie.iter().chain(&self.tv).copied().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn kind_of(&self, category_id: Option<u32>) -> Option<MediaKind> {
+        let id = category_id?;
+        if self.movie.contains(&id) {
+            Some(MediaKind::Movie)
+        } else if self.tv.contains(&id) {
+            Some(MediaKind::Tv)
+        } else {
+            None
+        }
+    }
+
+    /// A declared catalogue keeps only its own categories.
+    fn keeps(&self, category_id: Option<u32>) -> bool {
+        !self.declared || self.kind_of(category_id).is_some()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1499,5 +1570,62 @@ mod tests {
         assert_eq!(d.category.as_deref(), Some("Films / WEB"));
         assert_eq!(d.times_completed, Some(3));
         assert!(d.uploaded_at.is_some());
+    }
+
+    fn categories(toml_src: &str) -> super::Categories {
+        let entry: iris_config::ProviderEntry = toml::from_str(toml_src).unwrap();
+        super::Categories::from_entry(&entry)
+    }
+
+    #[test]
+    fn a_tracker_lists_every_video_category_it_has() {
+        let gemini = categories(
+            r#"
+            id = "gemini"
+            kind = "unit3d"
+            base_url = "https://gemini-tracker.org"
+            movie_category_ids = [1, 7, 13]
+            tv_category_ids = [2, 6, 14, 15]
+            "#,
+        );
+        assert_eq!(gemini.asked(Some(MediaKind::Tv)), vec![2, 6, 14, 15]);
+        assert_eq!(gemini.asked(Some(MediaKind::Movie)), vec![1, 7, 13]);
+        assert_eq!(
+            gemini.asked(None),
+            vec![1, 7, 13, 2, 6, 14, 15],
+            "no kind: the whole video catalogue"
+        );
+        assert_eq!(
+            gemini.kind_of(Some(6)),
+            Some(MediaKind::Tv),
+            "« Series Animations » is TV whatever its name"
+        );
+        assert_eq!(gemini.kind_of(Some(13)), Some(MediaKind::Movie));
+        assert!(!gemini.keeps(Some(12)), "books are not in the catalogue");
+        assert!(!gemini.keeps(None));
+
+        let mainline = categories(
+            r#"
+            id = "seedpool"
+            kind = "unit3d"
+            base_url = "https://seedpool.org"
+            "#,
+        );
+        assert_eq!(mainline.asked(Some(MediaKind::Tv)), vec![2]);
+        assert!(
+            mainline.asked(None).is_empty(),
+            "undeclared: a search with no kind stays unfiltered"
+        );
+        assert!(mainline.keeps(Some(12)), "undeclared: nothing is dropped");
+
+        let override_one = categories(
+            r#"
+            id = "x"
+            kind = "unit3d"
+            base_url = "https://x.example"
+            tv_category_id = 5
+            "#,
+        );
+        assert_eq!(override_one.asked(Some(MediaKind::Tv)), vec![5]);
     }
 }

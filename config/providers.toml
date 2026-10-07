@@ -40,6 +40,21 @@ default_language = "english"
 # refused up-front, naming the release that holds the slot.
 leech_slots = 1
 
+# Gemini — French private general tracker on UNIT3D. Every video category is
+# searched: films (1), animated films (7), documentaries (13); series (2),
+# animated series (6), documentary series (14), TV shows (15). Books, games and
+# sports are left out. Releases carry their language tags (MULTi / VFF /
+# VOSTFR), so no default_language. Its search is broad (it matches beyond the
+# name); the ranking sorts it out.
+[[providers]]
+id = "gemini"
+kind = "unit3d"
+enabled = true
+base_url = "https://gemini-tracker.org"
+api_key_env = "GEMINI_API_KEY"
+movie_category_ids = [1, 7, 13]
+tv_category_ids = [2, 6, 14, 15]
+
 # HD-Torrents — English private HD tracker, no API at all: cookie
 # session (login.php) + HTML scraping of torrents.php. Credentials are
 # the site login itself, not an API key. Releases carry no language
