@@ -1,15 +1,16 @@
 <script lang="ts">
-	// A title of the library, a series or a movie: its head (artwork, facts, what to do), what is
-	// on disk and the languages the next episodes start with, then its episodes (or its files)
-	// and what used to be on disk. A movie with one copy goes straight to the player: there is
-	// nothing to choose here. Read again every few seconds while something downloads.
+	// A title of the library, a series or a movie: its banner (artwork, facts, what to do), then
+	// its episodes (or its files, a movie's copies) with, beside them on a wide screen, what is on
+	// disk, the languages the next episodes start with and what used to be on disk. A movie with
+	// one copy goes straight to the player: there is nothing to choose here. Read again every few
+	// seconds while something downloads.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { tmdbImage, type CollectionDetail, type TorrentView } from '@iris/api/client';
+	import type { CollectionDetail, TorrentView } from '@iris/api/client';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import Loaded from '#lib/components/Loaded.svelte';
-	import Poster from '#lib/components/Poster.svelte';
+	import BackLink from '#lib/components/BackLink.svelte';
 	import { FAST, read } from '#lib/queries.ts';
 	import { isMoving } from '#lib/torrent.ts';
 	import { tmdbMeta } from '#lib/tmdb.svelte.ts';
@@ -68,8 +69,7 @@
 			info.data?.original_language ? [info.data.original_language] : []
 		)
 	);
-	let noBackdrop = $state(false);
-	const backdrop = $derived(tmdbImage(c?.backdrop_path, 'w1280'));
+	const movieCopies = $derived(c?.kind === 'movie' && c.torrents.length > 1);
 </script>
 
 <svelte:head><title>{pageTitle(c?.display_title ?? 'Library')}</title></svelte:head>
@@ -77,117 +77,54 @@
 {#if !c}<h1 class="sr-only" tabindex="-1">Library title</h1>{/if}
 <Loaded value={loadable(q)} missing="This title is no longer in the library.">
 	{#if c}
-		<nav class="crumbs" aria-label="Breadcrumb">
-			<ol>
-				<li><a href="/library">Library</a></li>
-				<li aria-current="page">{c.display_title}</li>
-			</ol>
-		</nav>
+		<BackLink href="/library" label="Library" />
 		{#if leaving}
 			<h1 class="sr-only" tabindex="-1">{c.display_title}</h1>
 			<p class="hint">Opening the player…</p>
 		{:else}
-			<div class="stage">
-				{#if backdrop && !noBackdrop}
-					<img
-						class="backdrop"
-						src={backdrop}
-						alt=""
-						width="1280"
-						height="720"
-						fetchpriority="high"
-						decoding="async"
-						onerror={() => (noBackdrop = true)}
-					/>
-				{/if}
-				<div class="top">
-					<div class="poster"><Poster src={tmdbImage(c.poster_path, 'w342')} title={c.display_title} eager /></div>
-					<Hero collection={c} meta={info.data} resume={resumeOf(c, watching.data)} {rows} />
-					<aside class="side" aria-label="Releases and languages">
+			<Hero collection={c} meta={info.data} resume={resumeOf(c, watching.data)} {rows} />
+			<div class="body">
+				<div class="main">
+					{#if hasEpisodes}
+						<Episodes collection={c} {rows} {torrents} />
+						<!-- a pack the parser never split (episode 0) plays from its files -->
+						{#if c.episodes.some((e) => e.episode === 0)}<RawFiles collection={c} />{/if}
+					{:else if movieCopies}
 						<OnDisk collection={c} watching={watching.data ?? []} />
-						{#if series}<Languages collectionId={c.id} title={c.display_title} {known} />{/if}
-					</aside>
+					{:else}
+						<RawFiles collection={c} />
+					{/if}
 				</div>
-			</div>
-			<div class="below">
-				{#if hasEpisodes}
-					<Episodes collection={c} {rows} {torrents} />
-					<!-- a pack the parser never split (episode 0) plays from its files -->
-					{#if c.episodes.some((e) => e.episode === 0)}<RawFiles collection={c} />{/if}
-				{:else if !(c.kind === 'movie' && c.torrents.length > 1)}
-					<RawFiles collection={c} />
+				{#if !movieCopies || goneReleases.length}
+					<aside class="side" aria-label="Releases and languages">
+						{#if !movieCopies}<OnDisk collection={c} watching={watching.data ?? []} />{/if}
+						{#if series}<Languages collectionId={c.id} title={c.display_title} {known} />{/if}
+						{#if goneReleases.length}<GoneReleases collectionId={c.id} title={c.display_title} releases={goneReleases} />{/if}
+					</aside>
 				{/if}
-				{#if goneReleases.length}<GoneReleases collectionId={c.id} title={c.display_title} releases={goneReleases} />{/if}
 			</div>
 		{/if}
 	{/if}
 </Loaded>
 
 <style>
-	.crumbs ol {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--s-2);
-		list-style: none;
-		margin: 0;
-		padding: var(--s-4) 0 0;
-		font: var(--t-secondary);
-		color: var(--ink-muted);
-	}
-	.crumbs li + li::before {
-		content: '/';
-		margin-right: var(--s-2);
-		color: var(--ink-muted);
-	}
-	.crumbs a {
-		display: inline-flex;
-		align-items: center;
-		min-height: var(--control-h);
-		margin-block: calc(-1 * var(--s-3));
-	}
-	.crumbs li {
-		display: inline-flex;
-		align-items: center;
-		min-width: 0;
-		overflow-wrap: anywhere;
-	}
-	.stage {
-		position: relative;
-		isolation: isolate;
-		padding-block: var(--s-5);
-		margin-bottom: var(--s-5);
-	}
-	/* the backdrop: a faint picture behind the head, fading into the page */
-	.backdrop {
-		position: absolute;
-		inset: 0;
-		z-index: -1;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		opacity: 0.18;
-		mask-image: linear-gradient(to bottom, black, transparent);
-	}
-	.top {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--s-5) var(--s-6);
-		align-items: flex-start;
-	}
-	.poster {
-		flex: 0 0 auto;
-		width: min(220px, 45vw);
-	}
-	.side {
-		flex: 1 1 18rem;
-		max-width: 24rem;
+	.body {
 		display: grid;
-		gap: var(--s-4);
-		min-width: 0;
-	}
-	.below {
-		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: var(--s-6);
+		margin-top: var(--s-6);
+	}
+	.main,
+	.side {
+		display: grid;
+		gap: var(--s-5);
+		align-content: start;
 		min-width: 0;
+	}
+	/* wide: the episodes keep the room, the rest a narrow column beside them */
+	@media (min-width: 1200px) {
+		.body:has(.side) {
+			grid-template-columns: minmax(0, 1fr) minmax(20rem, 26rem);
+		}
 	}
 </style>
