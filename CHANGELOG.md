@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Gemini tracker** (French, general, UNIT3D), searched in every video
+  category: films, animated films and documentaries; series, animated
+  series, documentary series and TV shows. A UNIT3D provider can now list
+  its categories per kind (`movie_category_ids` / `tv_category_ids`).
+
 ## [1.6.0] - 2026-10-07
 
 The redesign: Iris rethought from the web to the TV. Apps on 1.5.0 keep
