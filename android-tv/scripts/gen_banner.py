@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
-"""Render the Cal Sans wordmark layer for the Android TV banner.
+"""Render the Android TV banner: the Iris mark beside "Iris" in Borel, on the night ground.
 
-The banner itself is XML (`res/drawable/banner.xml`, a layer-list): a smooth
-vector gradient ground (`banner_bg.xml`) with this wordmark bitmap on top. A
-VectorDrawable can't embed a font, so the "Iris /" lockup is rasterised here
-from the real Cal Sans TTF onto a TRANSPARENT canvas, then composited over the
-vector background by the launcher — keeping the gradient banding-free.
-
-Best practices baked in:
-  * Output is 320×180 px @ xhdpi (the Android TV banner spec) → written to
-    `drawable-xhdpi/banner_wordmark.png`; `--all` adds the other buckets.
-  * Supersampled then downscaled (LANCZOS) for clean antialiased edges.
-  * Transparent background — the gradient lives in the vector layer, so no
-    8-bit banding on the glow.
+The banner is a layer-list (`res/drawable/banner.xml`): the flat night ground
+(`banner_bg.xml`), the vector mark (`iris_mark.xml`) and the wordmark bitmap. A
+VectorDrawable can't embed a font, so "Iris" is rasterised here from the real
+Borel TTF onto a transparent canvas. This script lays out the whole lockup and
+writes `banner.xml` too, so the mark's offset and the word's position can't
+drift apart.
 
 Usage:
     python3 android-tv/scripts/gen_banner.py            # xhdpi
     python3 android-tv/scripts/gen_banner.py --all       # every density
-    python3 android-tv/scripts/gen_banner.py --ss 6       # heavier supersample
 
 Requires Pillow:  python3 -m pip install --break-system-packages Pillow
-(or a venv:  python3 -m venv .venv && .venv/bin/pip install Pillow)
 """
 
 from __future__ import annotations
@@ -34,84 +26,81 @@ try:
 except ImportError:
     sys.exit("Pillow is required:  python3 -m pip install --break-system-packages Pillow")
 
-# ── Brand tokens (mirror ui/theme/Color.kt) ─────────────────────────────────
-BRAND3 = (240, 143, 232)     # #F08FE8  warm end
-BRAND = (165, 141, 255)      # #A58DFF  violet
-BRAND2 = (105, 193, 252)     # #69C1FC  cool end
-DIM = (114, 116, 123)        # #72747B  fg-dim (the slash)
+# web/src/styles/tokens.css: --raw-cloud on --raw-night
+CLOUD = (242, 240, 234)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(HERE, "..", "app", "src", "main", "res")
-FONT_PATH = os.path.join(RES, "font", "cal_sans_regular.ttf")
+FONT_PATH = os.path.join(RES, "font", "borel_display_regular.ttf")
 
-# Banner is 320×180 dp; px per density bucket (xhdpi = the 320×180 spec asset).
+# The banner is 160×90 dp (320×180 px at xhdpi, the Android TV spec).
 DENSITIES = {"mdpi": 1.0, "hdpi": 1.5, "tvdpi": 1.33125, "xhdpi": 2.0, "xxhdpi": 3.0}
-BASE_W, BASE_H = 160, 90  # dp; ×2 = 320×180
+BASE_W, BASE_H = 160, 90
+MARK = 40  # dp
+GAP = 9  # dp between the mark and the word
+WORD_SIZE = 34  # dp, Borel's em
 
 
-def lerp(a, b, t):
-    return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+def layout():
+    """dp positions of the lockup, centred: (mark_left, word_left, word_width)."""
+    probe = ImageFont.truetype(FONT_PATH, 1000)
+    word_w = probe.getlength("Iris") * WORD_SIZE / 1000
+    total = MARK + GAP + word_w
+    mark_left = (BASE_W - total) / 2
+    return mark_left, mark_left + MARK + GAP, word_w
 
 
-def grad3(t):
-    """3-stop brand ramp: brand3 → brand → brand2."""
-    return lerp(BRAND3, BRAND, t * 2) if t < 0.5 else lerp(BRAND, BRAND2, (t - 0.5) * 2)
+def render(scale, ss):
+    w, h = round(BASE_W * scale) * ss, round(BASE_H * scale) * ss
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    _, word_left, _ = layout()
+    k = scale * ss
+    font = ImageFont.truetype(FONT_PATH, round(WORD_SIZE * k))
+    left, top, _, bottom = font.getbbox("Iris")
+    # Borel's tall ascenders: centre the ink, not the em box
+    y = (h - (bottom - top)) / 2 - top
+    ImageDraw.Draw(img).text((word_left * k - left, y), "Iris", font=font, fill=CLOUD + (255,))
+    return img.resize((round(BASE_W * scale), round(BASE_H * scale)), Image.LANCZOS)
 
 
-def render(width, height):
-    """Transparent canvas with the 'Iris /' lockup centred."""
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-
-    # Auto-fit Cal Sans so the lockup is ~58% of the banner width.
-    target_w = width * 0.58
-    probe = ImageFont.truetype(FONT_PATH, 100)
-    iris_w0, slash_w0 = probe.getlength("Iris"), probe.getlength("/")
-    fontsize = int(100 * target_w / (iris_w0 + 100 * 0.10 + slash_w0))
-    font = ImageFont.truetype(FONT_PATH, fontsize)
-    gap = fontsize * 0.10
-
-    iris_w, slash_w = font.getlength("Iris"), font.getlength("/")
-    total_w = iris_w + gap + slash_w
-    bbox = font.getbbox("Iris/")
-    x0 = (width - total_w) / 2
-    y0 = (height - (bbox[3] - bbox[1])) / 2 - bbox[1]
-
-    # "Iris": white into a mask, then pour the brand gradient through it.
-    mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(mask).text((x0, y0), "Iris", font=font, fill=255)
-    grad = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    gpix = grad.load()
-    gx0, gx1 = x0, x0 + iris_w
-    for x in range(width):
-        col = grad3(min(1.0, max(0.0, (x - gx0) / (gx1 - gx0)))) + (255,)
-        for y in range(height):
-            gpix[x, y] = col
-    img.paste(grad, (0, 0), mask)
-
-    # "/": dim, same face.
-    ImageDraw.Draw(img).text((x0 + iris_w + gap, y0), "/", font=font, fill=DIM + (255,))
-    return img
+BANNER_XML = """<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV launcher banner, written by scripts/gen_banner.py (edit the script, not this
+     file): the night ground, the Iris mark, and "Iris" in Borel as a bitmap (a vector can't
+     embed a font). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/banner_bg" />
+    <item
+        android:width="{mark}dp"
+        android:height="{mark}dp"
+        android:left="{left}dp"
+        android:gravity="left|center_vertical"
+        android:drawable="@drawable/iris_mark" />
+    <item android:drawable="@drawable/banner_wordmark" />
+</layer-list>
+"""
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Render the Iris banner wordmark layer.")
+    ap = argparse.ArgumentParser(description="Render the Iris TV banner.")
     ap.add_argument("--all", action="store_true", help="every density (default: xhdpi only)")
     ap.add_argument("--ss", type=int, default=4, help="supersample factor (default 4)")
     args = ap.parse_args()
-
     if not os.path.exists(FONT_PATH):
-        sys.exit(f"Cal Sans not found at {FONT_PATH}")
+        sys.exit(f"Borel not found at {FONT_PATH}")
 
     buckets = DENSITIES if args.all else {"xhdpi": DENSITIES["xhdpi"]}
     for name, scale in buckets.items():
-        w, h = round(BASE_W * scale), round(BASE_H * scale)
-        out = render(w * args.ss, h * args.ss).resize((w, h), Image.LANCZOS)
         d = os.path.join(RES, f"drawable-{name}")
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, "banner_wordmark.png")
-        out.save(path, "PNG")
-        print(f"  wrote {os.path.relpath(path, os.path.join(HERE, '..'))}  ({w}×{h})")
-    print("Done. Banner = banner.xml (layer-list: banner_bg vector + this wordmark).")
+        render(scale, args.ss).save(path, "PNG")
+        print(f"  wrote {os.path.relpath(path, os.path.join(HERE, '..'))}")
+
+    mark_left, _, _ = layout()
+    xml = BANNER_XML.format(mark=MARK, left=round(mark_left, 1))
+    with open(os.path.join(RES, "drawable", "banner.xml"), "w", encoding="utf-8") as f:
+        f.write(xml)
+    print("  wrote app/src/main/res/drawable/banner.xml")
 
 
 if __name__ == "__main__":
