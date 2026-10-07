@@ -117,7 +117,7 @@
 				{:else if !(c.kind === 'movie' && c.torrents.length > 1)}
 					<RawFiles collection={c} />
 				{/if}
-				{#if goneReleases.length}<GoneReleases collectionId={c.id} releases={goneReleases} />{/if}
+				{#if goneReleases.length}<GoneReleases collectionId={c.id} title={c.display_title} releases={goneReleases} />{/if}
 			</div>
 		{/if}
 	{/if}

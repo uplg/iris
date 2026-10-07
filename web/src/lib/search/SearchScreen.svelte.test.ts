@@ -54,6 +54,15 @@ describe('SearchScreen', () => {
 		expect(api.sent('POST', '/me/recent-searches')[0].body).toEqual({ query: 'severance' });
 	});
 
+	it('an address carrying words searches on arrival, the words in the field', async () => {
+		at('/search?q=Severance%20S02E04');
+		const api = backend();
+		await render(SearchScreen);
+		await expect.element(screen.getByText('1 release', { exact: true })).toBeVisible();
+		expect(searches(api)[0].path).toBe('/search?q=Severance+S02E04&page=1&limit=25');
+		await expect.element(screen.getByRole('combobox', { name: 'Title, year or release name' })).toHaveValue('Severance S02E04');
+	});
+
 	it('a return to the tab does not ask every tracker again', async () => {
 		at('/search?q=severance');
 		const api = backend();

@@ -7,7 +7,7 @@
 	import { plural } from '@iris/api/format';
 	import { goto } from '$app/navigation';
 	import { me } from '@iris/api/client';
-	import { fetchAgain } from '#lib/regrab.ts';
+	import { fetchAgainOrSearch } from '#lib/regrab.ts';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS } from '#lib/queries.ts';
 	import PageHead from '#lib/components/PageHead.svelte';
@@ -29,8 +29,10 @@
 	const groups = $derived(groupHistory(history.data ?? []));
 
 	async function restore(it: Item) {
-		await fetchAgain(it.infohash);
-		await goto(`/watch/${it.infohash}/${it.file_idx}`);
+		const episode = typeof it.season === 'number' && typeof it.episode === 'number' ? { season: it.season, episode: it.episode } : null;
+		const res = await fetchAgainOrSearch({ infohash: it.infohash, title: it.collection_title, episode, name: it.torrent_name });
+		// a refusal went to Search
+		if (res) await goto(`/watch/${it.infohash}/${it.file_idx}`);
 	}
 </script>
 

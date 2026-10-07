@@ -5,7 +5,7 @@
 	import Meter from '#lib/components/Meter.svelte';
 	import { goto } from '$app/navigation';
 	import { library, me, type TorrentView } from '@iris/api/client';
-	import { fetchAgain } from '#lib/regrab.ts';
+	import { fetchAgainOrSearch } from '#lib/regrab.ts';
 	import { formatSize } from '@iris/api/format';
 	import { seedersWords } from '#lib/search/release.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -21,10 +21,11 @@
 
 	interface Props {
 		collectionId: string;
+		title: string;
 		ep: Episode;
 		torrents: Map<string, TorrentView>;
 	}
-	let { collectionId, ep, torrents }: Props = $props();
+	let { collectionId, title, ep, torrents }: Props = $props();
 
 	const g = new Gesture();
 	let row = $state<HTMLLIElement>();
@@ -81,8 +82,10 @@
 
 	function again(v: Gone) {
 		void g.run(
-			() => fetchAgain(v.infohash),
-			async () => {
+			() => fetchAgainOrSearch({ infohash: v.infohash, title, episode: ep, name: v.release_name }),
+			async (res) => {
+				// a refusal went to Search
+				if (!res) return;
 				await refetchCollection(collectionId);
 				await goto(watchHref(v.infohash, v.file_idx));
 			},

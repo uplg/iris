@@ -13,12 +13,14 @@
 
 	interface Props {
 		collectionId: string;
+		/** The series' title, what Search asks when a release cannot come back. */
+		title: string;
 		episodes: Episode[];
 		torrents: Map<string, TorrentView>;
 		/** Rows drawn at once, and added at each step. */
 		step?: number;
 	}
-	let { collectionId, episodes, torrents, step = 40 }: Props = $props();
+	let { collectionId, title, episodes, torrents, step = 40 }: Props = $props();
 
 	const lead = 3;
 	const opening = untrack(() => {
@@ -54,7 +56,7 @@
 {/if}
 <ol class="episodes" aria-label={plural(episodes.length, 'episode')}>
 	{#each shown as ep (ep.absolute !== null ? `a${ep.absolute}` : `${ep.season}-${ep.episode}`)}
-		<EpisodeRow {collectionId} {ep} {torrents} />
+		<EpisodeRow {collectionId} {title} {ep} {torrents} />
 	{/each}
 </ol>
 {#if after > 0}
