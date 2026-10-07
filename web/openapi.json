@@ -4493,7 +4493,7 @@
               "string",
               "null"
             ],
-            "description": "Why this card surfaced (e.g. \"1.8k watching today\"). Additive —\nclients that ignore it are unaffected."
+            "description": "Why this card surfaced, when it isn't plain from its shelf. Additive —\nclients that ignore it are unaffected."
           },
           "seeders": {
             "type": [

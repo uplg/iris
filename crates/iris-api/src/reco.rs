@@ -90,7 +90,7 @@ pub struct CatalogCard {
     pub year: Option<i32>,
     pub already_in_library: bool,
     pub library_infohash: Option<String>,
-    /// Why this card surfaced (e.g. "1.8k watching today"). Additive —
+    /// Why this card surfaced, when it isn't plain from its shelf. Additive —
     /// clients that ignore it are unaffected.
     pub reason: Option<String>,
 }
@@ -398,12 +398,10 @@ impl<'a> Assembly<'a> {
         }
         let scored = by_row
             .into_values()
-            .map(|(tmdb, simkl, watched, row)| {
+            .map(|(tmdb, simkl, _watched, row)| {
                 let base = 0.5 * tmdb + 0.3 * simkl + 0.2 * self.seeders_score(row);
-                let reason = watched
-                    .filter(|w| *w > 0)
-                    .map(|w| format!("{} watching today", compact(w)));
-                (self.viewer.boost(row, base), row, reason)
+                // no reason: being on the trending shelf already says it's popular
+                (self.viewer.boost(row, base), row, None)
             })
             .collect();
         self.shelf("trending", "Trending now", None, scored)
