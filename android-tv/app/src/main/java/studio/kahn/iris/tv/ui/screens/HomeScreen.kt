@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -163,6 +164,10 @@ fun HomeContent(
     val focus = rememberCardFocus(fallback = header)
     val list = rememberLazyListState()
     var focusPlaced by remember { mutableStateOf(false) }
+    // A card focused during this visit before the hero came (the platform's default focus lands
+    // on the first focusable) is not a card left: only a return goes back to one.
+    val returning = remember { focus.returns.last != null }
+    val heroIndex by rememberUpdatedState(if (update != null) 1 else 0)
 
     // The first focus: back on this screen the card left, else the hero's main action, else the
     // menu once the home knows it has no hero. The onboarding sheet closing puts it back too.
@@ -179,13 +184,28 @@ fun HomeContent(
     LaunchedEffect(state.hero?.key, state.heroPending, sheetOpen, focusPlaced) {
         if (focusPlaced || sheetOpen) return@LaunchedEffect
         withFrameNanos { }
-        if (focus.focusLast()) {
+        if (returning && focus.focusLast()) {
             focusPlaced = true
             return@LaunchedEffect
         }
         if (state.heroPending) return@LaunchedEffect
-        val target = if (state.hero != null) heroFocus else header ?: return@LaunchedEffect
-        focusPlaced = runCatching { target.requestFocus() }.isSuccess
+        if (state.hero == null) {
+            focusPlaced = header != null && runCatching { header.requestFocus() }.getOrDefault(false)
+            return@LaunchedEffect
+        }
+        // The hero comes in above rows composed while it was pending, and the list keeps its
+        // first visible row where it was: the hero sits above the viewport, not composed, and
+        // focusing it fails. The list goes back to its top first; when an update banner leaves
+        // no room for the whole hero, the banner scrolls out instead.
+        list.scrollToItem(0)
+        withFrameNanos { }
+        val info = list.layoutInfo
+        val shown = info.visibleItemsInfo.firstOrNull { it.key == HERO_KEY }
+        if (shown == null || shown.offset + shown.size > info.viewportEndOffset) {
+            list.scrollToItem(heroIndex)
+            withFrameNanos { }
+        }
+        focusPlaced = runCatching { heroFocus.requestFocus() }.getOrDefault(false)
     }
 
     // No ground fill here: the header and the hero's still are drawn behind this content.
@@ -214,7 +234,7 @@ fun HomeContent(
                     }
                 }
                 if (hero != null) {
-                    item(key = "hero", contentType = "hero") {
+                    item(key = HERO_KEY, contentType = "hero") {
                         Hero(hero, state.busy, heroFocus, onHeroAction, Modifier.padding(horizontal = layout.safeHorizontal))
                     }
                 }
@@ -293,6 +313,8 @@ fun HomeContent(
     )
 }
 
+private const val HERO_KEY = "hero"
+
 // The board's hero still: 1100 x 620 of 1920 x 1080, in the top right corner.
 private const val HERO_ART_WIDTH = 1100f / 1920f
 private const val HERO_ART_HEIGHT = 620f / 1080f
@@ -300,7 +322,8 @@ private const val HERO_ART_HEIGHT = 620f / 1080f
 /**
  * The hero's still in the screen's top right corner, under the header, fading into the
  * ground towards the words (left) and the rows (bottom). It is not in the [list] (whose rows
- * are clipped below the header), so it follows the list's scroll itself.
+ * are clipped below the header), so it follows the hero's item itself: up with it once it
+ * reaches the top, gone once it has scrolled out.
  */
 @Composable
 private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, modifier: Modifier = Modifier) {
@@ -308,9 +331,9 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
         modifier
             .size(width, height)
             .graphicsLayer {
-                val atTop = list.firstVisibleItemIndex == 0
-                translationY = if (atTop) -list.firstVisibleItemScrollOffset.toFloat() else 0f
-                alpha = if (atTop) 1f else 0f
+                val hero = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == HERO_KEY }
+                translationY = hero?.offset?.coerceAtMost(0)?.toFloat() ?: 0f
+                alpha = if (hero != null) 1f else 0f
             }
             .background(IrisColor.art)
             .clearAndSetSemantics {},
