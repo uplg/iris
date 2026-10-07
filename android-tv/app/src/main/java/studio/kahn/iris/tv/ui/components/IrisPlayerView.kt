@@ -38,8 +38,8 @@ import studio.kahn.iris.tv.ui.theme.IrisColor
  * TV draw their own controls in Compose):
  *
  * - Media3's [ContentFrame] on a SurfaceView (the PlayerView default: the
- *   cheapest path and the one HDR passthrough takes), letterboxed to fit,
- *   the stage color until the first frame.
+ *   cheapest path and the one HDR passthrough takes), letterboxed to fit
+ *   in black ([IrisColor.letterbox]), black until the first frame.
  * - A Media3 [SubtitleView] fed the player's cues, in the system caption
  *   style ([applySystemCaptionStyle]), re-applied when the person changes
  *   the caption settings. [liftCues] raises them above the controls.
@@ -75,13 +75,13 @@ fun PlayerStage(
         // The next episode's stage composes before the previous one leaves.
         onDispose { if (stagesAwake.decrementAndGet() == 0) hostView.keepScreenOn = false }
     }
-    Box(modifier.fillMaxSize().background(IrisColor.stage), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxSize().background(IrisColor.letterbox), contentAlignment = Alignment.Center) {
         ContentFrame(
             player = player,
             modifier = Modifier.fillMaxSize(),
             surfaceType = SURFACE_TYPE_SURFACE_VIEW,
             contentScale = ContentScale.Fit,
-            shutter = { Box(Modifier.fillMaxSize().background(IrisColor.stage)) },
+            shutter = { Box(Modifier.fillMaxSize().background(IrisColor.letterbox)) },
         )
         SubtitleLayer(player, liftCues)
     }
