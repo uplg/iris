@@ -53,6 +53,9 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.ExperimentalComposeUiApi
+import kotlinx.coroutines.awaitCancellation
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -166,8 +169,9 @@ data class SearchActions(
 /**
  * Search, from the field to a release (TVSearchStart, TVSearch,
  * TVSearchGrid, TVSearchList). The field comes first; on a TV the
- * on-screen keyboard types into it, OK on the field opens the system
- * keyboard, the remote's search key brings the field back.
+ * on-screen keyboard types into it (the system one never opens), on a phone
+ * OK or a tap on the field opens the system keyboard; the remote's search
+ * key brings the field back.
  */
 @Composable
 fun SearchScreen(
@@ -354,32 +358,48 @@ private fun resultsTrailing(state: SearchUiState): String? {
     }
 }
 
+/**
+ * The search field. With the [onScreenKeyboard] it types, the system keyboard never opens:
+ * the field asks the platform for no text input session at all, as some TV keyboards (Gboard
+ * for TV, the leanback one) open as soon as a session starts, focus alone and
+ * `showKeyboardOnFocus = false` notwithstanding. A hardware keyboard still types (its keys
+ * reach the field as key events). Without it (a phone), OK or a tap opens the system keyboard.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SearchField(
     state: SearchUiState,
     actions: SearchActions,
+    onScreenKeyboard: Boolean,
     modifier: Modifier,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
-    TextInput(
-        value = state.typed,
-        onValueChange = actions.onType,
-        label = "Title, year or release name",
-        leadingIcon = Icons.Rounded.Search,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false, showKeyboardOnFocus = false),
-        keyboardActions = KeyboardActions(onSearch = {
-            keyboard?.hide()
-            actions.onSubmit()
-        }),
-        modifier = modifier
-            .fillMaxWidth()
-            .onPreviewKeyEvent { e ->
-                // OK on the field opens the system keyboard (focus alone does not).
-                val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
-                if (ok && e.type == KeyEventType.KeyUp) keyboard?.show()
-                false
-            },
-    )
+    val field = @Composable {
+        TextInput(
+            value = state.typed,
+            onValueChange = actions.onType,
+            label = "Title, year or release name",
+            leadingIcon = Icons.Rounded.Search,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false, showKeyboardOnFocus = false),
+            keyboardActions = KeyboardActions(onSearch = {
+                keyboard?.hide()
+                actions.onSubmit()
+            }),
+            modifier = modifier
+                .fillMaxWidth()
+                .onPreviewKeyEvent { e ->
+                    // OK on the field opens the system keyboard (focus alone does not).
+                    val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                    if (ok && e.type == KeyEventType.KeyUp && !onScreenKeyboard) keyboard?.show()
+                    false
+                },
+        )
+    }
+    if (onScreenKeyboard) {
+        InterceptPlatformTextInput(interceptor = { _, _ -> awaitCancellation() }) { field() }
+    } else {
+        field()
+    }
 }
 
 @Composable
@@ -398,7 +418,7 @@ private fun ComposeLayout(
             Modifier.width(if (onScreenKeyboard) KEYBOARD_WIDTH + 12.dp else minOf(300.dp, layout.contentWidth * 0.36f)),
             verticalArrangement = Arrangement.spacedBy(IrisSpace.s5),
         ) {
-            SearchField(state, actions, Modifier.fieldFocus(fieldFocus))
+            SearchField(state, actions, onScreenKeyboard, Modifier.fieldFocus(fieldFocus))
             if (state.tooShort) StatusLine("Type at least 2 characters.", tone = StatusTone.Warn)
             if (onScreenKeyboard) {
                 SearchKeyboard(onType = actions.onKey, onDelete = actions.onDelete, onClear = actions.onClear)
