@@ -7,11 +7,6 @@ belong to, plays a release while the torrent is still arriving, seeds
 what you keep and frees the disk on its own when it fills up. One
 server at home, a web app and an Android TV app; invitation-only.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
-  <img src="docs/screenshot.png" alt="Iris on the web: the live TV guide, France, what's on now and next">
-</picture>
-
 <img src="docs/screenshot-tv.png" alt="Iris on Android TV: the home screen, Severance to resume">
 
 ## On the TV
