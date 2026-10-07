@@ -12,8 +12,14 @@ CREATE TABLE invitations_new (
     consumed_by     BLOB REFERENCES users(id) ON DELETE SET NULL
 );
 
+-- A reference to an account deleted while foreign keys weren't enforced is
+-- carried as NULL, which is what ON DELETE SET NULL now says (prod had one).
 INSERT INTO invitations_new (id, token_hash, created_by, created_at, expires_at, consumed_at, consumed_by)
-SELECT id, token_hash, created_by, created_at, expires_at, consumed_at, consumed_by FROM invitations;
+SELECT i.id, i.token_hash,
+       (SELECT u.id FROM users u WHERE u.id = i.created_by),
+       i.created_at, i.expires_at, i.consumed_at,
+       (SELECT u.id FROM users u WHERE u.id = i.consumed_by)
+FROM invitations i;
 
 DROP TABLE invitations;
 ALTER TABLE invitations_new RENAME TO invitations;
