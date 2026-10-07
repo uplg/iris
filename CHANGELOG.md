@@ -7,12 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-07
+
 ### Added
 
 - **Gemini tracker** (French, general, UNIT3D), searched in every video
   category: films, animated films and documentaries; series, animated
   series, documentary series and TV shows. A UNIT3D provider can now list
   its categories per kind (`movie_category_ids` / `tv_category_ids`).
+- **Interface size on the TV** (Settings → This TV): Default, Larger or
+  Largest, kept on the device. Words, buttons and spacing grow together;
+  videos keep their size.
+
+### Changed
+
+- **The home says less** (web and TV): a new episode is one past where you
+  are (an old episode a tracker only now indexed no longer counts) and sits
+  on the watchlist poster's corner instead of a « No new episodes » line; the
+  languages line under the hero is gone; « Right now » only says what is
+  downloading (the summary now sends new episodes, free disk and seeding
+  empty, so shipped TV apps hide them too); a library card no longer says
+  « On disk » or its size.
+- A trending card no longer says « 1.3k watching today »: its shelf already
+  says it is popular.
+- **A simpler title page on the TV**: a banner across the top (the title's
+  still, the poster in it, the title, one line of facts, two lines of its
+  story, resume or play and one other action), then the episodes, then what
+  is on disk, its languages, the files and what used to be on disk. It opens
+  on resume or play.
+
+### Fixed
+
+- TV player: a single Back hides the controls. With the focus in the
+  buttons, the first press only moved the focus out of them.
+- TV player: a thin blue fringe above and below a film a little wider than
+  the screen; the picture is now framed in black.
 
 ## [1.6.0] - 2026-10-07
 
@@ -1293,7 +1322,8 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.6.0...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.6.1...HEAD
+[1.6.1]: https://github.com/uplg/iris/compare/1.6.0...1.6.1
 [1.6.0]: https://github.com/uplg/iris/compare/1.5.0...1.6.0
 [1.5.0]: https://github.com/uplg/iris/compare/1.4.2...1.5.0
 [1.4.2]: https://github.com/uplg/iris/compare/1.4.1...1.4.2
