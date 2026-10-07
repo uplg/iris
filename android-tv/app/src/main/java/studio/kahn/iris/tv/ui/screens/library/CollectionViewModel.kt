@@ -34,6 +34,7 @@ import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
 import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.screens.player.LanguageChoices
 import studio.kahn.iris.tv.ui.screens.player.perTitle
@@ -103,10 +104,10 @@ data class CollectionPage(
     val id: String,
     val title: String,
     val posterUrl: String?,
-    val eyebrow: String,
+    /** The title's TMDB still across the banner; none: the banner is the ground. */
+    val backdropUrl: String?,
+    /** One short line: [titleFacts]. */
     val facts: String,
-    val chips: List<String>,
-    val fresh: Int,
     val overview: String?,
     val series: Boolean,
     val playLabel: String,
@@ -123,8 +124,6 @@ data class CollectionPage(
     val seasonFact: String?,
     val packs: List<PackUi>,
     val episodes: List<EpisodeRowUi>,
-    /** Where a long list opens: near the first episode not watched. */
-    val opening: Int,
     val emptyEpisodes: String?,
     val onDisk: List<ReleaseRow>,
     val gone: List<GoneUi>,
@@ -383,20 +382,13 @@ fun collectionPage(
     val torrents = c.torrents.associateBy { it.infohash }
     val resume = resumeOf(c, watching)
     val watched = watching.groupBy { it.infohash }.mapValues { (_, v) -> v.associateBy { it.fileIdx.toInt() } }
-    val eyebrow = listOfNotNull(
-        if (series) "Series" else "Movie",
-        m?.year?.toString(),
-        m?.genres?.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(", "),
-    ).joinToString(" · ")
     val showEpisodes = hasEpisodes(c)
     return CollectionPage(
         id = c.id.toString(),
         title = c.displayTitle,
         posterUrl = tmdbPosterUrl(c.posterPath ?: m?.posterPath, "w342"),
-        eyebrow = eyebrow,
-        facts = heroFacts(c, rows, m?.runtimeMinutes, m?.voteScore),
-        chips = heroChips(c, m?.originalLanguage),
-        fresh = c.hasNewSinceLastVisit ?: 0,
+        backdropUrl = tmdbBackdropUrl(c.backdropPath ?: m?.backdropPath, "w1280"),
+        facts = titleFacts(c, rows, m?.year, m?.runtimeMinutes),
         overview = m?.overview?.takeIf { it.isNotBlank() },
         series = series,
         playLabel = playLabel(c, resume),
@@ -419,7 +411,6 @@ fun collectionPage(
             )
         },
         episodes = shown.map { ep -> episodeRow(ep, torrents::get) },
-        opening = if (shown.size > 40) openingIndex(shown) else 0,
         emptyEpisodes = when {
             !showEpisodes -> null
             absolute && rows.isEmpty() -> "No episode found yet for this series."

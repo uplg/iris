@@ -11,6 +11,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
+import studio.kahn.iris.tv.data.CollectionDetail
+import studio.kahn.iris.tv.data.TmdbKind
+import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.ui.screens.CollectionContent
 import studio.kahn.iris.tv.ui.screens.DetailContent
 import studio.kahn.iris.tv.ui.screens.EpisodeSheet
@@ -116,8 +119,20 @@ class LibraryScreenshots {
         )
     }
 
-    private fun series() = CollectionUiState(
-        page = Loadable.Ready(collectionPage(F.series, null, emptyList(), 2L, F.now)),
+    private val severance = MediaMetadata(
+        genreIds = listOf(18),
+        genres = listOf("Drama", "Mystery"),
+        kind = TmdbKind.tv,
+        title = "Severance",
+        tmdbId = 95396,
+        year = 2022,
+        overview = "Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives. " +
+            "When a mysterious colleague appears outside of work, it begins a journey to discover the truth about their jobs.",
+    )
+
+    // The still does not load on the JVM: its placeholder fill stands in for it.
+    private fun series(detail: CollectionDetail = F.series.copy(backdropPath = "/severance.jpg")) = CollectionUiState(
+        page = Loadable.Ready(collectionPage(detail, severance, emptyList(), 2L, F.now)),
         languages = Loadable.Ready(languagesUi(PlaybackPrefsResponse(audioLanguage = "en", subtitleLanguage = "off", forCollection = true, audioForCollection = true, subtitleForCollection = true), F.series, null, F.series.id)),
     )
 
@@ -125,8 +140,25 @@ class LibraryScreenshots {
     fun collectionSeries() = shots.snapEverySize("collection_series") { CollectionContent(series(), CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null))) }
 
     @Test
+    fun collectionNoBackdrop() = shots.snap("collection_no_backdrop") {
+        CollectionContent(series(F.series), CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null)))
+    }
+
+    @Test
+    fun collectionLongTitle() = shots.snapEverySize("collection_long_title") {
+        CollectionContent(
+            series(F.series.copy(displayTitle = "The Lord of the Rings: The Rings of Power and the Sisters of the Long Night", backdropPath = "/rop.jpg")),
+            CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null)),
+        )
+    }
+
+    @Test
     fun collectionMovie() = shots.snap("collection_movie") {
-        CollectionContent(CollectionUiState(page = Loadable.Ready(collectionPage(F.movie, null, emptyList(), null, F.now))), CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null)))
+        val dune = MediaMetadata(genreIds = listOf(878), genres = listOf("Science Fiction"), kind = TmdbKind.movie, title = "Dune: Part Two", tmdbId = 693134, year = 2024, runtimeMinutes = 167)
+        CollectionContent(
+            CollectionUiState(page = Loadable.Ready(collectionPage(F.movie.copy(backdropPath = "/dune.jpg"), dune, emptyList(), null, F.now))),
+            CollectionActions(onRelease = releaseActions.copy(onOpenTitle = null)),
+        )
     }
 
     @Test
