@@ -48,7 +48,7 @@ class HomeModelsTest {
         )
 
         val hero = resumeHero(item, null, PlaybackPrefsResponse(audioLanguage = "en"))
-        assertEquals("Continue where you left off", hero.eyebrow)
+        assertEquals(null, hero.eyebrow)
         assertEquals("Season 2 · Episode 4 · Woe's Hollow · 23 min left", hero.meta)
         assertEquals(listOf("Resume at 32:10", "All episodes", "Start over"), hero.actions.map { it.label })
         assertEquals("Plays with audio in English.", hero.languages)

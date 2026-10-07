@@ -395,7 +395,7 @@ private fun Hero(
             .padding(top = if (compact) 0.dp else IrisSpace.s5),
         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
     ) {
-        Eyebrow(hero.eyebrow)
+        hero.eyebrow?.let { Eyebrow(it) }
         Text(
             hero.title,
             style = IrisType.titleFor(hero.title, if (compact) IrisType.title else IrisType.hero),

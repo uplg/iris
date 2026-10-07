@@ -46,7 +46,7 @@ class HomeScreenshots {
 
     private val hero = HeroModel(
         key = "resume:c:1",
-        eyebrow = "Continue where you left off",
+        eyebrow = null,
         title = "Severance",
         meta = "Season 2 · Episode 4 · Woe's Hollow · 23 min left",
         overview = "Mark and his team push deeper into Lumon while their outies start asking questions of their own.",

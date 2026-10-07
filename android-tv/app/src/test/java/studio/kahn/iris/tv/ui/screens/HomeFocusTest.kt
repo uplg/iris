@@ -50,7 +50,7 @@ class HomeFocusTest {
 
     private val hero = HeroModel(
         key = "resume:c:1",
-        eyebrow = "Continue where you left off",
+        eyebrow = null,
         title = "Severance",
         meta = "Season 2 · Episode 4 · 23 min left",
         overview = "Mark and his team push deeper into Lumon.",
@@ -101,7 +101,7 @@ class HomeFocusTest {
 
     private fun assertHeroFocusedAndShown() {
         compose.onNode(isFocused()).assert(hasText("Resume at 32:10"))
-        compose.onNodeWithText("CONTINUE WHERE YOU LEFT OFF").assertIsDisplayed()
+        compose.onNodeWithText("Season 2 · Episode 4 · 23 min left").assertIsDisplayed()
         compose.onNodeWithText("Severance").assertIsDisplayed()
     }
 
@@ -131,7 +131,6 @@ class HomeFocusTest {
         val title = compose.onNodeWithText("May I Help You and the Sisters of the Long Night").fetchSemanticsNode()
         val unclipped = compose.onNodeWithText("May I Help You and the Sisters of the Long Night").getUnclippedBoundsInRoot()
         assertEquals("the title is cut under the header", (unclipped.bottom - unclipped.top).value, with(compose.density) { title.boundsInRoot.height.toDp().value }, 0.5f)
-        compose.onNodeWithText("CONTINUE WHERE YOU LEFT OFF").assertIsDisplayed()
     }
 
     @Test

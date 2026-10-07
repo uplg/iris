@@ -69,7 +69,8 @@ data class HeroButton(val action: HeroAction, val label: String, val busyLabel: 
 @Immutable
 data class HeroModel(
     val key: String,
-    val eyebrow: String,
+    /** What kind of pick it is ("Up next", "Featured"); none when resuming, which the buttons say. */
+    val eyebrow: String?,
     val title: String,
     val meta: String?,
     val overview: String?,
@@ -221,7 +222,7 @@ fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?, prefs: PlaybackPr
     }
     return HeroModel(
         key = "resume:$key",
-        eyebrow = if (item.nextUp || item.grabbable) "Up next" else "Continue where you left off",
+        eyebrow = if (item.nextUp || item.grabbable) "Up next" else null,
         title = continueTitle(item, md),
         meta = joined(meta),
         overview = md?.overview?.takeIf { it.isNotBlank() },

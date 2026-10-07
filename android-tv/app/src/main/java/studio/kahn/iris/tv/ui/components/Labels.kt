@@ -46,7 +46,7 @@ import studio.kahn.iris.tv.ui.theme.IrisSize
 import studio.kahn.iris.tv.ui.theme.IrisSpace
 import studio.kahn.iris.tv.ui.theme.IrisType
 
-/** The uppercase kicker above a title ("Continue where you left off"). */
+/** The uppercase kicker above a title ("Up next"). */
 @Composable
 fun Eyebrow(
     text: String,
