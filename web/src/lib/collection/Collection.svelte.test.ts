@@ -149,17 +149,78 @@ const reads = (api: ReturnType<typeof stubApi>, id = 'c1') => api.sent('GET', `/
 describe('Collection', () => {
 	beforeEach(() => nav.goto.mockClear());
 
-	it('heads the page with the title, its facts in words and the way to resume', async () => {
+	it('heads the page with one banner: the poster, the title, one line of facts and the way to resume', async () => {
 		backend();
 		await render(Collection, { id: 'c1' });
-		await expect.element(page.getByRole('heading', { level: 1, name: 'Severance' })).toBeVisible();
-		await expect.element(page.getByText('Series · 2022 · Drama, Mystery')).toBeVisible();
-		await expect.element(page.getByText('2 seasons · 7 episodes · TMDB 8.4 · 3 releases on disk')).toBeVisible();
-		await expect.element(page.getByText('English audio (original)')).toBeVisible();
-		await expect.element(page.getByRole('listitem').filter({ hasText: /^1080p · HEVC$/ })).toBeVisible();
-		await expect.element(page.getByRole('link', { name: 'Resume S2:E2 at 32:10' })).toHaveAttribute('href', '/watch/t2/1');
-		await expect.element(page.getByRole('button', { name: 'On your watchlist' })).toHaveAttribute('aria-pressed', 'true');
-		await expect.element(page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'Library' })).toBeVisible();
+		const banner = page.getByRole('region', { name: 'Severance' });
+		await expect.element(banner.getByRole('heading', { level: 1, name: 'Severance' })).toBeVisible();
+		await expect.element(banner.getByText('Series · 2022 · 2 seasons', { exact: true })).toBeVisible();
+		const resume = banner.getByRole('link', { name: 'Resume S2:E2 at 32:10' });
+		await expect.element(resume).toHaveAttribute('href', '/watch/t2/1');
+		(resume.element() as HTMLElement).focus();
+		expect(document.activeElement).toBe(resume.element());
+		await expect.element(banner.getByRole('button', { name: 'On your watchlist' })).toHaveAttribute('aria-pressed', 'true');
+		// the poster and the backdrop are the banner's, not a column of their own
+		const el = banner.element();
+		expect(el.querySelector('img[src$="/w342/poster.jpg"]')).not.toBeNull();
+		expect(el.querySelector('img[src$="/w1280/backdrop.jpg"]')).not.toBeNull();
+		// less text: no rating, no count of releases, no chips of languages
+		await expect.element(page.getByText(/TMDB 8\.4|releases on disk/)).not.toBeInTheDocument();
+		await expect.element(page.getByText('English audio (original)')).not.toBeInTheDocument();
+		await expect.element(page.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/library');
+	});
+
+	it('folds a long story to three lines, unfolded on demand', async () => {
+		const long = 'Mark leads a team whose memories have been split between work and home. '.repeat(12);
+		backend(series(), {
+			'/metadata/tmdb/95396?kind=tv': {
+				tmdb_id: 95396,
+				kind: 'tv',
+				title: 'Severance',
+				year: 2022,
+				genres: [],
+				genre_ids: [],
+				overview: long
+			}
+		});
+		await render(Collection, { id: 'c1' });
+		const more = page.getByRole('button', { name: 'More' });
+		await expect.element(more).toHaveAttribute('aria-expanded', 'false');
+		await more.click();
+		await expect.element(page.getByRole('button', { name: 'Less' })).toHaveAttribute('aria-expanded', 'true');
+	});
+
+	it('a movie’s banner says its kind, year and length and plays it', async () => {
+		const file = (i: number) => ({ files: [{ index: i, path: `Dune.2021.${i}.mkv`, size_bytes: 9 }] });
+		backend(
+			series({
+				id: 'm3',
+				kind: 'movie',
+				display_title: 'Dune',
+				tmdb_id: 438631,
+				torrents: [torrent('a', file(1)), torrent('b', file(2))],
+				episodes: [],
+				available_episodes: []
+			}),
+			{
+				'/me/continue-watching?include_grabbable=true': [],
+				'/metadata/tmdb/438631?kind=movie': {
+					tmdb_id: 438631,
+					kind: 'movie',
+					title: 'Dune',
+					year: 2021,
+					genres: [],
+					genre_ids: [],
+					runtime_minutes: 155
+				}
+			}
+		);
+		await render(Collection, { id: 'm3' });
+		const banner = page.getByRole('region', { name: 'Dune' });
+		await expect.element(banner.getByText('Movie · 2021 · 2 h 35 min', { exact: true })).toBeVisible();
+		await expect.element(banner.getByRole('link', { name: 'Play', exact: true })).toBeVisible();
+		await expect.element(banner.getByRole('button', { name: 'On your watchlist' })).not.toBeInTheDocument();
+		await expect.element(page.getByRole('region', { name: 'Releases on disk' })).toBeVisible();
 	});
 
 	it('marks the whole title watched, then reads it again', async () => {
@@ -290,16 +351,35 @@ describe('Collection', () => {
 		await expect.element(page.getByText('Episode 7', { exact: true })).not.toBeInTheDocument();
 	});
 
-	it('fits a 320 px screen and passes axe', async () => {
+	it('fits a 320 px screen: the banner stacks, its button the full width', async () => {
 		backend();
 		await page.viewport(320, 800);
 		const { container } = await render(Collection, { id: 'c1' });
 		await expect.element(page.getByRole('heading', { level: 1, name: 'Severance' })).toBeVisible();
 		await expect.element(page.getByText('Watched', { exact: false }).first()).toBeVisible();
 		expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(320);
+		const banner = page.getByRole('region', { name: 'Severance' }).element().getBoundingClientRect();
+		const play = page.getByRole('link', { name: 'Resume S2:E2 at 32:10' }).element().getBoundingClientRect();
+		expect(play.width).toBeGreaterThan(banner.width - 2 * 16 - 2);
 		const result = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } });
 		expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 	});
+
+	for (const theme of ['light', 'dark'] as const) {
+		it(`passes axe with its contrast in the ${theme} theme`, async () => {
+			document.documentElement.dataset.theme = theme;
+			try {
+				backend();
+				await page.viewport(1440, 900);
+				const { container } = await render(Collection, { id: 'c1' });
+				await expect.element(page.getByRole('link', { name: 'Resume S2:E2 at 32:10' })).toBeVisible();
+				const result = await axe.run(container);
+				expect(result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+			} finally {
+				delete document.documentElement.dataset.theme;
+			}
+		});
+	}
 
 	it("a movie's copies say where their viewer stands: resume, watch again, play", async () => {
 		const file = (i: number) => ({ files: [{ index: i, path: `Dune.2021.${i}.mkv`, size_bytes: 9 }] });
