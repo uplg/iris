@@ -34,9 +34,19 @@ describe('releases', () => {
 	it('go to their group: downloading, needing a hand, seeding', () => {
 		expect(groupOf(downloading)).toBe('downloading');
 		expect(groupOf(torrent())).toBe('seeding');
-		expect(groupOf(torrent({ finished: false, progress_pct: 10 }))).toBe('attention');
-		expect(groupOf(torrent({ state: 'error' }))).toBe('attention');
-		expect(groupOf(torrent({ state: 'paused' }))).toBe('attention');
+		// a stalled or failed download stays with the downloads, its line says why
+		expect(groupOf(torrent({ finished: false, progress_pct: 10 }))).toBe('downloading');
+		// a complete release paused by its tracker's policy is simply on disk
+		expect(groupOf(torrent({ state: 'paused' }))).toBe('seeding');
+		// an admin, who can act on them, gets the failures apart
+		expect(groupOf(torrent({ finished: false, progress_pct: 10 }), true)).toBe('attention');
+		expect(groupOf(torrent({ state: 'error' }), true)).toBe('attention');
+		expect(groupOf(torrent({ state: 'paused' }), true)).toBe('seeding');
+		// the server's word for a pause its tracker's policy wants
+		expect(groupOf(torrent({ state: 'held' }), true)).toBe('seeding');
+		expect(releaseStatus(torrent({ state: 'held', source_provider: 'nyaa' })).text).toBe(
+			'Paused after download · nyaa releases never seed'
+		);
 		expect(groupOf(torrent({ state: 'initializing', finished: false, progress_pct: 3 }))).toBe('downloading');
 	});
 

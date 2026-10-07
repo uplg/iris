@@ -1097,9 +1097,25 @@ impl TorrentView {
         viewer: &AuthUser,
         row: iris_db::torrents::TorrentRow,
     ) -> Option<Self> {
-        let snapshot = state.engine().get_by_infohash(&row.infohash)?;
+        let mut snapshot = state.engine().get_by_infohash(&row.infohash)?;
+        if held_by_policy(&snapshot, row.source_provider.as_deref(), |p| {
+            state.providers().seeds(p)
+        }) {
+            snapshot.state = iris_torrent::TorrentState::Held;
+        }
         Some(Self::new(viewer, row, snapshot))
     }
+}
+
+/// A complete release its tracker's policy keeps from seeding: the pause is deliberate.
+fn held_by_policy(
+    snapshot: &TorrentSnapshot,
+    provider: Option<&str>,
+    seeds: impl Fn(&str) -> bool,
+) -> bool {
+    snapshot.state == iris_torrent::TorrentState::Paused
+        && (snapshot.finished || snapshot.progress_pct >= 100.0)
+        && provider.is_some_and(|p| !seeds(p))
 }
 
 #[utoipa::path(
@@ -2805,6 +2821,59 @@ mod tmdb_verify_tests {
 
 #[cfg(test)]
 mod video_mode_tests {
+    #[test]
+    fn a_policy_pause_reads_as_held_and_nothing_else_does() {
+        use iris_torrent::TorrentState;
+        let snap = |state, finished: bool| iris_torrent::TorrentSnapshot {
+            infohash: "a".repeat(40),
+            name: None,
+            total_size_bytes: 10,
+            state,
+            progress_bytes: if finished { 10 } else { 3 },
+            progress_pct: if finished { 100.0 } else { 30.0 },
+            download_speed_bps: 0,
+            upload_speed_bps: 0,
+            uploaded_bytes: 0,
+            peers: 0,
+            files: Vec::new(),
+            error: None,
+            finished,
+            fetched_at: chrono::Utc::now(),
+        };
+        let nyaa_never_seeds = |p: &str| p != "nyaa";
+        assert!(super::held_by_policy(
+            &snap(TorrentState::Paused, true),
+            Some("nyaa"),
+            nyaa_never_seeds
+        ));
+        assert!(
+            !super::held_by_policy(
+                &snap(TorrentState::Paused, true),
+                Some("c411"),
+                nyaa_never_seeds
+            ),
+            "a seeding tracker's pause is a real pause"
+        );
+        assert!(
+            !super::held_by_policy(
+                &snap(TorrentState::Paused, false),
+                Some("nyaa"),
+                nyaa_never_seeds
+            ),
+            "unfinished: still a download"
+        );
+        assert!(!super::held_by_policy(
+            &snap(TorrentState::Live, true),
+            Some("nyaa"),
+            nyaa_never_seeds
+        ));
+        assert!(!super::held_by_policy(
+            &snap(TorrentState::Paused, true),
+            None,
+            nyaa_never_seeds
+        ));
+    }
+
     use super::decide_video_mode;
     use iris_caps::ClientCapabilities;
     use iris_config::TranscodeConfig;

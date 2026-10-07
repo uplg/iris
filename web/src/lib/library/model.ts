@@ -146,12 +146,14 @@ export const GROUPS: readonly { id: Group; title: string }[] = [
 	{ id: 'seeding', title: 'Seeding' }
 ];
 
-/** Where a release goes: fetching, needing a hand (an error, no peers, stopped, or paused by
- * its tracker's policy), or sharing what it has. */
-export function groupOf(t: TorrentView): Group {
+/** Where a release goes. A complete one is on disk, paused by its tracker's policy or not;
+ * one that still fetches is downloading, its line saying when it is stalled or failed. Only an
+ * admin, who can act on them, gets those failures apart, under « Needs attention ». */
+export function groupOf(t: TorrentView, admin = false): Group {
+	if (isComplete(t)) return t.state === 'error' && admin ? 'attention' : 'seeding';
 	const phase = phaseOf(t);
-	if (phase === 'error' || phase === 'paused' || phase === 'stalled') return 'attention';
-	return phase === 'seeding' ? 'seeding' : 'downloading';
+	if (admin && (phase === 'error' || phase === 'paused' || phase === 'stalled')) return 'attention';
+	return 'downloading';
 }
 
 export function ratioOf(sent: number, received: number | undefined): number | null {

@@ -118,9 +118,11 @@ describe('Library', () => {
 		await expect.element(dl.getByText('Downloading · 42% · 6.1 MB/s · 24 peers · done in about 2 min')).toBeVisible();
 		await expect.element(dl.getByText('Frieren.S01E05.1080p', { exact: true })).toBeVisible();
 		await expect.element(dl.getByRole('progressbar')).toHaveAttribute('aria-valuetext', '42%');
-		const attention = page.getByRole('region', { name: 'Needs attention' });
-		await expect.element(attention.getByText('Paused after download · nyaa releases never seed')).toBeVisible();
-		await expect.element(page.getByRole('region', { name: 'Seeding' }).getByRole('link', { name: 'Severance' })).toBeVisible();
+		// a policy pause is simply on disk, and only an admin gets a « Needs attention » group
+		const onDisk = page.getByRole('region', { name: 'Seeding' });
+		await expect.element(onDisk.getByText('Paused after download · nyaa releases never seed')).toBeVisible();
+		await expect.element(onDisk.getByRole('link', { name: 'Severance' })).toBeVisible();
+		await expect.element(page.getByRole('region', { name: 'Needs attention' })).not.toBeInTheDocument();
 	});
 
 	it('a title or a release opens from its poster; a release keeps its own buttons', async () => {
@@ -166,9 +168,10 @@ describe('Library', () => {
 		await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
 		await expect.poll(() => api.sent('DELETE', '/torrents/aaa')).toHaveLength(1);
 		await expect.poll(() => api.sent('GET', TORRENTS).length).toBeGreaterThan(before);
-		await expect.element(page.getByRole('region', { name: 'Seeding' })).not.toBeInTheDocument();
+		// the group keeps the nyaa release on disk: focus goes back to its heading
+		await expect.element(page.getByRole('region', { name: 'Seeding' }).getByRole('link', { name: 'Severance' })).not.toBeInTheDocument();
 		await expect.poll(() => ui.polite).toContain('Deleted Severance');
-		await expect.poll(() => document.activeElement?.textContent).toBe('Downloading');
+		await expect.poll(() => document.activeElement?.textContent).toBe('Seeding');
 	});
 
 	it('a failed delete is said, and the row stays', async () => {

@@ -135,6 +135,10 @@ pub enum TorrentState {
     Live,
     Paused,
     Error,
+    /// Complete and kept on disk, not seeding by its tracker's policy (`seed = false`, nyaa).
+    /// Never reported by the engine: the API's view sets it, so a client doesn't take a
+    /// deliberate pause for a problem. Older clients read an unknown state as "on disk".
+    Held,
 }
 
 impl TorrentState {

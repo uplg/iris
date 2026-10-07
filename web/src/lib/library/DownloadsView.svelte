@@ -1,6 +1,6 @@
 <script lang="ts">
-	// Every release on the server, by what it is doing: downloading, needing a hand (stalled, an
-	// error, paused by its tracker's policy), seeding. Found by name, hash or who added it.
+	// Every release on the server, by what it is doing: downloading or on disk (and, for an
+	// admin, what needs a hand). Found by name, hash or who added it.
 	import type { CollectionListItem, ContinueWatchingItem, TorrentView } from '@iris/api/client';
 	import FindField from '#lib/components/FindField.svelte';
 	import { plural, speed } from '@iris/api/format';
@@ -12,6 +12,7 @@
 	import { collectionsOf, read, torrentsOf } from '#lib/queries.ts';
 	import { GROUPS, groupOf, releaseTitle, type Group as GroupId } from './model.ts';
 	import TorrentRow from './TorrentRow.svelte';
+	import { session } from '#lib/session.svelte.ts';
 
 	const id = $props.id();
 	const torrents = createQuery(() => read.torrents());
@@ -30,7 +31,9 @@
 		return all.filter((t) => [t.name ?? '', t.infohash, t.added_by_name, titleOf(t)].some((s) => s.toLowerCase().includes(q)));
 	});
 	const grouped = $derived(
-		GROUPS.map((g) => ({ ...g, items: shown.filter((t) => groupOf(t) === g.id) })).filter((g) => g.items.length > 0)
+		GROUPS.map((g) => ({ ...g, items: shown.filter((t) => groupOf(t, !!session.user?.is_admin) === g.id) })).filter(
+			(g) => g.items.length > 0
+		)
 	);
 
 	// per release, per file: the caller's watch state (one lookup per row)

@@ -9173,7 +9173,8 @@
           "initializing",
           "live",
           "paused",
-          "error"
+          "error",
+          "held"
         ]
       },
       "TorrentView": {

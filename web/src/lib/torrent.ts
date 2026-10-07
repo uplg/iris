@@ -31,7 +31,8 @@ export type Phase = 'checking' | 'downloading' | 'stalled' | 'seeding' | 'paused
 
 export function phaseOf(t: Torrent): Phase {
 	if (t.state === 'error') return 'error';
-	if (t.state === 'paused') return 'paused';
+	// held: paused on purpose by its tracker's policy, complete and kept on disk
+	if (t.state === 'paused' || t.state === 'held') return 'paused';
 	if (isComplete(t)) return 'seeding';
 	if (t.state === 'initializing') return 'checking';
 	if (t.peers === 0 && t.download_speed_bps === 0 && pastGrace(t)) return 'stalled';
