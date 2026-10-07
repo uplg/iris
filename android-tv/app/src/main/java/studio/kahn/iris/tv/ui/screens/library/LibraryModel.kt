@@ -188,7 +188,8 @@ enum class Phase(val words: String) {
 
 fun phaseOf(t: TorrentView): Phase = when {
     t.state == TorrentState.error -> Phase.Error
-    t.state == TorrentState.paused -> Phase.Paused
+    // held: paused on purpose by its tracker's policy, complete and kept on disk (web `phaseOf`)
+    t.state == TorrentState.paused || t.state == TorrentState.held -> Phase.Paused
     done(t) -> Phase.Seeding
     t.state == TorrentState.initializing -> Phase.Checking
     stalled(t) -> Phase.Stalled
@@ -217,6 +218,7 @@ fun stalled(t: TorrentView): Boolean =
 
 /** Fetching, needing a hand (an error, paused, [stalled]), or sharing what it has. */
 fun groupOf(t: TorrentView): ReleaseGroup = when {
+    t.state == TorrentState.held -> ReleaseGroup.Seeding
     t.state == TorrentState.error || t.state == TorrentState.paused -> ReleaseGroup.Attention
     done(t) -> ReleaseGroup.Seeding
     stalled(t) -> ReleaseGroup.Attention

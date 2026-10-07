@@ -69,6 +69,10 @@ class LibraryModelTest {
         assertEquals("Stalled · no peers · 61%", releaseStatus(F.torrents[1]).text)
         assertEquals("Seeding · 3 peers downloading · 117 KB/s up", releaseStatus(F.torrents[2]).text)
         assertEquals("Paused after download · nyaa releases never seed", releaseStatus(F.torrents[4]).text)
+        // the server's word for that pause: on disk, said the same way
+        val held = F.torrents[4].copy(state = TorrentState.held)
+        assertEquals("Paused after download · nyaa releases never seed", releaseStatus(held).text)
+        assertEquals(ReleaseGroup.Seeding, groupOf(held))
         val broken = F.torrent("x", "X", state = TorrentState.error).copy(error = "disk full")
         assertEquals(Status(StatusTone.Warn, "Stopped with an error · disk full"), releaseStatus(broken))
     }
