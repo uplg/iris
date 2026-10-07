@@ -498,6 +498,8 @@ kbd {
 	color: var(--ink);
 	box-shadow: var(--shadow-dialog);
 	outline: none;
+	/* a release name is one long word: it wraps instead of running out of the dialog */
+	overflow-wrap: anywhere;
 }
 /* a sheet (Sheet.svelte): from the bottom on a phone, above the keyboard, pulled by its handle */
 .sheet {
@@ -603,6 +605,7 @@ kbd {
 	display: flex;
 	flex-direction: column;
 	gap: var(--s-4);
+	min-width: 0;
 }
 
 /* tabs */

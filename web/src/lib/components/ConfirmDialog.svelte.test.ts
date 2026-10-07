@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
+import '../../styles/app.css';
 
 const props = (over: Partial<Parameters<typeof render>[1]> = {}) => ({
 	label: 'Remettre à zéro',
@@ -76,5 +77,17 @@ describe('ConfirmDialog', () => {
 		(trigger.element() as HTMLElement).click();
 		await expect.element(page.getByRole('alertdialog')).not.toBeInTheDocument();
 		await expect.element(trigger).toHaveClass('danger');
+	});
+
+	it('a long release name wraps inside the dialog instead of running out of it', async () => {
+		const name = 'Puis.Je.Vous.Aider.S01.VOSTFR.1080p.WEBRip.AAC.2.0.x264-NoTag.Extended.Cut.Remastered';
+		await render(ConfirmDialog, props({ title: `Delete ${name}?`, description: `This removes ${name} from the server.` }));
+		await page.getByRole('button', { name: 'Remettre à zéro' }).click();
+		const dialog = page.getByRole('alertdialog').element() as HTMLElement;
+		await expect.poll(() => dialog.getBoundingClientRect().width).toBeGreaterThan(0);
+		expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth);
+		for (const el of dialog.querySelectorAll<HTMLElement>('h2, p, [id]')) {
+			expect(el.getBoundingClientRect().right).toBeLessThanOrEqual(dialog.getBoundingClientRect().right + 0.5);
+		}
 	});
 });
