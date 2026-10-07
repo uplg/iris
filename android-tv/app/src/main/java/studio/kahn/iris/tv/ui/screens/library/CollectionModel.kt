@@ -64,8 +64,8 @@ sealed interface Variant {
         val releaseName: String,
         val quality: String?,
         val totalSizeBytes: Long,
-        val sourceProvider: String,
-        val sourceExternalId: String,
+        val season: Long,
+        val episode: Long,
     ) : Variant
 }
 
@@ -92,8 +92,8 @@ private fun gone(g: GoneEpisodeEntry) = Variant.Gone(
     releaseName = g.releaseName,
     quality = g.quality,
     totalSizeBytes = g.totalSizeBytes ?: 0L,
-    sourceProvider = g.sourceProvider,
-    sourceExternalId = g.sourceExternalId,
+    season = g.season,
+    episode = g.episode,
 )
 
 private fun available(a: AvailableEpisodeEntry) = Variant.Available(a.language, a.indexerProvider, a.quality, a.seeders, a.sizeBytes)

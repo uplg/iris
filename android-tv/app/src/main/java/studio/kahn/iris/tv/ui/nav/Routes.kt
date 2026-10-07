@@ -18,8 +18,8 @@ object Routes {
     @Serializable data object Settings
     @Serializable data object Torrents
 
-    /** [autoPlay]: voice search, play the top hit. */
-    @Serializable data class Search(val q: String? = null, val autoPlay: Boolean = false)
+    /** [autoPlay]: voice search, play the top hit. [notice]: why it was opened (a refused re-grab). */
+    @Serializable data class Search(val q: String? = null, val autoPlay: Boolean = false, val notice: String? = null)
 
     /** [kind] null = unknown, movie by default (gates the Follow button). */
     @Serializable

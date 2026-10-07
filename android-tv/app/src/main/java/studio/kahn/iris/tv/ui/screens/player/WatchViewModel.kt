@@ -1,5 +1,9 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.state.Reclaimed
+import studio.kahn.iris.tv.ui.state.Regrabbed
+import studio.kahn.iris.tv.ui.state.SearchInsteadEvent
+import studio.kahn.iris.tv.ui.state.regrab
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -126,6 +130,7 @@ class WatchViewModel(
 
     private val regrabFailed = MutableStateFlow(false)
     val regrabError: StateFlow<Boolean> = regrabFailed.asStateFlow()
+    val searchInstead = SearchInsteadEvent()
 
     val header: StateFlow<WatchHeader> = combine(torrent, collectionState, contextState) { t, c, ctx ->
         val file = t.valueOrNull?.files?.firstOrNull { it.index == fileIdx }
@@ -304,16 +309,41 @@ class WatchViewModel(
         }
     }
 
-    /** `/regrab` re-ingests the release from its provenance (same infohash: the saved position applies). */
+    /**
+     * "Grab it again": the release from its provenance ([regrab]; same infohash, the saved
+     * position applies). Refused, the search for another release opens instead
+     * ([searchInstead]); no answer at all, the screen says it could not.
+     */
     fun regrab() {
         if (busyState.value != null) return
         busyState.value = BUSY_REGRAB
         viewModelScope.launch {
-            val ok = bestEffort { api().regrabTorrent(infohash) } != null
+            val r = bestEffort { regrab(api(), reclaimed()) }
             busyState.value = null
-            regrabFailed.value = !ok
-            if (ok) loadSetup()
+            regrabFailed.value = r == null
+            when (r) {
+                is Regrabbed.Back -> loadSetup()
+                is Regrabbed.Refused -> searchInstead.send(r.search)
+                null -> Unit
+            }
         }
+    }
+
+    /**
+     * This release and its words to search by. A reclaimed one is no longer a torrent the
+     * server answers for (its title and name ride on that read): the person's history still
+     * knows them.
+     */
+    private suspend fun reclaimed(): Reclaimed {
+        val c = collectionState.value
+        val name = torrent.value.valueOrNull?.name
+        if (c == null && name == null) {
+            val seen = bestEffort { api().history(limit = HISTORY_LOOKUP, offset = 0) }
+                ?.firstOrNull { it.infohash == infohash && it.fileIdx.toInt() == fileIdx }
+            if (seen != null) return Reclaimed(infohash, seen.collectionTitle, seen.season, seen.episode, seen.torrentName)
+        }
+        val current = c?.episodes?.firstOrNull { it.infohash == infohash && it.fileIdx.toInt() == fileIdx }
+        return Reclaimed(infohash, c?.displayTitle, current?.season, current?.episode, name)
     }
 
     /**
@@ -338,9 +368,8 @@ class WatchViewModel(
                 }
             }
             busyState.value = null
-            val c = collectionState.value
-            val current = c?.episodes?.firstOrNull { it.infohash == infohash && it.fileIdx.toInt() == fileIdx }
-            onSearch(retrySearchQuery(c?.displayTitle, current?.season, current?.episode, torrent.value.valueOrNull?.name))
+            val r = reclaimed()
+            onSearch(retrySearchQuery(r.title, r.season, r.episode, r.name))
         }
     }
 
@@ -397,5 +426,6 @@ class WatchViewModel(
         private const val PROBE_RETRY_MS = 2_000L
         private const val PLAY_STATUS_POLL_MS = 1_500L
         private const val NOTICE_MS = 5_000L
+        private const val HISTORY_LOOKUP = 200
     }
 }

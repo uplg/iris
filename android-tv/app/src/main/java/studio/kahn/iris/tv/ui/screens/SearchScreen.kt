@@ -91,6 +91,8 @@ import studio.kahn.iris.tv.ui.components.RowCard
 import studio.kahn.iris.tv.ui.components.SectionTitle
 import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.components.StaleNotice
+import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.components.NoticeLine
 import studio.kahn.iris.tv.ui.components.StatusLine
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.components.TextInput
@@ -178,12 +180,13 @@ fun SearchScreen(
     container: AppContainer,
     initialQuery: String?,
     autoPlay: Boolean,
+    notice: String? = null,
     onOpenRelease: (providerId: String, externalId: String, tmdbId: Long?, kind: String?) -> Unit,
     onOpenTitle: (query: String, tmdbId: Long, kind: SearchKind, sort: SearchSort) -> Unit,
     onPlay: (infohash: String, fileIdx: Int) -> Unit,
     onOpenCollection: (collectionId: String) -> Unit,
 ) {
-    val vm = irisViewModel(container) { c, saved -> SearchViewModel(c, initialQuery, autoPlay, saved) }
+    val vm = irisViewModel(container) { c, saved -> SearchViewModel(c, initialQuery, autoPlay, saved, notice) }
     val state by vm.state.collectAsStateWithLifecycle()
     val grab by vm.grabber.state.collectAsStateWithLifecycle()
     val play by vm.grabber.play.collectAsStateWithLifecycle()
@@ -301,7 +304,7 @@ fun SearchContent(
                     hints = hints(state, results),
                     trailing = if (results) resultsTrailing(state) else null,
                     framed = results,
-                )
+                ) { NoticeLine(state.notice?.let { Notice(it, StatusTone.Warn) }) }
             },
             modifier = Modifier.fillMaxSize(),
         ) { footer ->

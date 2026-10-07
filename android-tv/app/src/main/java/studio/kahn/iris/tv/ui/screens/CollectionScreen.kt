@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.state.SearchInstead
+import studio.kahn.iris.tv.ui.state.SearchInsteadEffect
 import studio.kahn.iris.tv.ui.components.PosterAside
 import studio.kahn.iris.tv.ui.screens.library.DeleteReleaseDialog
 import studio.kahn.iris.tv.ui.components.bottomHairline
@@ -143,11 +145,13 @@ fun CollectionScreen(
     onOpenTorrent: (infohash: String) -> Unit,
     onManageReleases: () -> Unit,
     onBack: () -> Unit,
+    onSearchInstead: (SearchInstead) -> Unit = {},
 ) {
     val vm = irisViewModel(container, key = "collection:$collectionId") { c, _ -> CollectionViewModel(c, collectionId) }
     val state by vm.state.collectAsStateWithLifecycle()
     val event by vm.playEvents.collectAsStateWithLifecycle()
     RepeatWhileStarted(Unit) { vm.pollWhileStarted() }
+    SearchInsteadEffect(vm.searchInstead, onSearchInstead)
     LaunchedEffect(event) {
         val e = event ?: return@LaunchedEffect
         vm.consumePlay()
