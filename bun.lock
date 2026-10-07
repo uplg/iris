@@ -7,11 +7,11 @@
     },
     "packages/iris-api": {
       "name": "@iris/api",
-      "version": "1.5.0",
+      "version": "1.6.0",
     },
     "packages/iris-core": {
       "name": "@iris/core",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "dependencies": {
         "@hevcjs/core": "^1.4.8",
         "@iris/api": "workspace:*",
@@ -24,7 +24,7 @@
     },
     "web": {
       "name": "web",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "dependencies": {
         "@iris/api": "workspace:*",
         "@iris/core": "workspace:*",
