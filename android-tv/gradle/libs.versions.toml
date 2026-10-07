@@ -61,7 +61,7 @@ desugar-jdk-libs = "2.1.5"
 # Generates the @Serializable DTO layer from ../web/openapi.json (utoipa-
 # derived spec). Pinned to the same release as the openapi-generator line the
 # web side validates against. Models only — Retrofit interface stays hand-written.
-openapi-generator = "7.25.0"
+openapi-generator = "7.26.0"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }

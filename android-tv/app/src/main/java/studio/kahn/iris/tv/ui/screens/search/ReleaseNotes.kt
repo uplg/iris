@@ -20,7 +20,8 @@ import studio.kahn.iris.tv.data.DescriptionFormat
 fun releaseNotes(source: String, format: DescriptionFormat?): AnnotatedString = when (format) {
     DescriptionFormat.html -> htmlNotes(source)
     DescriptionFormat.plain -> AnnotatedString(tidy(source.replace(CRLF, "\n")))
-    DescriptionFormat.bbcode, null -> bbcodeNotes(source)
+    // a format a newer server adds reads as BBCode, the trackers' historical default
+    DescriptionFormat.bbcode, DescriptionFormat.unknown_default_open_api, null -> bbcodeNotes(source)
 }
 
 private val CRLF = Regex("\r\n?")
