@@ -16,13 +16,18 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.minutes
 import studio.kahn.iris.tv.ui.update.UpdateInstaller
 import studio.kahn.iris.tv.ui.update.actions
 import studio.kahn.iris.tv.data.AppContainer
@@ -113,7 +118,17 @@ fun IrisRoot(
     val clientOutdated by container.clientOutdated.collectAsStateWithLifecycle()
     val update = container.updates.state.collectAsStateWithLifecycle()
     val updateAvailable = remember { derivedStateOf { update.value.available != null } }
-    LaunchedEffect(Unit) { container.updates.check() }
+    // A TV keeps the app alive for days: read the hosted version on every return to the app and
+    // every half hour while it is in front, not only when the process starts.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                container.updates.check(force = true)
+                delay(30.minutes)
+            }
+        }
+    }
     val openSettings = {
         navController.navigate(Routes.Settings) { launchSingleTop = true }
     }

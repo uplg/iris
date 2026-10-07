@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-07
+
+### Fixed
+
+- **The TV app sees a new version sooner**: it looks each time you come back to it and every half hour while it is open, not only when it starts.
+
 ## [1.6.1] - 2026-10-07
 
 ### Added
@@ -42,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buttons, the first press only moved the focus out of them.
 - TV player: a thin blue fringe above and below a film a little wider than
   the screen; the picture is now framed in black.
+- The TV app sees a new version sooner: it checks each time you come back
+  to it and every half hour while it is open, not only when it starts.
 
 ## [1.6.0] - 2026-10-07
 
@@ -1322,7 +1330,8 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.6.1...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.6.2...HEAD
+[1.6.2]: https://github.com/uplg/iris/compare/1.6.1...1.6.2
 [1.6.1]: https://github.com/uplg/iris/compare/1.6.0...1.6.1
 [1.6.0]: https://github.com/uplg/iris/compare/1.5.0...1.6.0
 [1.5.0]: https://github.com/uplg/iris/compare/1.4.2...1.5.0
