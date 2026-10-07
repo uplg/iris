@@ -57,46 +57,50 @@
 		<span class="hint">{plural(c.torrents.length, 'release')}</span>
 	</div>
 	{#if c.torrents.length}
-		<ul class="plain-list releases" bind:this={list}>
-			{#each c.torrents as t (t.infohash)}
-				{@const main = mainVideo(t)}
-				{@const reason = `${id}-why-${t.infohash}`}
-				<li data-infohash={t.infohash}>
-					<p class="release">{nameOf(t)}</p>
-					<p class="hint">{facts(t)}</p>
-					{#if isFetching(t)}
-						<StatusLine tone={t.state === 'error' ? 'warn' : 'busy'} text="Downloading · {percent(t.progress_pct)} · {eta(t)}" />
-					{/if}
-					<div class="actions">
-						{#if c.kind === 'movie' && main}
-							{@const action = verb(t, main.index)}
-							<a class="btn primary" href={watchHref(t.infohash, main.index)} aria-label="{action}: {nameOf(t)}"
-								><Icon name="play" size={16} />{action}</a
-							>
+		<!-- a series can hold dozens of releases: the list scrolls in its own box, so the
+		     episodes under the hero stay in reach (browsers make a scroller keyboard-focusable) -->
+		<div class="scroll" role="region" aria-label="Releases on disk">
+			<ul class="plain-list releases" bind:this={list}>
+				{#each c.torrents as t (t.infohash)}
+					{@const main = mainVideo(t)}
+					{@const reason = `${id}-why-${t.infohash}`}
+					<li data-infohash={t.infohash}>
+						<p class="release">{nameOf(t)}</p>
+						<p class="hint">{facts(t)}</p>
+						{#if isFetching(t)}
+							<StatusLine tone={t.state === 'error' ? 'warn' : 'busy'} text="Downloading · {percent(t.progress_pct)} · {eta(t)}" />
 						{/if}
-						{#if t.can_delete}
-							<ConfirmDialog
-								label="Delete"
-								ariaLabel="Delete {nameOf(t)}"
-								icon="trash-2"
-								ghost
-								danger
-								busy={g.is(`delete:${t.infohash}`)}
-								title="Delete this release?"
-								description="{nameOf(t)} leaves the disk for everyone in the house. Watch history is kept."
-								action="Delete release"
-								onconfirm={() => remove(t)}
-							/>
-						{:else}
-							<button class="btn ghost danger" aria-label="Delete {nameOf(t)}" {...unavailable(reason)} onclick={() => ui.say(NO_DELETE)}>
-								<Icon name="trash-2" />Delete
-							</button>
-							<p class="hint" id={reason}>{NO_DELETE}</p>
-						{/if}
-					</div>
-				</li>
-			{/each}
-		</ul>
+						<div class="actions">
+							{#if c.kind === 'movie' && main}
+								{@const action = verb(t, main.index)}
+								<a class="btn primary" href={watchHref(t.infohash, main.index)} aria-label="{action}: {nameOf(t)}"
+									><Icon name="play" size={16} />{action}</a
+								>
+							{/if}
+							{#if t.can_delete}
+								<ConfirmDialog
+									label="Delete"
+									ariaLabel="Delete {nameOf(t)}"
+									icon="trash-2"
+									ghost
+									danger
+									busy={g.is(`delete:${t.infohash}`)}
+									title="Delete this release?"
+									description="{nameOf(t)} leaves the disk for everyone in the house. Watch history is kept."
+									action="Delete release"
+									onconfirm={() => remove(t)}
+								/>
+							{:else}
+								<button class="btn ghost danger" aria-label="Delete {nameOf(t)}" {...unavailable(reason)} onclick={() => ui.say(NO_DELETE)}>
+									<Icon name="trash-2" />Delete
+								</button>
+								<p class="hint" id={reason}>{NO_DELETE}</p>
+							{/if}
+						</div>
+					</li>
+				{/each}
+			</ul>
+		</div>
 	{:else}
 		<p class="hint">Nothing of this title is on disk any more.</p>
 	{/if}
@@ -113,14 +117,22 @@
 		justify-content: space-between;
 		gap: var(--s-3);
 	}
+	.scroll {
+		max-height: 22rem;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		/* room for the focus ring of the first and last controls */
+		padding: var(--s-1);
+		margin: calc(var(--s-1) * -1);
+	}
 	.releases {
 		display: grid;
-		gap: var(--s-3);
+		gap: var(--s-2);
 	}
 	.releases li {
 		display: grid;
 		gap: var(--s-1);
-		padding-bottom: var(--s-3);
+		padding-bottom: var(--s-2);
 		border-bottom: 1px solid var(--line);
 	}
 	.releases li:last-child {

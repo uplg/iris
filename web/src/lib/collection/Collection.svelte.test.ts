@@ -345,6 +345,20 @@ describe('Collection', () => {
 		await expect.element(page.getByRole('link', { name: /^Play: / })).toBeVisible();
 	});
 
+	it('a series with dozens of releases keeps them in a short scrolling list, the episodes in reach', async () => {
+		const many = Array.from({ length: 30 }, (_, i) =>
+			torrent(`t${i + 10}`, { name: `Severance.S01E${String(i + 1).padStart(2, '0')}.1080p.WEB.h264-GROUP` })
+		);
+		backend(series({ torrents: many }));
+		await render(Collection, { id: 'c1' });
+		const list = page.getByRole('region', { name: 'Releases on disk' });
+		await expect.element(list).toBeVisible();
+		const el = list.element() as HTMLElement;
+		expect(getComputedStyle(el).overflowY).toBe('auto');
+		expect(el.clientHeight).toBeLessThan(el.scrollHeight);
+		expect(el.getBoundingClientRect().height).toBeLessThanOrEqual(22 * 16 + 16);
+	});
+
 	it('takes a movie with a single copy straight to the player', async () => {
 		backend(
 			series({
