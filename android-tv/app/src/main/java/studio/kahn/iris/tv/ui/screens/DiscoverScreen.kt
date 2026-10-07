@@ -116,7 +116,7 @@ fun DiscoverContent(
             mood == null && firstMood != null -> tileFocus(firstMood)
             else -> return@LaunchedEffect
         }
-        focusPlaced = runCatching { target.requestFocus() }.isSuccess
+        focusPlaced = runCatching { target.requestFocus() }.getOrDefault(false)
     }
     // Back from a mood's titles to the board, on the tile it came from.
     LaunchedEffect(mood?.id) {
