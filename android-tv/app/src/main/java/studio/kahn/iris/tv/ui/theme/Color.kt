@@ -43,6 +43,12 @@ object IrisColor {
     val artScrim = Color(0xC70E1218)
 
     val stage = Color(0xFF0E1218)
+    /**
+     * Around the picture (the bars of a film not quite 16:9, the shutter before its first
+     * frame): true black, like the film's own bars. The stage's blue-black there showed as a
+     * blue fringe above and below a film a little wider than the screen (a 1920x1040 rip).
+     */
+    val letterbox = Color(0xFF000000)
     val stageRaised = Color(0xFF1F2B36)
     val stageInk = Color(0xFFEAE7E0)
     val stageMuted = Color(0xFFA8AEB8)

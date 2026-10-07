@@ -1,6 +1,6 @@
 {
 	"name": "@iris/core",
-	"version": "1.6.0",
+	"version": "1.6.1",
 	"private": true,
 	"description": "Iris player engine: decode tiers, MSE/WebCodecs pipelines, subtitle renderers. Framework-free TypeScript, consumed as source by the web apps.",
 	"type": "module",

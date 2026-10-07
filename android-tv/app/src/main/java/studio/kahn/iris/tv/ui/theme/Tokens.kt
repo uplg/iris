@@ -117,6 +117,9 @@ object IrisSize {
     val posterMini = 36.dp
     /** 300 px: the poster in a page's aside. */
     val posterAside = 150.dp
+    /** The poster inside a title's banner, and on a short screen. */
+    val posterBanner = 112.dp
+    val posterBannerCompact = 72.dp
     /** The aside's poster on a short or narrow screen (a landscape phone). */
     val posterAsideCompact = 104.dp
     /** 420 px: a page's aside when it carries words beside the poster. */

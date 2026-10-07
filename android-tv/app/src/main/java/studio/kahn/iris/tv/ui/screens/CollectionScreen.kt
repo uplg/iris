@@ -2,10 +2,14 @@ package studio.kahn.iris.tv.ui.screens
 
 import studio.kahn.iris.tv.ui.state.SearchInstead
 import studio.kahn.iris.tv.ui.state.SearchInsteadEffect
-import studio.kahn.iris.tv.ui.components.PosterAside
 import studio.kahn.iris.tv.ui.screens.library.DeleteReleaseDialog
 import studio.kahn.iris.tv.ui.components.bottomHairline
 import androidx.activity.compose.BackHandler
+import studio.kahn.iris.tv.ui.components.Artwork
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Brush
+import coil3.compose.AsyncImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +22,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -61,8 +64,6 @@ import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionStyle
-import studio.kahn.iris.tv.ui.components.Chip
-import studio.kahn.iris.tv.ui.components.ChipTone
 import studio.kahn.iris.tv.ui.components.ErrorState
 import studio.kahn.iris.tv.ui.components.FactRow
 import studio.kahn.iris.tv.ui.components.FramedBlock
@@ -131,10 +132,10 @@ data class CollectionActions(
 
 /**
  * A title of the library (web `/collection/[id]`, drawn in the TVTitleReleases language): the
- * poster and the title aside, then what to do (resume or start, keep it on the watchlist,
- * mark it watched or not, the series' languages), its episodes by season (packs, offers in each language, reclaimed
- * releases), what is on disk, what used to be, and the files. OK does an episode's main
- * action; hold OK (or a long press) lists every action of it.
+ * banner (the still, the poster, the title, one line, resume or play), its episodes by season
+ * (packs, offers in each language, reclaimed releases), what is on disk, its languages, the
+ * files and what used to be on disk. OK does an episode's main action; hold OK (or a long
+ * press) lists every action of it.
  */
 @Composable
 fun CollectionScreen(
@@ -253,8 +254,8 @@ private fun TitlePage(
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var deleting by remember { mutableStateOf<ReleaseRow?>(null) }
     val episodesStart = remember(p.packs.size) { EPISODES_FIRST + p.packs.size }
+    // Back from the player: the episode played. A first visit: the play button.
     val focusKey = lastRow?.takeIf { k -> p.episodes.any { it.key == k } }
-        ?: p.episodes.getOrNull(p.opening)?.key?.takeIf { p.opening > 0 }
 
     LaunchedEffect(Unit) {
         val index = p.episodes.indexOfFirst { it.key == focusKey }
@@ -292,49 +293,29 @@ private fun TitlePage(
         }
     }
 
-    val compact = layout.short
-    Row(
-        Modifier
+    LazyColumn(
+        state = list,
+        modifier = Modifier
             .fillMaxSize()
-            .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical),
-        horizontalArrangement = Arrangement.spacedBy(if (compact) IrisSpace.s7 else IrisSpace.s9),
+            .padding(bottom = footer),
+        contentPadding = PaddingValues(bottom = IrisSpace.s4),
+        verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
     ) {
-        PosterAside(
-            above = "Library · ${if (p.series) "Series" else "Movie"}",
-            title = p.title,
-            imageUrl = p.posterUrl,
-            compact = compact,
-            modifier = Modifier.width(if (compact) IrisSize.posterAsideCompact else IrisSize.asideColumn),
-        ) {
-            if (!compact) {
-                Text(p.eyebrow, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
+        item(key = "head") {
+            Banner(
+                p = p,
+                state = state,
+                actions = actions,
+                stale = stale,
+                playFocus = playFocus,
+                onPlayFocused = { atPlay = it },
+            )
         }
-        LazyColumn(
-            state = list,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxSize()
-                .padding(bottom = footer),
-            contentPadding = PaddingValues(top = IrisSpace.s1, bottom = IrisSpace.s4, start = IrisSpace.s2, end = IrisSpace.s2),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
-        ) {
-            item(key = "head") {
-                Head(
-                    p = p,
-                    state = state,
-                    actions = actions,
-                    stale = stale,
-                    onLanguages = { sheet = Sheet.Languages },
-                    languagesFocus = keys.requester(LANGUAGES_KEY),
-                    playFocus = playFocus,
-                    onPlayFocused = { atPlay = it },
-                )
-            }
-            if (p.showEpisodes) {
-                item(key = "episodes") { EpisodesHead(p, actions.onSeason) }
-                items(p.packs, key = { "pack:${it.key}" }, contentType = { "pack" }) { pack -> PackBlock(pack, state.busy, actions.onPack) }
-                items(p.episodes, key = { "ep:${it.key}" }, contentType = { "episode" }) { row ->
+        if (p.showEpisodes) {
+            item(key = "episodes") { Side { EpisodesHead(p, actions.onSeason) } }
+            items(p.packs, key = { "pack:${it.key}" }, contentType = { "pack" }) { pack -> Side { PackBlock(pack, state.busy, actions.onPack) } }
+            items(p.episodes, key = { "ep:${it.key}" }, contentType = { "episode" }) { row ->
+                Side {
                     EpisodeCard(
                         row = row,
                         busy = row.actions.any { it.busyKey() in state.busy },
@@ -346,12 +327,14 @@ private fun TitlePage(
                         modifier = Modifier.focusRequester(keys.requester("ep:${row.key}")),
                     )
                 }
-                p.emptyEpisodes?.let { words -> item(key = "no-episodes") { Hint(words) } }
             }
-            item(key = "on-disk") {
-                SectionTitle("On disk", meta = plural(p.onDisk.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7))
-            }
-            items(p.onDisk, key = { "disk:${it.infohash}" }, contentType = { "disk" }) { row ->
+            p.emptyEpisodes?.let { words -> item(key = "no-episodes") { Side { Hint(words) } } }
+        }
+        item(key = "on-disk") {
+            Side { SectionTitle("On disk", meta = plural(p.onDisk.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7)) }
+        }
+        items(p.onDisk, key = { "disk:${it.infohash}" }, contentType = { "disk" }) { row ->
+            Side {
                 ReleaseItem(
                     row,
                     actions.onRelease.copy(onDelete = { deleting = it }),
@@ -360,29 +343,37 @@ private fun TitlePage(
                     showTitle = false,
                 )
             }
-            item(key = "manage") {
+        }
+        item(key = "manage") {
+            Side {
                 Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
                     if (p.onDisk.isEmpty()) Hint("Nothing of this title is on disk any more.")
-                    ActionButton("Manage releases", actions.onManageReleases, style = ActionStyle.Secondary, size = ActionSize.Small)
+                    Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                        ActionButton("Manage releases", actions.onManageReleases, style = ActionStyle.Secondary, size = ActionSize.Small)
+                        // A film's banner carries it; a series' carries its watchlist.
+                        if (p.series) WatchedButton(p, state, actions, ActionSize.Small)
+                    }
                 }
             }
-            state.languages?.let { langs ->
-                item(key = "languages") { LanguagesBlock(langs, onChange = { sheet = Sheet.Languages }) }
+        }
+        state.languages?.let { langs ->
+            item(key = "languages") {
+                Side { LanguagesBlock(langs, keys.requester(LANGUAGES_KEY), onChange = { sheet = Sheet.Languages }) }
             }
-            if (p.showFiles) {
-                item(key = "files") { SectionTitle("Files", modifier = Modifier.padding(top = IrisSpace.s7)) }
-                items(p.files, key = { "file:${it.key}" }, contentType = { "file" }) { f ->
-                    FileCard(f, Modifier.focusReturn(keys, "file:${f.key}")) { actions.onPlay(f.infohash, f.fileIdx) }
-                }
-                if (p.files.isEmpty()) item(key = "no-files") { Hint("No video file is on disk for this title.") }
+        }
+        if (p.showFiles) {
+            item(key = "files") { Side { SectionTitle("Files", modifier = Modifier.padding(top = IrisSpace.s7)) } }
+            items(p.files, key = { "file:${it.key}" }, contentType = { "file" }) { f ->
+                Side { FileCard(f, Modifier.focusReturn(keys, "file:${f.key}")) { actions.onPlay(f.infohash, f.fileIdx) } }
             }
-            if (p.gone.isNotEmpty()) {
-                item(key = "gone") {
-                    SectionTitle("Previously on disk", meta = plural(p.gone.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7))
-                }
-                items(p.gone, key = { "gone:${it.infohash}" }, contentType = { "gone" }) { g -> GoneRow(g, state.busy, actions) }
-                item(key = "gone-hint") { Hint("Hiding a release takes it off this page for you only. Your history is kept.") }
+            if (p.files.isEmpty()) item(key = "no-files") { Side { Hint("No video file is on disk for this title.") } }
+        }
+        if (p.gone.isNotEmpty()) {
+            item(key = "gone") {
+                Side { SectionTitle("Previously on disk", meta = plural(p.gone.size, "release"), modifier = Modifier.padding(top = IrisSpace.s7)) }
             }
+            items(p.gone, key = { "gone:${it.infohash}" }, contentType = { "gone" }) { g -> Side { GoneRow(g, state.busy, actions) } }
+            item(key = "gone-hint") { Side { Hint("Hiding a release takes it off this page for you only. Your history is kept.") } }
         }
     }
 
@@ -434,88 +425,134 @@ private fun TitlePage(
 private const val EPISODES_FIRST = 2
 private const val LANGUAGES_KEY = "languages"
 
-@OptIn(ExperimentalLayoutApi::class)
+/** Below the banner, everything keeps the safe margins (room for the focus ring too). */
 @Composable
-private fun Head(
+private fun Side(content: @Composable () -> Unit) {
+    Box(Modifier.padding(horizontal = IrisLayout.current.safeHorizontal)) { content() }
+}
+
+/**
+ * The title's banner: its TMDB still across the screen (the ground when it has none), the
+ * poster in it, the title, one line of facts, two lines of its story, then the one thing to do
+ * (resume or play, which takes the page's focus) and at most one other: a series' watchlist,
+ * a film's watched mark. The rest is below the episodes.
+ */
+@Composable
+private fun Banner(
     p: CollectionPage,
     state: CollectionUiState,
     actions: CollectionActions,
     stale: studio.kahn.iris.tv.ui.state.UiError?,
-    onLanguages: () -> Unit,
-    languagesFocus: FocusRequester,
     playFocus: FocusRequester,
     onPlayFocused: (Boolean) -> Unit,
 ) {
-    // The first action takes the page's focus; the Languages action is where its panel returns.
+    val layout = IrisLayout.current
+    val compact = layout.short
     val playModifier = Modifier
         .focusRequester(playFocus)
         .onFocusChanged { onPlayFocused(it.hasFocus) }
-    val languagesModifier = Modifier.focusRequester(languagesFocus)
-    Column(verticalArrangement = Arrangement.spacedBy(IrisSpace.s4)) {
-        Text(p.title, style = IrisType.titleFor(p.title, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(p.facts, style = IrisType.metaLarge, color = IrisColor.inkMuted)
-        if (p.chips.isNotEmpty() || p.fresh > 0) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2), verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
-                if (p.fresh > 0) Chip("${plural(p.fresh, "new episode")} since your last visit", tone = ChipTone.Ok)
-                p.chips.forEach { Chip(it) }
-            }
-        }
-        p.overview?.let {
-            Text(it, style = IrisType.reading, color = IrisColor.ink, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 560.dp))
-        }
-        stale?.let { StaleNotice(it) }
-        FlowRow(
-            Modifier.padding(top = IrisSpace.s2),
-            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4),
-            verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
+    Box(Modifier.fillMaxWidth()) {
+        p.backdropUrl?.let { BannerStill(it, Modifier.matchParentSize()) }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = layout.safeHorizontal, end = layout.safeHorizontal, top = layout.safeVertical, bottom = IrisSpace.s3),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) IrisSpace.s6 else IrisSpace.s8),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            val target = p.playTarget
-            if (target != null) {
-                ActionButton(
-                    p.playLabel,
-                    { actions.onPlay(target.infohash, target.fileIdx) },
-                    icon = Icons.Rounded.PlayArrow,
-                    size = ActionSize.Large,
-                    modifier = playModifier,
-                )
-            }
-            if (p.onWatchlist != null) {
-                ActionButton(
-                    if (p.onWatchlist) "On your watchlist" else "Add to your watchlist",
-                    actions.onWatchlist,
-                    icon = if (p.onWatchlist) Icons.Rounded.Check else Icons.Rounded.BookmarkBorder,
-                    style = ActionStyle.Secondary,
-                    size = ActionSize.Large,
-                    enabled = !p.onWatchlist || p.canLeaveWatchlist,
-                    busy = "watchlist" in state.busy,
-                    busyText = "Saving…",
-                    modifier = if (target == null) playModifier else Modifier,
-                )
-            }
-            ActionButton(
-                markWatchedLabel(p.watched),
-                actions.onWatched,
-                icon = if (p.watched) Icons.Rounded.RemoveDone else Icons.Rounded.CheckCircle,
-                style = ActionStyle.Secondary,
-                size = ActionSize.Large,
-                busy = WATCHED_KEY in state.busy,
-                busyText = "Saving…",
-                modifier = if (target == null && p.onWatchlist == null) playModifier else Modifier,
+            Artwork(
+                title = p.title,
+                imageUrl = p.posterUrl,
+                width = if (compact) IrisSize.posterBannerCompact else IrisSize.posterBanner,
+                // The title is beside it.
+                showTitle = false,
             )
-            if (state.languages != null) {
-                ActionButton(
-                    "Languages",
-                    onLanguages,
-                    icon = Icons.Rounded.Language,
-                    style = ActionStyle.Secondary,
-                    size = ActionSize.Large,
-                    enabled = state.languages.valueOrNull != null,
-                    modifier = languagesModifier,
-                )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(IrisSpace.s3)) {
+                Text(p.title, style = IrisType.titleFor(p.title, IrisType.title), color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(p.facts, style = IrisType.metaLarge, color = IrisColor.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!compact) {
+                    p.overview?.let {
+                        Text(it, style = IrisType.meta, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 560.dp))
+                    }
+                }
+                stale?.let { StaleNotice(it) }
+                Row(
+                    Modifier.padding(top = IrisSpace.s2),
+                    horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val target = p.playTarget
+                    if (target != null) {
+                        ActionButton(
+                            p.playLabel,
+                            { actions.onPlay(target.infohash, target.fileIdx) },
+                            icon = Icons.Rounded.PlayArrow,
+                            size = ActionSize.Large,
+                            modifier = playModifier,
+                        )
+                    }
+                    val second = if (target == null) playModifier else Modifier
+                    if (p.onWatchlist != null) {
+                        ActionButton(
+                            if (p.onWatchlist) "On your watchlist" else "Add to your watchlist",
+                            actions.onWatchlist,
+                            icon = if (p.onWatchlist) Icons.Rounded.Check else Icons.Rounded.BookmarkBorder,
+                            style = ActionStyle.Secondary,
+                            size = ActionSize.Large,
+                            enabled = !p.onWatchlist || p.canLeaveWatchlist,
+                            busy = "watchlist" in state.busy,
+                            busyText = "Saving…",
+                            modifier = second,
+                        )
+                    } else {
+                        WatchedButton(p, state, actions, ActionSize.Large, second)
+                    }
+                }
             }
         }
     }
 }
+
+/** Marks every file watched, or undoes it. */
+@Composable
+private fun WatchedButton(
+    p: CollectionPage,
+    state: CollectionUiState,
+    actions: CollectionActions,
+    size: ActionSize,
+    modifier: Modifier = Modifier,
+) {
+    ActionButton(
+        markWatchedLabel(p.watched),
+        actions.onWatched,
+        icon = if (p.watched) Icons.Rounded.RemoveDone else Icons.Rounded.CheckCircle,
+        style = ActionStyle.Secondary,
+        size = size,
+        busy = WATCHED_KEY in state.busy,
+        busyText = "Saving…",
+        modifier = modifier,
+    )
+}
+
+/** The still behind the banner, fading into the ground towards the words (left) and the page (bottom). */
+@Composable
+private fun BannerStill(url: String, modifier: Modifier) {
+    Box(modifier.background(IrisColor.art).clearAndSetSemantics {}) {
+        AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Brush.horizontalGradient(0f to IrisColor.ground, BANNER_FADE_LEFT to IrisColor.ground.copy(alpha = 0.35f))),
+        )
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(Brush.verticalGradient(0f to IrisColor.ground.copy(alpha = 0f), 1f to IrisColor.ground)),
+        )
+    }
+}
+
+private const val BANNER_FADE_LEFT = 0.7f
 
 @Composable
 private fun EpisodesHead(p: CollectionPage, onSeason: (Long) -> Unit) {
@@ -641,7 +678,7 @@ private fun GoneRow(g: GoneUi, busy: Set<String>, actions: CollectionActions) {
 }
 
 @Composable
-private fun LanguagesBlock(langs: Loadable<LanguagesUi>, onChange: () -> Unit) {
+private fun LanguagesBlock(langs: Loadable<LanguagesUi>, focus: FocusRequester, onChange: () -> Unit) {
     FramedBlock(Modifier.fillMaxWidth().padding(top = IrisSpace.s7)) {
         Text("Next episodes play with", style = IrisType.group, color = IrisColor.ink)
         when (val l = langs.valueOrNull) {
@@ -652,7 +689,15 @@ private fun LanguagesBlock(langs: Loadable<LanguagesUi>, onChange: () -> Unit) {
                 Hint(if (l.forCollection) "Chosen for this series." else "Your usual choice, from your account.")
             }
         }
-        ActionButton("Change languages", onChange, icon = Icons.Rounded.Language, style = ActionStyle.Secondary, size = ActionSize.Small, enabled = langs.valueOrNull != null)
+        ActionButton(
+            "Change languages",
+            onChange,
+            icon = Icons.Rounded.Language,
+            style = ActionStyle.Secondary,
+            size = ActionSize.Small,
+            enabled = langs.valueOrNull != null,
+            modifier = Modifier.focusRequester(focus),
+        )
     }
 }
 

@@ -1,17 +1,12 @@
 package studio.kahn.iris.tv.ui.screens.home
 
-import studio.kahn.iris.tv.ui.format.languagesPhrase
 import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.HomeSummary
-import studio.kahn.iris.tv.data.MediaKind
-import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.episodeCode
-import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.percent
 import studio.kahn.iris.tv.ui.format.plural
-import studio.kahn.iris.tv.ui.format.thisTitle
 import studio.kahn.iris.tv.ui.format.timeLeft
 
 /*
@@ -22,15 +17,12 @@ import studio.kahn.iris.tv.ui.format.timeLeft
 /** `S2:E5`, or "the next episode" when the server does not know which. */
 fun nextName(item: ContinueWatchingItem): String = episodeCode(item.season, item.episode) ?: "the next episode"
 
-/** The home's "Right now" line: only what is happening. */
+/** The home's "Right now" line: only what is downloading, nothing when nothing is. */
 fun rightNow(s: HomeSummary): List<String> = buildList {
     if (s.downloading > 0) {
         val eta = s.downloadingEtaSeconds?.takeIf { it > 0 }?.let { " · ${timeLeft(it.toDouble())}" }.orEmpty()
         add("${plural(s.downloading, "download")} · ${percent(s.downloadingPct)}$eta")
     }
-    if (s.newEpisodes > 0) add("${plural(s.newEpisodes, "new episode")} on your watchlist")
-    s.disk?.let { add("${formatSize(it.freeBytes)} free on disk") }
-    if (s.seeding > 0) add("Seeding ${plural(s.seeding, "release")}")
 }
 
 /** What is still downloading in each collection, as a share of its bytes (0 to 100). */
@@ -56,11 +48,3 @@ fun watchedShare(item: ContinueWatchingItem): Float? =
 
 /** A resume, not a fresh start: there is a position worth keeping. */
 fun isResuming(item: ContinueWatchingItem): Boolean = !item.grabbable && !item.nextUp && isResumable(item.positionSeconds)
-
-/** The languages a play will use, when the account (or the title) chose them. */
-fun languagesLine(p: PlaybackPrefsResponse?, kind: MediaKind?): String? {
-    if (p == null) return null
-    val phrase = languagesPhrase(p.audioLanguage, p.subtitleLanguage) ?: return null
-    val chosen = if (p.forCollection == true) ", as chosen for ${thisTitle(kind)}" else ""
-    return "Plays with $phrase$chosen."
-}

@@ -22,6 +22,7 @@ import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.clock
 import studio.kahn.iris.tv.ui.format.duration
+import studio.kahn.iris.tv.ui.format.kindLabel
 import studio.kahn.iris.tv.ui.format.episodeCode
 import studio.kahn.iris.tv.ui.format.formatSize
 import studio.kahn.iris.tv.ui.format.languageLabel
@@ -309,27 +310,24 @@ fun straightToPlayer(c: CollectionDetail): PlayTarget? {
     return playFileOf(t)?.let { PlayTarget(t.infohash, it) }
 }
 
-/** The facts under the title: `2 seasons · 18 episodes · TMDB 8.4 · 3 releases on disk`. */
-fun heroFacts(c: CollectionDetail, rows: List<Episode>, runtimeMinutes: Int?, voteScore: Double?): String {
-    val out = mutableListOf<String>()
+/**
+ * The banner's one line: what it is, its year, how much of it there is ("Series · 2022 ·
+ * 3 seasons", "Movie · 2023 · 2 h 4 min"), and how many episodes came since the last visit.
+ */
+fun titleFacts(c: CollectionDetail, rows: List<Episode>, year: Int?, runtimeMinutes: Int?): String {
+    val out = mutableListOf(kindLabel(c.kind, c.isAnime == true))
+    year?.let { out += it.toString() }
     if (c.kind == MediaKind.tv) {
         val seasons = rows.filter { it.absolute == null && it.season > 0 }.map { it.season }.distinct().size
-        if (seasons > 0 && c.numbering != "absolute") out += plural(seasons, "season")
-        if (rows.isNotEmpty()) out += plural(rows.size, "episode")
+        when {
+            seasons > 0 && c.numbering != "absolute" -> out += plural(seasons, "season")
+            rows.isNotEmpty() -> out += plural(rows.size, "episode")
+        }
+        c.hasNewSinceLastVisit?.takeIf { it > 0 }?.let { out += "$it new" }
     } else if (runtimeMinutes != null && runtimeMinutes > 0) {
         out += duration(runtimeMinutes * 60.0)
     }
-    if ((voteScore ?: 0.0) > 0) out += "TMDB %.1f".format(java.util.Locale.ROOT, (voteScore ?: 0.0) * 10)
-    out += "${plural(c.torrents.size, "release")} on disk"
     return out.joinToString(" · ")
-}
-
-/** Audio and picture chips of what is on disk. */
-fun heroChips(c: CollectionDetail, originalLanguage: String?): List<String> {
-    val tags = if (c.kind == MediaKind.tv) c.episodes.map { it.language } else c.torrents.map { nameLanguage(it.name.orEmpty()) }
-    val audio = tags.filterNotNull().distinct().mapNotNull { audioChip(it, originalLanguage) }
-    val picture = c.torrents.mapNotNull { qualityWords(it.name.orEmpty()) }
-    return (audio + picture).distinct()
 }
 
 /** `Downloading · 42% · done in about 6 min`, or why it is not moving. */
@@ -496,12 +494,6 @@ fun seasonLabel(s: Season): String = "${seasonName(s.season)} · ${seasonHolds(s
 
 /** `10 episodes · 7 on disk`. */
 fun episodesFact(items: List<Episode>): String = "${plural(items.size, "episode")} · ${items.count(::ownedEp)} on disk"
-
-/** Where a long list opens: a little before the first episode not watched. */
-fun openingIndex(items: List<Episode>, lead: Int = 1): Int {
-    val at = items.indexOfFirst { !watchedEp(it) }
-    return if (at <= lead) 0 else at - lead
-}
 
 /** The watch line of a gone release: `Watched on Monday`, `Stopped at 32:10 (42%) yesterday at 21:04`. */
 fun goneWatchLine(

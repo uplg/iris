@@ -38,7 +38,6 @@ import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
-import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
@@ -97,7 +96,6 @@ internal data class HomeData(
     val summary: Loadable<HomeSummary?> = Loadable.Loading,
     val featured: Loadable<FeaturedResponse>? = null,
     val meta: Map<MetaKey, MediaMetadata> = emptyMap(),
-    val heroPrefs: Pair<String, PlaybackPrefsResponse>? = null,
     val preferences: PreferencesResponse? = null,
     val onboardingClosed: Boolean = false,
     val busy: String? = null,
@@ -118,11 +116,7 @@ internal fun homeUi(d: HomeData): HomeUiState {
     val cwKnown = d.continueWatching !is Loadable.Loading
     val featuredPick = d.featured?.valueOrNull?.pick()
     val hero = when {
-        resume != null -> resumeHero(
-            resume,
-            resume.metaKey()?.let(d.meta::get),
-            d.heroPrefs?.takeIf { it.first == heroPrefsKey(resume) }?.second,
-        )
+        resume != null -> resumeHero(resume, resume.metaKey()?.let(d.meta::get))
         !cwKnown -> null
         libraryPick != null -> libraryHero(libraryPick, libraryPick.metaKey()?.let(d.meta::get))
         featuredPick != null -> featuredHero(featuredPick, featuredMetaKey(featuredPick)?.let(d.meta::get))
@@ -151,8 +145,6 @@ internal fun homeUi(d: HomeData): HomeUiState {
         onboarding = d.preferences?.takeIf { !it.onboardingCompleted && !d.onboardingClosed },
     )
 }
-
-internal fun heroPrefsKey(item: ContinueWatchingItem): String = item.collectionId?.toString() ?: ""
 
 // Only the server's title match, which it sets when it trusts it: the tracker's raw id is never shown.
 internal fun featuredMetaKey(r: studio.kahn.iris.tv.data.SearchResult): MetaKey? =
@@ -225,10 +217,7 @@ class HomeViewModel(
     private suspend fun readContinueWatching() {
         val next = load(data.value.continueWatching) { container.api().continueWatching(includeGrabbable = true) }
         data.update { it.copy(continueWatching = next) }
-        next.valueOrNull?.let { list ->
-            list.mapNotNull { it.metaKey() }.forEach(::fetchMeta)
-            list.firstOrNull()?.let(::fetchHeroPrefs)
-        }
+        next.valueOrNull?.mapNotNull { it.metaKey() }?.forEach(::fetchMeta)
         maybeFeatured()
     }
 
@@ -280,17 +269,6 @@ class HomeViewModel(
                 metaInFlight.remove(key)
             }
             if (md != null) data.update { it.copy(meta = it.meta + (key to md)) }
-        }
-    }
-
-    private fun fetchHeroPrefs(item: ContinueWatchingItem) {
-        val key = heroPrefsKey(item)
-        viewModelScope.launch {
-            val prefs = bestEffort {
-                val api = container.api()
-                api.playbackPreferences(item.collectionId?.toString())
-            } ?: return@launch
-            data.update { it.copy(heroPrefs = key to prefs) }
         }
     }
 

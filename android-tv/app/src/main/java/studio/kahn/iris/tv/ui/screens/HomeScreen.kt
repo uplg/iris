@@ -76,8 +76,6 @@ import studio.kahn.iris.tv.ui.components.FooterLayout
 import studio.kahn.iris.tv.ui.components.Keys
 import studio.kahn.iris.tv.ui.components.ScreenFooter
 import studio.kahn.iris.tv.ui.components.StaleNotice
-import studio.kahn.iris.tv.ui.components.StatusLine
-import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.nav.LocalShellHeader
 import studio.kahn.iris.tv.ui.nav.ShellBackdrop
 import studio.kahn.iris.tv.ui.nav.LocalShellTopInset
@@ -434,18 +432,16 @@ private fun Hero(
                 )
             }
         }
-        if (hero.languages != null) Text(hero.languages, style = IrisType.meta, color = IrisColor.inkMuted)
     }
 }
 
 private val COMPACT_HEIGHT = 480.dp
 
-/** "Right now": what the house's Iris is doing, in a few words. Nothing while nothing is known. */
+/** "Right now": what is downloading, in a few words; nothing when nothing is (web `RightNow`). */
 @Composable
 private fun RightNow(facts: Loadable<List<String>>) {
     val list = facts.valueOrNull
-    val failed = facts as? Loadable.Failed
-    if (list.isNullOrEmpty() && failed == null) return
+    if (list.isNullOrEmpty()) return
     Column(
         Modifier
             .padding(horizontal = IrisLayout.current.safeHorizontal)
@@ -453,17 +449,13 @@ private fun RightNow(facts: Loadable<List<String>>) {
         verticalArrangement = Arrangement.spacedBy(IrisSpace.s3),
     ) {
         Eyebrow("Right now")
-        if (failed != null) {
-            StatusLine("Couldn't read what Iris is doing: ${failed.error.message}", tone = StatusTone.Down)
-        } else {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
-                verticalArrangement = Arrangement.spacedBy(IrisSpace.s2),
-            ) {
-                list.orEmpty().forEach { Chip(it) }
-            }
-            facts.errorOrNull?.let { StaleNotice(it) }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+            verticalArrangement = Arrangement.spacedBy(IrisSpace.s2),
+        ) {
+            list.forEach { Chip(it) }
         }
+        facts.errorOrNull?.let { StaleNotice(it) }
     }
 }
 

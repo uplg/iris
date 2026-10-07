@@ -23,6 +23,7 @@ import studio.kahn.iris.tv.data.IrisApi
 import studio.kahn.iris.tv.data.LanguageOption
 import studio.kahn.iris.tv.data.LinkRequest
 import studio.kahn.iris.tv.data.PasskeyView
+import studio.kahn.iris.tv.data.InterfaceSize
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.data.UpdatePlaybackPrefs
@@ -112,6 +113,8 @@ data class SettingsUiState(
     val signedOut: Boolean = false,
     /** Counts the saved name changes, for the header to read the name again. */
     val nameChanges: Int = 0,
+    /** How big the interface draws on this device. */
+    val interfaceSize: InterfaceSize = InterfaceSize.Default,
 ) {
     val recoDirty: Boolean
         get() = draft != null && reco.valueOrNull?.let { Picks.of(it.saved) } != draft
@@ -153,6 +156,14 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         refresh()
+        viewModelScope.launch {
+            container.prefsStore.interfaceSize.collect { size -> mutable.update { it.copy(interfaceSize = size) } }
+        }
+    }
+
+    /** Kept on this device; the whole app redraws at it as soon as it is stored. */
+    fun setInterfaceSize(size: InterfaceSize) {
+        viewModelScope.launch { container.prefsStore.setInterfaceSize(size) }
     }
 
     private suspend fun api(): IrisApi = container.api()

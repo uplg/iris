@@ -13,11 +13,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import studio.kahn.iris.tv.data.InterfaceSize
 import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.ui.IrisRoot
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
 import studio.kahn.iris.tv.ui.nav.LaunchTarget
 import studio.kahn.iris.tv.ui.nav.launchTarget
+import studio.kahn.iris.tv.ui.theme.InterfaceScale
 import studio.kahn.iris.tv.ui.theme.IrisTheme
 
 class MainActivity : ComponentActivity() {
@@ -45,21 +47,29 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) launch.value = intent.launchTarget()
         lifecycleScope.launch { bestEffort { container.channels.sync(container) } }
         setContent {
-            IrisTheme {
-                // null until the stored session is read, so the first screen is
-                // the right one. Pairing pre-seeds a session with no cookies for
-                // the cookie jar to fill: that one is not signed in yet.
-                val authenticated by produceState<Boolean?>(null) {
-                    container.sessionStore.session.collect { value = it?.cookies?.isNotEmpty() == true }
-                }
-                val pending by launch.collectAsStateWithLifecycle()
-                authenticated?.let { signedIn ->
-                    IrisRoot(
-                        container = container,
-                        isAuthenticated = signedIn,
-                        launch = pending,
-                        onLaunchHandled = { launch.value = null },
-                    )
+            // null until the stored session is read, so the first screen is
+            // the right one. Pairing pre-seeds a session with no cookies for
+            // the cookie jar to fill: that one is not signed in yet.
+            val authenticated by produceState<Boolean?>(null) {
+                container.sessionStore.session.collect { value = it?.cookies?.isNotEmpty() == true }
+            }
+            // null until read too: the first frame is drawn at its size, not resized after.
+            val size by produceState<InterfaceSize?>(null) {
+                container.prefsStore.interfaceSize.collect { value = it }
+            }
+            val pending by launch.collectAsStateWithLifecycle()
+            val signedIn = authenticated
+            val scale = size
+            if (signedIn != null && scale != null) {
+                InterfaceScale(scale) {
+                    IrisTheme {
+                        IrisRoot(
+                            container = container,
+                            isAuthenticated = signedIn,
+                            launch = pending,
+                            onLaunchHandled = { launch.value = null },
+                        )
+                    }
                 }
             }
         }

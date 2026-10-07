@@ -12,6 +12,17 @@ import studio.kahn.iris.tv.screenshot.LibraryFixtures as F
 import studio.kahn.iris.tv.ui.components.StatusTone
 
 class CollectionModelTest {
+    @Test
+    fun theBannerSaysItInOneLine() {
+        val rows = episodesOf(F.series)
+        assertEquals("Series · 2022 · 2 seasons · 2 new", titleFacts(F.series, rows, 2022, null))
+        assertEquals("Series · 2 seasons", titleFacts(F.series.copy(hasNewSinceLastVisit = 0), rows, null, null))
+        assertEquals("Movie · 2024 · 2 h 47 min", titleFacts(F.movie, emptyList(), 2024, 167))
+        val page = collectionPage(F.series.copy(backdropPath = "/s.jpg"), null, emptyList(), null, F.now)
+        assertEquals("https://image.tmdb.org/t/p/w1280/s.jpg", page.backdropUrl)
+        assertNull(collectionPage(F.series, null, emptyList(), null, F.now).backdropUrl)
+    }
+
     private fun disk(s: Long, e: Long, lang: String? = "french", abs: Long? = null) =
         EpisodeEntry(episode = e, fileIdx = e, infohash = "ih$s", season = s, watched = false, absoluteEpisode = abs, language = lang)
 

@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.data.InterfaceSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import org.junit.Rule
@@ -56,7 +57,6 @@ class HomeScreenshots {
             HeroButton(HeroAction.AllEpisodes, "All episodes"),
             HeroButton(HeroAction.StartOver, "Start over", "Starting over…", "over:c:1"),
         ),
-        languages = "Plays with audio in English, subtitles in French, as chosen for this series.",
     )
 
     private fun cw(key: String, title: String, meta: String, progress: Float?, status: String? = null) = CardModel(
@@ -110,7 +110,7 @@ class HomeScreenshots {
     private val home = HomeUiState(
         hero = hero,
         heroPending = false,
-        rightNow = Loadable.Ready(listOf("2 downloads · 64% · 23 min left", "3 new episodes on your watchlist", "412 GB free on disk")),
+        rightNow = Loadable.Ready(listOf("2 downloads · 64% · 23 min left")),
         continueWatching = Loadable.Ready(continueWatching),
         watchlist = Loadable.Ready(watchlist),
         watchlistCount = watchlist.size,
@@ -121,7 +121,7 @@ class HomeScreenshots {
                 (1..8).map { poster("fy:trending:", it, "Title $it", "In your library", StatusTone.Ok) },
             ),
         ),
-        library = Loadable.Ready((1..8).map { poster("lib:", it, "Library $it", "On disk", StatusTone.Ok) }),
+        library = Loadable.Ready((1..8).map { poster("lib:", it, "Library $it", if (it == 2) "Downloading · 42%" else null) }),
         libraryCount = 64,
     )
 
@@ -146,6 +146,10 @@ class HomeScreenshots {
 
     @Test
     fun home() = shots.snapEverySize("home") { Home(home) }
+
+    // The largest interface size: the header, the hero and the rows still fit, the rows scroll.
+    @Test
+    fun homeLargest() = shots.snapEverySize("home_largest", InterfaceSize.Largest) { Home(home) }
 
     // Two lines at the hero's size: the title grows the hero downward, never into the header.
     @Test

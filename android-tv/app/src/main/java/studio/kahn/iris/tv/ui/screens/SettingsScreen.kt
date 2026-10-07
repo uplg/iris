@@ -134,6 +134,7 @@ fun SettingsScreen(
             onRevoke = vm::revoke,
             onChangePassword = vm::changePassword,
             onSignOut = vm::signOut,
+            onInterfaceSize = vm::setInterfaceSize,
             onOpenHistory = onOpenHistory,
             onOpenTorrents = onOpenTorrents,
             update = container.updates.actions(),

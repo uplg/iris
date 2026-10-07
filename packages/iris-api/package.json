@@ -1,6 +1,6 @@
 {
 	"name": "@iris/api",
-	"version": "1.6.0",
+	"version": "1.6.1",
 	"private": true,
 	"description": "Iris API contract for the web apps: types generated from web/openapi.json, the fetch client, and the one set of display formatters.",
 	"type": "module",

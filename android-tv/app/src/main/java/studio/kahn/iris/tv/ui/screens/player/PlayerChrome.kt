@@ -46,6 +46,7 @@ import androidx.media3.ui.compose.state.rememberProgressStateWithTickInterval
 import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 import studio.kahn.iris.tv.ui.components.ConfirmDialog
+import studio.kahn.iris.tv.ui.components.backKey
 import studio.kahn.iris.tv.ui.components.PlayerKeyRouter
 import studio.kahn.iris.tv.ui.components.Spinner
 import studio.kahn.iris.tv.ui.theme.IrisColor
@@ -95,7 +96,7 @@ private const val AUTO_HIDE_MS = 4_000L
  * Keys: while the buttons don't hold the focus (Hidden, Peek), the activity
  * hands every key here first ([PlayerKeyRouter]): ←/→ seek 10 s (held: faster,
  * committed on release), OK plays or pauses, ↓ moves into the buttons, ↑
- * shows the bar, Back hides (then leaves). Media keys work in every mode; the
+ * shows the bar, Back hides ([hideOnBack], then leaves). Media keys work in every mode; the
  * MediaSession takes them when the app is not in front. Auto-hide only in
  * Peek while playing, never with the focus in the buttons or a panel open.
  * Touch: a tap on the picture shows or hides, the buttons tap, the bar drags.
@@ -198,16 +199,11 @@ fun PlayerChrome(
         onDispose { lifecycle.removeObserver(observer) }
     }
 
-    BackHandler(enabled = chrome.mode != ChromeMode.Hidden && chrome.panel == PlayerPanel.None) {
-        chrome.mode = ChromeMode.Hidden
-        chrome.previewMs = null
-        runCatching { rootFocus.requestFocus() }
-    }
-
     val shown = chrome.mode != ChromeMode.Hidden || chrome.panel != PlayerPanel.None
     Box(
         Modifier
             .fillMaxSize()
+            .hideOnBack(chrome) { runCatching { rootFocus.requestFocus() } }
             .focusRequester(rootFocus)
             .focusable()
             .pointerInput(Unit) {
@@ -306,6 +302,23 @@ fun PlayerChrome(
             )
         }
     }
+}
+
+/**
+ * Back with the chrome shown (no panel open) hides it, in one press: with the focus in the
+ * buttons, the remote's Back would first only take the focus out of them ([backKey]).
+ * [onHidden] puts the focus back on the picture.
+ */
+@Composable
+internal fun Modifier.hideOnBack(chrome: ChromeState, onHidden: () -> Unit): Modifier {
+    val enabled = chrome.mode != ChromeMode.Hidden && chrome.panel == PlayerPanel.None
+    val hide = {
+        chrome.mode = ChromeMode.Hidden
+        chrome.previewMs = null
+        onHidden()
+    }
+    BackHandler(enabled = enabled, onBack = hide)
+    return backKey(enabled, hide)
 }
 
 /** The ending in words, in place of the tracks summary. */
