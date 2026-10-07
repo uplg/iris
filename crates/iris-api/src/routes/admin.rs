@@ -1052,6 +1052,7 @@ pub(crate) async fn diagnose_tmdb(
             &p.title,
             crate::tmdb_resolve::parsed_kind(p),
             p.year.map(u32::from),
+            false,
         )
         .await
         .ok()

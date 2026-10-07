@@ -182,6 +182,7 @@ fn from_entry(entry: &ResolveEntry, kind_hint: Option<TmdbKind>) -> Option<TmdbS
         poster_path: entry.poster_path.clone(),
         overview: entry.overview.clone(),
         vote_count: None,
+        animation: false,
     })
 }
 

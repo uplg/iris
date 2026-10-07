@@ -17,6 +17,14 @@
 //!   one TMDB entry may pass, otherwise the match is ambiguous. No fuzzy
 //!   fallback (closest year, most popular, year-less retry, `/search/multi`)
 //!   ever reaches this decision.
+//! - **T2', the current id verified** ([`verify_current`], `tmdb-trust` only):
+//!   a legacy id stays when one of the titles TMDB files it under (title,
+//!   original, alternative titles, translations, either side of a `:`) is
+//!   the release title (or one side of its ` - `, inside or outside its
+//!   brackets), spaces aside, with the kind and the year (±1) checking out.
+//!   Stored as [`Trust::Scene`]: it is the same title check, on one entry.
+//! - An anime collection only matches a title TMDB files under Animation (a
+//!   live-action remake shares the anime's title).
 //! - **T3, admin** ([`Trust::Admin`]) — reserved: no route sets a
 //!   collection's id yet, but the column accepts it and nothing automatic
 //!   overrides it.
@@ -29,7 +37,9 @@
 use iris_db::SqlitePool;
 use iris_db::tmdb_cache::{self, ResolveEntry};
 
-use crate::tmdb::{MediaMetadata, TmdbClient, TmdbKind, TmdbSuggestion};
+use crate::tmdb::{
+    ANIMATION_GENRE, KnownTitles, MediaMetadata, TmdbClient, TmdbKind, TmdbSuggestion,
+};
 
 /// Cache-key prefix of strict SCENE resolutions in `tmdb_resolve_cache`.
 /// Normalised names never contain `:`, so the namespace can't collide with
@@ -152,6 +162,7 @@ pub fn strict_scene_match<'a>(
     release_title: &str,
     kind: TmdbKind,
     year: Option<u32>,
+    anime: bool,
 ) -> Option<&'a TmdbSuggestion> {
     let keys = title_keys(release_title);
     if keys[0].is_empty() {
@@ -160,7 +171,7 @@ pub fn strict_scene_match<'a>(
     let same = |t: &str| title_keys(t).iter().any(|k| keys.contains(k));
     let titled: Vec<&TmdbSuggestion> = candidates
         .iter()
-        .filter(|c| c.kind == kind)
+        .filter(|c| c.kind == kind && (!anime || c.animation))
         .filter(|c| same(&c.title) || c.original_title.as_deref().is_some_and(same))
         .collect();
     let unique = |tier: Vec<&'a TmdbSuggestion>| -> Option<&'a TmdbSuggestion> {
@@ -232,6 +243,7 @@ pub enum Reason {
     TrackerImplausible(Vec<u64>),
     NoSignal,
     NoTitle,
+    CurrentVerified,
 }
 
 impl std::fmt::Display for Reason {
@@ -254,6 +266,9 @@ impl std::fmt::Display for Reason {
             ),
             Self::NoSignal => f.write_str("no tracker id, no strict SCENE match"),
             Self::NoTitle => f.write_str("title does not parse"),
+            Self::CurrentVerified => {
+                f.write_str("current id: one of its TMDB titles is the release's")
+            }
         }
     }
 }
@@ -327,6 +342,8 @@ pub(crate) trait TmdbSource {
     ) -> Option<Vec<TmdbSuggestion>>;
 
     async fn lookup(&self, id: u64, kind: TmdbKind) -> Option<Option<MediaMetadata>>;
+
+    async fn known_titles(&self, id: u64, kind: TmdbKind) -> Option<Option<KnownTitles>>;
 }
 
 impl TmdbSource for TmdbClient {
@@ -343,6 +360,10 @@ impl TmdbSource for TmdbClient {
     async fn lookup(&self, id: u64, kind: TmdbKind) -> Option<Option<MediaMetadata>> {
         self.try_lookup_with_kind(id, Some(kind)).await
     }
+
+    async fn known_titles(&self, id: u64, kind: TmdbKind) -> Option<Option<KnownTitles>> {
+        Self::known_titles(self, id, kind).await
+    }
 }
 
 /// The strict SCENE match (T2) for a parsed release title, through the
@@ -358,14 +379,16 @@ pub(crate) async fn strict_scene<S: TmdbSource>(
     title: &str,
     kind: TmdbKind,
     year: Option<u32>,
+    anime: bool,
 ) -> Result<Option<TmdbSuggestion>, Unreachable> {
     let query = iris_media::filename::series_key(title);
     if query.len() < 2 {
         return Ok(None);
     }
+    let anime_mark = if anime { "anime:" } else { "" };
     let cache_key = match year {
-        Some(y) => format!("{STRICT_CACHE_PREFIX}{query} {y}"),
-        None => format!("{STRICT_CACHE_PREFIX}{query}"),
+        Some(y) => format!("{STRICT_CACHE_PREFIX}{anime_mark}{query} {y}"),
+        None => format!("{STRICT_CACHE_PREFIX}{anime_mark}{query}"),
     };
     let kind_str = Some(kind.as_wire());
     if let Ok(Some(hit)) = tmdb_cache::get(
@@ -393,7 +416,7 @@ pub(crate) async fn strict_scene<S: TmdbSource>(
             );
         }
     }
-    let matched = strict_scene_match(&candidates, title, kind, year).cloned();
+    let matched = strict_scene_match(&candidates, title, kind, year, anime).cloned();
     let entry = matched.as_ref().map_or_else(
         || ResolveEntry::not_found_at(chrono::Utc::now()),
         |m| ResolveEntry {
@@ -422,6 +445,7 @@ fn from_entry(entry: &ResolveEntry, kind: TmdbKind) -> Option<TmdbSuggestion> {
         poster_path: entry.poster_path.clone(),
         overview: entry.overview.clone(),
         vote_count: None,
+        animation: false,
     })
 }
 
@@ -464,6 +488,7 @@ impl Evaluation {
             overview: meta.overview.clone(),
             poster_path: meta.poster_path.clone(),
             vote_count: None,
+            animation: meta.genre_ids.contains(&ANIMATION_GENRE),
         })
     }
 }
@@ -476,6 +501,7 @@ pub(crate) async fn evaluate<S: TmdbSource>(
     tmdb: &S,
     scene_name: &str,
     kind: Option<TmdbKind>,
+    anime: bool,
     tracker_ids: &[u64],
 ) -> Result<Evaluation, Unreachable> {
     let parsed = iris_media::filename::parse(scene_name);
@@ -496,7 +522,7 @@ pub(crate) async fn evaluate<S: TmdbSource>(
         });
     }
     let scene = match parsed.as_ref() {
-        Some(p) => strict_scene(pool, tmdb, &p.title, kind, year).await?,
+        Some(p) => strict_scene(pool, tmdb, &p.title, kind, year, anime).await?,
         None => None,
     };
     let (decision, reason) = if parsed.is_none() && trackers.is_empty() {
@@ -523,10 +549,88 @@ pub async fn trusted_release_match(
     tracker_id: Option<u64>,
 ) -> Option<TmdbSuggestion> {
     let trackers: Vec<u64> = tracker_id.into_iter().collect();
-    evaluate(pool, tmdb, release_name, kind, &trackers)
+    evaluate(pool, tmdb, release_name, kind, false, &trackers)
         .await
         .ok()?
         .trusted_suggestion()
+}
+
+/// T2' (see the module docs): does `current`, the id a legacy collection
+/// carries, still hold for `scene_name`? `Ok(Some(title))` with TMDB's title
+/// when it does.
+pub(crate) async fn verify_current<S: TmdbSource>(
+    tmdb: &S,
+    scene_name: &str,
+    kind: Option<TmdbKind>,
+    anime: bool,
+    current: u64,
+) -> Result<Option<String>, Unreachable> {
+    let parsed = iris_media::filename::parse(scene_name);
+    let kind = kind
+        .or_else(|| parsed.as_ref().map(crate::tmdb_resolve::parsed_kind))
+        .unwrap_or(TmdbKind::Movie);
+    let year = parsed.as_ref().and_then(|p| p.year).map(u32::from);
+    let Some(known) = tmdb.known_titles(current, kind).await.ok_or(Unreachable)? else {
+        return Ok(None);
+    };
+    let year_fits = year.is_none_or(|y| known.year.is_some_and(|k| k.abs_diff(y) <= 1));
+    if !year_fits || (anime && !known.animation) {
+        return Ok(None);
+    }
+    let theirs: Vec<String> = known
+        .titles
+        .iter()
+        .flat_map(|t| title_sides(t, &[":", " - "]))
+        .collect();
+    let ours = parsed
+        .iter()
+        .map(|p| p.title.as_str())
+        .chain([scene_name])
+        .flat_map(release_sides);
+    let matched = ours.into_iter().any(|k| theirs.contains(&k));
+    Ok(matched.then(|| known.titles.first().cloned().unwrap_or_default()))
+}
+
+/// [`title_key`] without its spaces (`lArgentDeLaVieille` = `L'argent de la
+/// vieille`, `4 ème` = `4ème`), kept only when long enough to mean something.
+fn compact_key(s: &str) -> Option<String> {
+    let k: String = title_key(s).split(' ').collect();
+    (k.chars().count() >= 3 && !k.chars().all(|c| c.is_ascii_digit())).then_some(k)
+}
+
+/// The whole title and each side of every `separators` split, as compact keys.
+fn title_sides(title: &str, separators: &[&str]) -> Vec<String> {
+    let mut parts = vec![title.to_owned()];
+    for sep in separators {
+        parts.extend(title.split(sep).map(str::to_owned));
+    }
+    parts.iter().filter_map(|p| compact_key(p)).collect()
+}
+
+/// A release title's readings: without its bracketed tags, each bracket's
+/// content (`L'Odyssée (The Odyssey)`), and each side of a ` - `.
+fn release_sides(title: &str) -> Vec<String> {
+    let mut outside = String::new();
+    let mut inside = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    for c in title.chars() {
+        match c {
+            '[' | '(' => {
+                depth += 1;
+                current.clear();
+            }
+            ']' | ')' if depth > 0 => {
+                depth -= 1;
+                inside.push(std::mem::take(&mut current));
+            }
+            _ if depth > 0 => current.push(c),
+            _ => outside.push(c),
+        }
+    }
+    let mut keys = title_sides(&outside, &[" - "]);
+    keys.extend(inside.iter().filter_map(|p| compact_key(p)));
+    keys
 }
 
 /// Re-evaluate a collection after a release joined it and store the
@@ -554,7 +658,16 @@ pub(crate) async fn refresh_collection<S: TmdbSource>(
         }
     };
     let kind = TmdbKind::from_wire(&collection.kind);
-    let Ok(eval) = evaluate(pool, tmdb, &collection.display_title, kind, &trackers).await else {
+    let Ok(eval) = evaluate(
+        pool,
+        tmdb,
+        &collection.display_title,
+        kind,
+        collection.is_anime,
+        &trackers,
+    )
+    .await
+    else {
         tracing::debug!(collection_id = %collection.id, "tmdb trust: TMDB unreachable, left as is");
         return;
     };
@@ -648,7 +761,15 @@ pub(crate) async fn on_rekey<S: TmdbSource>(
         .filter_map(|i| u64::try_from(i).ok())
         .collect();
     let kind = TmdbKind::from_wire(&collection.kind);
-    let eval = evaluate(pool, tmdb, new_display, kind, &trackers).await?;
+    let eval = evaluate(
+        pool,
+        tmdb,
+        new_display,
+        kind,
+        collection.is_anime,
+        &trackers,
+    )
+    .await?;
     Ok(match eval.decision {
         Some((id, trust)) => {
             i64::try_from(id).map_or(without_match, |id| OnRekey::Trusted(id, trust))
@@ -673,6 +794,7 @@ pub(crate) mod tests {
             overview: None,
             poster_path: Some(format!("/{id}.jpg")),
             vote_count: None,
+            animation: false,
         }
     }
 
@@ -705,6 +827,8 @@ pub(crate) mod tests {
         /// `fr-FR` answers, same keys; a query absent here answers as English.
         pub searches_fr: HashMap<String, Vec<TmdbSuggestion>>,
         pub ids: HashMap<u64, MediaMetadata>,
+        /// Every title of an id; an id absent here answers its `ids` title.
+        pub titles: HashMap<u64, KnownTitles>,
         pub offline: bool,
     }
 
@@ -741,6 +865,140 @@ pub(crate) mod tests {
             }
             Some(self.ids.get(&id).cloned())
         }
+
+        #[expect(
+            clippy::unused_async_trait_impl,
+            reason = "fixture answers synchronously"
+        )]
+        async fn known_titles(&self, id: u64, kind: TmdbKind) -> Option<Option<KnownTitles>> {
+            if self.offline {
+                return None;
+            }
+            if let Some(known) = self.titles.get(&id) {
+                return Some(Some(known.clone()));
+            }
+            Some(
+                self.ids
+                    .get(&id)
+                    .filter(|m| m.kind == kind)
+                    .map(|m| KnownTitles {
+                        titles: vec![m.title.clone()],
+                        year: m.year,
+                        animation: m.genre_ids.contains(&ANIMATION_GENRE),
+                    }),
+            )
+        }
+    }
+
+    #[test]
+    fn an_anime_collection_only_matches_an_animated_title() {
+        let one_piece = |id, animation, votes| TmdbSuggestion {
+            animation,
+            vote_count: Some(votes),
+            ..suggestion(id, TmdbKind::Tv, "ONE PIECE", 1999)
+        };
+        let cands = vec![
+            one_piece(37_854, true, 5_000),
+            one_piece(111_110, false, 2_000),
+        ];
+        let pick = |anime| {
+            strict_scene_match(&cands, "One Piece", TmdbKind::Tv, None, anime).map(|s| s.tmdb_id)
+        };
+        assert_eq!(pick(true), Some(37_854));
+        assert_eq!(pick(false), None, "two close homonyms stay ambiguous");
+    }
+
+    #[tokio::test]
+    async fn the_current_id_holds_when_one_of_its_titles_is_the_release() {
+        let known = |titles: &[&str], year, animation| KnownTitles {
+            titles: titles.iter().map(|t| (*t).to_owned()).collect(),
+            year: Some(year),
+            animation,
+        };
+        let tmdb = FakeTmdb {
+            titles: HashMap::from([
+                (
+                    1,
+                    known(
+                        &["Frieren: Beyond Journey's End", "Sousou no Frieren"],
+                        2023,
+                        true,
+                    ),
+                ),
+                (
+                    2,
+                    known(
+                        &[
+                            "The Lord of the Rings: The Two Towers",
+                            "Le Seigneur des anneaux : Les Deux Tours",
+                        ],
+                        2002,
+                        false,
+                    ),
+                ),
+                (3, known(&["L'argent de la vieille"], 2024, false)),
+                (
+                    4,
+                    known(
+                        &["Les duos impossibles de Jérémy Ferrari : 1ère édition"],
+                        2016,
+                        false,
+                    ),
+                ),
+                (5, known(&["ONE PIECE"], 2023, false)),
+                (6, known(&["Wishmaster 2: Evil Never Dies"], 1999, false)),
+            ]),
+            ..FakeTmdb::default()
+        };
+        let holds = |name: &'static str, kind, anime, id| {
+            let tmdb = &tmdb;
+            async move {
+                verify_current(tmdb, name, Some(kind), anime, id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            }
+        };
+        assert!(
+            holds("Sousou No Frieren", TmdbKind::Tv, true, 1).await,
+            "an alternative title"
+        );
+        assert!(
+            holds(
+                "Le Seigneur des Anneaux 2 - Les Deux Tours [FR-EN] [EXTENDED] (2002)",
+                TmdbKind::Movie,
+                false,
+                2
+            )
+            .await,
+            "one side of a ` - ` against one side of a `:`, tags dropped"
+        );
+        assert!(
+            holds("lArgentDeLaVieille", TmdbKind::Movie, false, 3).await,
+            "spaces aside"
+        );
+        assert!(
+            holds("Wishmaster 2 (1999)", TmdbKind::Movie, false, 6).await,
+            "the main title before a `:`"
+        );
+        assert!(
+            !holds(
+                "Les duos impossibles de Jeremy Ferrari 10eme edition (2024)",
+                TmdbKind::Movie,
+                false,
+                4
+            )
+            .await,
+            "another edition"
+        );
+        assert!(
+            !holds("Wishmaster 2 (2003)", TmdbKind::Movie, false, 6).await,
+            "year off by more than one"
+        );
+        assert!(
+            !holds("One Piece", TmdbKind::Tv, true, 5).await,
+            "an anime never keeps a live-action id"
+        );
     }
 
     #[test]
@@ -767,23 +1025,31 @@ pub(crate) mod tests {
         fr.original_title = Some("Intouchables".into());
         let cands = vec![fr, suggestion(2, TmdbKind::Movie, "Untouchable", 2011)];
         assert_eq!(
-            strict_scene_match(&cands, "Intouchables", TmdbKind::Movie, Some(2011))
+            strict_scene_match(&cands, "Intouchables", TmdbKind::Movie, Some(2011), false)
                 .map(|s| s.tmdb_id),
             Some(1)
         );
         assert_eq!(
-            strict_scene_match(&cands, "The Intouchables", TmdbKind::Movie, Some(2011))
-                .map(|s| s.tmdb_id),
+            strict_scene_match(
+                &cands,
+                "The Intouchables",
+                TmdbKind::Movie,
+                Some(2011),
+                false
+            )
+            .map(|s| s.tmdb_id),
             Some(1)
         );
-        assert!(strict_scene_match(&cands, "Intouchable", TmdbKind::Movie, Some(2011)).is_none());
+        assert!(
+            strict_scene_match(&cands, "Intouchable", TmdbKind::Movie, Some(2011), false).is_none()
+        );
     }
 
     #[test]
     fn strict_match_checks_the_kind() {
         let cands = vec![suggestion(5, TmdbKind::Tv, "Dune", 2021)];
-        assert!(strict_scene_match(&cands, "Dune", TmdbKind::Movie, Some(2021)).is_none());
-        assert!(strict_scene_match(&cands, "Dune", TmdbKind::Tv, Some(2021)).is_some());
+        assert!(strict_scene_match(&cands, "Dune", TmdbKind::Movie, Some(2021), false).is_none());
+        assert!(strict_scene_match(&cands, "Dune", TmdbKind::Tv, Some(2021), false).is_some());
     }
 
     #[test]
@@ -792,7 +1058,8 @@ pub(crate) mod tests {
             suggestion(438_631, TmdbKind::Movie, "Dune", 2021),
             suggestion(841, TmdbKind::Movie, "Dune", 1984),
         ];
-        let pick = |y| strict_scene_match(&cands, "Dune", TmdbKind::Movie, y).map(|s| s.tmdb_id);
+        let pick =
+            |y| strict_scene_match(&cands, "Dune", TmdbKind::Movie, y, false).map(|s| s.tmdb_id);
         assert_eq!(pick(Some(2021)), Some(438_631));
         assert_eq!(pick(Some(2022)), Some(438_631), "movies: ±1");
         assert_eq!(pick(Some(1985)), Some(841));
@@ -800,22 +1067,29 @@ pub(crate) mod tests {
         assert_eq!(pick(None), None, "two exact titles and no year: ambiguous");
         let one = vec![suggestion(9, TmdbKind::Movie, "Dune", 2021)];
         assert_eq!(
-            strict_scene_match(&one, "Dune", TmdbKind::Movie, None).map(|s| s.tmdb_id),
+            strict_scene_match(&one, "Dune", TmdbKind::Movie, None, false).map(|s| s.tmdb_id),
             Some(9),
             "no year on the release: a unique exact title passes"
         );
         let tv = vec![suggestion(3, TmdbKind::Tv, "Doctor Who", 2005)];
         assert!(
-            strict_scene_match(&tv, "Doctor Who", TmdbKind::Tv, Some(2006)).is_none(),
+            strict_scene_match(&tv, "Doctor Who", TmdbKind::Tv, Some(2006), false).is_none(),
             "TV: equal"
         );
-        assert!(strict_scene_match(&tv, "Doctor Who", TmdbKind::Tv, Some(2005)).is_some());
+        assert!(strict_scene_match(&tv, "Doctor Who", TmdbKind::Tv, Some(2005), false).is_some());
         let same_year_twins = vec![
             suggestion(1, TmdbKind::Movie, "Midnight", 2021),
             suggestion(2, TmdbKind::Movie, "Midnight", 2021),
         ];
         assert!(
-            strict_scene_match(&same_year_twins, "Midnight", TmdbKind::Movie, Some(2021)).is_none()
+            strict_scene_match(
+                &same_year_twins,
+                "Midnight",
+                TmdbKind::Movie,
+                Some(2021),
+                false
+            )
+            .is_none()
         );
     }
 
@@ -830,8 +1104,14 @@ pub(crate) mod tests {
             votes(883_188, "Annihilation", 2018, 2),
         ];
         assert_eq!(
-            strict_scene_match(&annihilation, "Annihilation", TmdbKind::Movie, Some(2018))
-                .map(|s| s.tmdb_id),
+            strict_scene_match(
+                &annihilation,
+                "Annihilation",
+                TmdbKind::Movie,
+                Some(2018),
+                false
+            )
+            .map(|s| s.tmdb_id),
             Some(300_668),
             "a same-year short with two votes doesn't make the film ambiguous"
         );
@@ -840,7 +1120,7 @@ pub(crate) mod tests {
             votes(111_110, "One Piece", 2023, 2_100),
         ];
         assert!(
-            strict_scene_match(&close, "One Piece", TmdbKind::Movie, None).is_none(),
+            strict_scene_match(&close, "One Piece", TmdbKind::Movie, None, false).is_none(),
             "two real titles under one name stay ambiguous"
         );
         let obscure = vec![
@@ -848,7 +1128,7 @@ pub(crate) mod tests {
             votes(2, "Midnight", 2021, 0),
         ];
         assert!(
-            strict_scene_match(&obscure, "Midnight", TmdbKind::Movie, Some(2021)).is_none(),
+            strict_scene_match(&obscure, "Midnight", TmdbKind::Movie, Some(2021), false).is_none(),
             "dominance needs a minimum of votes"
         );
         let twice = vec![
@@ -856,7 +1136,8 @@ pub(crate) mod tests {
             votes(300_668, "Annihilation", 2018, 6_900),
         ];
         assert!(
-            strict_scene_match(&twice, "Annihilation", TmdbKind::Movie, Some(2018)).is_some(),
+            strict_scene_match(&twice, "Annihilation", TmdbKind::Movie, Some(2018), false)
+                .is_some(),
             "the same id from two searches is one candidate"
         );
     }
@@ -870,12 +1151,29 @@ pub(crate) mod tests {
             2022,
         )];
         assert!(
-            strict_scene_match(&cands, "C Est Magnifique", TmdbKind::Movie, Some(2022)).is_some()
+            strict_scene_match(
+                &cands,
+                "C Est Magnifique",
+                TmdbKind::Movie,
+                Some(2022),
+                false
+            )
+            .is_some()
         );
         assert!(
-            strict_scene_match(&cands, "Cest Magnifique", TmdbKind::Movie, Some(2022)).is_some()
+            strict_scene_match(
+                &cands,
+                "Cest Magnifique",
+                TmdbKind::Movie,
+                Some(2022),
+                false
+            )
+            .is_some()
         );
-        assert!(strict_scene_match(&cands, "C Magnifique", TmdbKind::Movie, Some(2022)).is_none());
+        assert!(
+            strict_scene_match(&cands, "C Magnifique", TmdbKind::Movie, Some(2022), false)
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -904,6 +1202,7 @@ pub(crate) mod tests {
             "Pirates des Caraibes La Malediction du Black Pearl",
             TmdbKind::Movie,
             Some(2003),
+            false,
         )
         .await
         .unwrap();
@@ -986,23 +1285,44 @@ pub(crate) mod tests {
             "dune".into(),
             vec![suggestion(438_631, TmdbKind::Movie, "Dune", 2021)],
         );
-        let e = evaluate(&pool, &tmdb, "Dune (2021)", Some(TmdbKind::Movie), &[])
-            .await
-            .unwrap();
+        let e = evaluate(
+            &pool,
+            &tmdb,
+            "Dune (2021)",
+            Some(TmdbKind::Movie),
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(e.decision, Some((438_631, Trust::Scene)));
         tmdb.offline = true;
-        let cached = evaluate(&pool, &tmdb, "Dune (2021)", Some(TmdbKind::Movie), &[])
-            .await
-            .unwrap();
+        let cached = evaluate(
+            &pool,
+            &tmdb,
+            "Dune (2021)",
+            Some(TmdbKind::Movie),
+            false,
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(
             cached.decision,
             Some((438_631, Trust::Scene)),
             "served from the strict cache"
         );
         assert_eq!(
-            evaluate(&pool, &tmdb, "Arrival (2016)", Some(TmdbKind::Movie), &[])
-                .await
-                .unwrap_err(),
+            evaluate(
+                &pool,
+                &tmdb,
+                "Arrival (2016)",
+                Some(TmdbKind::Movie),
+                false,
+                &[]
+            )
+            .await
+            .unwrap_err(),
             Unreachable
         );
     }

@@ -301,10 +301,11 @@ pub(crate) async fn upsert_window_rows(
     upserted
 }
 
-/// Heuristic: does this TMDB title look like anime? Animation genre (16) in
+/// Heuristic: does this TMDB title look like anime? Animation genre in
 /// Japanese. Good enough to gate the (cached) AniList reconciliation.
 fn is_anime_meta(meta: &MediaMetadata) -> bool {
-    meta.genre_ids.contains(&16) && meta.original_language.as_deref() == Some("ja")
+    meta.genre_ids.contains(&crate::tmdb::ANIMATION_GENRE)
+        && meta.original_language.as_deref() == Some("ja")
 }
 
 async fn run_gc(pool: &SqlitePool, cfg: &DiscoveryConfig) {

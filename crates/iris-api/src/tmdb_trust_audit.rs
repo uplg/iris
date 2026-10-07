@@ -124,13 +124,34 @@ async fn audit_one<S: TmdbSource>(
         .into_iter()
         .filter_map(|i| u64::try_from(i).ok())
         .collect();
-    let Ok(eval) = tmdb_trust::evaluate(pool, tmdb, &c.display_title, kind, &trackers).await else {
+    let unreachable = |mut row: AuditRow| {
         row.reason = "TMDB unreachable, re-run later".into();
-        return Ok(row);
+        row
     };
+    let Ok(eval) =
+        tmdb_trust::evaluate(pool, tmdb, &c.display_title, kind, c.is_anime, &trackers).await
+    else {
+        return Ok(unreachable(row));
+    };
+    let mut decision = eval.decision;
     row.reason = eval.reason.to_string();
     row.new_title = eval.trusted_title();
-    if let Some((id, trust)) = eval.decision {
+    let undecided = matches!(
+        eval.reason,
+        Reason::NoSignal | Reason::NoTitle | Reason::TrackerImplausible(_)
+    );
+    if let (true, Some(old)) = (undecided, c.tmdb_id.and_then(|i| u64::try_from(i).ok())) {
+        match tmdb_trust::verify_current(tmdb, &c.display_title, kind, c.is_anime, old).await {
+            Ok(Some(title)) => {
+                decision = Some((old, Trust::Scene));
+                row.reason = Reason::CurrentVerified.to_string();
+                row.new_title = Some(title);
+            }
+            Ok(None) => {}
+            Err(_) => return Ok(unreachable(row)),
+        }
+    }
+    if let Some((id, trust)) = decision {
         let id = i64::try_from(id)?;
         row.new_id = Some(id);
         row.trust = Some(trust);
@@ -301,7 +322,17 @@ mod tests {
         tmdb.ids
             .insert(12, meta(12, TmdbKind::Movie, "Midnight Matinee", 1988));
         tmdb.ids
-            .insert(77, meta(77, TmdbKind::Movie, "Le Parrain", 1972));
+            .insert(77, meta(77, TmdbKind::Movie, "The Godfather", 1972));
+        tmdb.ids
+            .insert(2316, meta(2316, TmdbKind::Tv, "The Office", 2005));
+        tmdb.titles.insert(
+            2316,
+            crate::tmdb::KnownTitles {
+                titles: vec!["The Office".into(), "The Office (US)".into()],
+                year: Some(2005),
+                animation: false,
+            },
+        );
         tmdb.ids.insert(5, meta(5, TmdbKind::Tv, "Severance", 2022));
         tmdb.searches.insert(
             "severance".into(),
@@ -313,6 +344,7 @@ mod tests {
         let parrain = collection(&pool, "Le Parrain (1972)", "movie", Some(77)).await;
         collection(&pool, "Nothing Here (2020)", "movie", None).await;
         let sev = collection(&pool, "Severance", "tv", Some(95_396)).await;
+        let office = collection(&pool, "The Office US", "tv", Some(2316)).await;
         tracker_torrent(&pool, sev, 5).await;
 
         let dry = run_with(&pool, &tmdb, false).await.unwrap();
@@ -320,6 +352,11 @@ mod tests {
         assert_eq!(verdict(&dry, "Midnight (2021)"), Verdict::Change);
         assert_eq!(verdict(&dry, "Le Parrain (1972)"), Verdict::Lose);
         assert_eq!(verdict(&dry, "Nothing Here (2020)"), Verdict::None);
+        assert_eq!(
+            verdict(&dry, "The Office US"),
+            Verdict::Keep,
+            "no search match, but one of its id's titles is the release's"
+        );
         assert_eq!(
             verdict(&dry, "Severance"),
             Verdict::Lose,
@@ -331,7 +368,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("keep 1 · change 1 · lose 2 · none 1 · skipped 0"),
+            text.contains("keep 2 · change 1 · lose 2 · none 1 · skipped 0"),
             "{text}"
         );
         let untouched = iris_db::collections::get(&pool, parrain)
@@ -356,6 +393,11 @@ mod tests {
         let p = get(parrain).await;
         assert_eq!((p.tmdb_id, p.tmdb_trust), (None, None));
         assert_eq!(get(sev).await.tmdb_id, None);
+        let o = get(office).await;
+        assert_eq!(
+            (o.tmdb_id, o.tmdb_trust.as_deref()),
+            (Some(2316), Some("scene"))
+        );
     }
 
     #[tokio::test]

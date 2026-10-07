@@ -120,6 +120,9 @@ impl From<TmdbKind> for iris_core::search::MediaKind {
     }
 }
 
+/// TMDB's genre id for Animation (movies and TV alike).
+pub const ANIMATION_GENRE: u32 = 16;
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TmdbSuggestion {
     pub kind: TmdbKind,
@@ -136,6 +139,10 @@ pub struct TmdbSuggestion {
     /// homonyms. Server-side only, never serialised.
     #[serde(skip)]
     pub vote_count: Option<u32>,
+    /// TMDB files it under Animation: an anime collection only matches such
+    /// a title. Server-side only, never serialised.
+    #[serde(skip)]
+    pub animation: bool,
 }
 
 /// One entry of TMDB's genre taxonomy (`/genre/{movie,tv}/list`). Powers
@@ -298,6 +305,7 @@ impl TmdbMultiResult {
             overview: self.overview.filter(|s| !s.is_empty()),
             poster_path: self.poster_path,
             vote_count: self.vote_count,
+            animation: self.genre_ids.contains(&ANIMATION_GENRE),
         })
     }
 }
@@ -683,6 +691,46 @@ impl TmdbClient {
         })
     }
 
+    /// Every title TMDB files an entry under (title, original title,
+    /// alternative titles, translations), with its year and whether it is
+    /// Animation. `None`: TMDB unreachable; `Some(None)`: no such entry under
+    /// `kind`. Uncached: only the `tmdb-trust` audit asks, once per collection.
+    pub async fn known_titles(&self, tmdb_id: u64, kind: TmdbKind) -> Option<Option<KnownTitles>> {
+        let raw: TmdbTitlesRaw = match self
+            .get_json(
+                &format!("{}/{tmdb_id}", kind.as_wire()),
+                &[("append_to_response", "alternative_titles,translations")],
+                "known titles",
+            )
+            .await
+        {
+            Ok(raw) => raw,
+            Err(Miss::NotFound) => return Some(None),
+            Err(Miss::Failed) => return None,
+        };
+        let date = raw.release_date.or(raw.first_air_date);
+        let alternative = raw
+            .alternative_titles
+            .map(|a| a.titles.into_iter().chain(a.results));
+        let translated = raw.translations.map(|t| {
+            t.translations
+                .into_iter()
+                .filter_map(|t| t.data.title.or(t.data.name))
+        });
+        let titles = [raw.title, raw.name, raw.original_title, raw.original_name]
+            .into_iter()
+            .flatten()
+            .chain(alternative.into_iter().flatten().map(|a| a.title))
+            .chain(translated.into_iter().flatten())
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        Some(Some(KnownTitles {
+            titles,
+            year: year_of(date.as_deref()),
+            animation: raw.genres.iter().any(|g| g.id == ANIMATION_GENRE),
+        }))
+    }
+
     async fn fetch(&self, tmdb_id: u64, kind: TmdbKind) -> Result<MediaMetadata, Miss> {
         let raw: TmdbRaw = self
             .get_json(&format!("{}/{tmdb_id}", kind.as_wire()), &[], "lookup")
@@ -723,6 +771,59 @@ impl TmdbClient {
             release_date: date,
         })
     }
+}
+
+/// What [`TmdbClient::known_titles`] answers.
+#[derive(Debug, Clone, Default)]
+pub struct KnownTitles {
+    pub titles: Vec<String>,
+    pub year: Option<u32>,
+    pub animation: bool,
+}
+
+#[derive(Deserialize)]
+struct TmdbTitlesRaw {
+    title: Option<String>,
+    name: Option<String>,
+    original_title: Option<String>,
+    original_name: Option<String>,
+    release_date: Option<String>,
+    first_air_date: Option<String>,
+    #[serde(default)]
+    genres: Vec<TmdbGenre>,
+    alternative_titles: Option<TmdbAlternativeTitles>,
+    translations: Option<TmdbTranslations>,
+}
+
+/// Movies list them under `titles`, TV shows under `results`.
+#[derive(Deserialize)]
+struct TmdbAlternativeTitles {
+    #[serde(default)]
+    titles: Vec<TmdbAlternativeTitle>,
+    #[serde(default)]
+    results: Vec<TmdbAlternativeTitle>,
+}
+
+#[derive(Deserialize)]
+struct TmdbAlternativeTitle {
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct TmdbTranslations {
+    #[serde(default)]
+    translations: Vec<TmdbTranslation>,
+}
+
+#[derive(Deserialize)]
+struct TmdbTranslation {
+    data: TmdbTranslationData,
+}
+
+#[derive(Deserialize)]
+struct TmdbTranslationData {
+    title: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -838,6 +939,8 @@ struct TmdbMultiResult {
     overview: Option<String>,
     poster_path: Option<String>,
     vote_count: Option<u32>,
+    #[serde(default)]
+    genre_ids: Vec<u32>,
 }
 
 #[derive(Deserialize)]

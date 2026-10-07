@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **TMDB trust re-evaluation** is now `iris maintenance tmdb-trust`, runs
+  beside the live server, keeps a cover when one of the titles TMDB files it
+  under (alternative titles and translations included) is the release's,
+  and an anime collection only matches a title filed under Animation (the
+  One Piece anime no longer shows the live-action series).
+
 ## [1.6.1] - 2026-10-07
 
 ### Added
