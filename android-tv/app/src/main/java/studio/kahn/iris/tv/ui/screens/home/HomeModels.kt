@@ -7,7 +7,6 @@ import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.MoodTile
-import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.SearchResult
 import studio.kahn.iris.tv.data.Shelf
 import studio.kahn.iris.tv.data.WatchlistItem
@@ -78,7 +77,6 @@ data class HeroModel(
     val overview: String?,
     val art: String?,
     val actions: List<HeroButton>,
-    val languages: String? = null,
 )
 
 @Immutable
@@ -148,20 +146,22 @@ fun watchlistCard(item: WatchlistItem, downloading: Double?): CardModel {
     )
 }
 
+/** A title of the library (web `LibraryCard`): what it is, and a line only while it downloads or
+ *  once its files are gone; being on disk goes without saying, and its size says nothing here. */
 fun libraryCard(item: CollectionListItem, downloading: Double?): CardModel {
     val kind = kindLabel(item.kind, item.isAnime == true)
-    val size = if (item.kind == MediaKind.tv && item.episodeCount > 0) plural(item.episodeCount, "episode") else formatSize(item.totalSizeBytes)
+    val episodes = if (item.kind == MediaKind.tv && item.episodeCount > 0) plural(item.episodeCount, "episode") else null
     val (status, tone) = when {
         item.ghost == true -> "No longer on disk" to StatusTone.Warn
         downloading != null -> "Downloading · ${percent(downloading)}" to StatusTone.Muted
-        else -> "On disk" to StatusTone.Ok
+        else -> null to StatusTone.Muted
     }
     return CardModel(
         key = LIBRARY_PREFIX + item.id,
         title = item.displayTitle,
         art = tmdbPosterUrl(item.posterPath),
         kind = kind,
-        meta = "$kind · $size",
+        meta = joined(listOf(kind, episodes)),
         status = status,
         tone = tone,
     )
@@ -198,7 +198,7 @@ fun moodModel(tile: MoodTile): MoodModel =
     MoodModel(tile.id, tile.label, tile.backdropUrl, tile.featuredTitle?.let { "Now: $it" })
 
 /** The first thing to resume: where it stopped, what is left, the one action that plays it from there. */
-fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?, prefs: PlaybackPrefsResponse?): HeroModel {
+fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?): HeroModel {
     val key = tileKey(item)
     val left = secondsLeft(item)
     val resuming = isResuming(item)
@@ -228,7 +228,6 @@ fun resumeHero(item: ContinueWatchingItem, md: MediaMetadata?, prefs: PlaybackPr
         overview = md?.overview?.takeIf { it.isNotBlank() },
         art = tmdbBackdropUrl(md?.backdropPath, "w1280"),
         actions = actions,
-        languages = languagesLine(prefs, item.kind),
     )
 }
 

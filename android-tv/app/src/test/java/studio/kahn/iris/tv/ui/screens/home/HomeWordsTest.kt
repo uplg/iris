@@ -9,23 +9,19 @@ import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DiskSpace
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
-import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 
 /** The home's words say what the web app's say (`web/src/lib/home/data.test.ts`, `@iris/api/format`). */
 class HomeWordsTest {
     @Test
-    fun rightNowSaysOnlyWhatHappens() {
+    fun rightNowSaysOnlyWhatDownloads() {
         val gb = 1024L * 1024 * 1024
         assertEquals(
-            listOf("2 downloads · 64% · 23 min left", "3 new episodes on your watchlist", "412 GB free on disk", "Seeding 18 releases"),
+            listOf("2 downloads · 64% · 23 min left"),
             rightNow(HomeSummary(2, 63.6, 3, 18, DiskSpace(412 * gb, 2000 * gb), 1380)),
         )
-        assertEquals(
-            listOf("1 download · 10%", "1 new episode on your watchlist", "Seeding 1 release"),
-            rightNow(HomeSummary(1, 10.0, 1, 1)),
-        )
+        assertEquals(listOf("1 download · 10%"), rightNow(HomeSummary(1, 10.0, 1, 1)))
         assertEquals(emptyList<String>(), rightNow(HomeSummary(0, 0.0, 0, 0)))
     }
 
@@ -42,22 +38,6 @@ class HomeWordsTest {
         assertEquals(1370.0, secondsLeft(cw(position = 1930.0, duration = 3300.0))!!, 0.0)
         assertEquals(0.5f, watchedShare(cw(position = 1650.0, duration = 3300.0))!!, 0f)
         assertNull(secondsLeft(cw(position = 10.0, duration = null)))
-    }
-
-    @Test
-    fun languagesAPlayWillUse() {
-        assertEquals("Plays with audio in French, subtitles off.", languagesLine(PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off"), MediaKind.tv))
-        assertEquals(
-            "Plays with subtitles in English, as chosen for this series.",
-            languagesLine(PlaybackPrefsResponse(subtitleLanguage = "eng", forCollection = true), MediaKind.tv),
-        )
-        assertNull(languagesLine(PlaybackPrefsResponse(), MediaKind.tv))
-        // A film is not a series.
-        assertEquals(
-            "Plays with audio in French, subtitles off, as chosen for this film.",
-            languagesLine(PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off", forCollection = true), MediaKind.movie),
-        )
-        assertNull(languagesLine(null, MediaKind.tv))
     }
 
     companion object {

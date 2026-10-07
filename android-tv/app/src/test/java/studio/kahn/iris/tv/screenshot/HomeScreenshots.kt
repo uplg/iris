@@ -56,7 +56,6 @@ class HomeScreenshots {
             HeroButton(HeroAction.AllEpisodes, "All episodes"),
             HeroButton(HeroAction.StartOver, "Start over", "Starting over…", "over:c:1"),
         ),
-        languages = "Plays with audio in English, subtitles in French, as chosen for this series.",
     )
 
     private fun cw(key: String, title: String, meta: String, progress: Float?, status: String? = null) = CardModel(
@@ -110,7 +109,7 @@ class HomeScreenshots {
     private val home = HomeUiState(
         hero = hero,
         heroPending = false,
-        rightNow = Loadable.Ready(listOf("2 downloads · 64% · 23 min left", "3 new episodes on your watchlist", "412 GB free on disk")),
+        rightNow = Loadable.Ready(listOf("2 downloads · 64% · 23 min left")),
         continueWatching = Loadable.Ready(continueWatching),
         watchlist = Loadable.Ready(watchlist),
         watchlistCount = watchlist.size,
@@ -121,7 +120,7 @@ class HomeScreenshots {
                 (1..8).map { poster("fy:trending:", it, "Title $it", "In your library", StatusTone.Ok) },
             ),
         ),
-        library = Loadable.Ready((1..8).map { poster("lib:", it, "Library $it", "On disk", StatusTone.Ok) }),
+        library = Loadable.Ready((1..8).map { poster("lib:", it, "Library $it", if (it == 2) "Downloading · 42%" else null) }),
         libraryCount = 64,
     )
 

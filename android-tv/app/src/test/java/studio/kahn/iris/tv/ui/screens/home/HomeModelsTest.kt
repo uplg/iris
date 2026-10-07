@@ -11,7 +11,6 @@ import org.robolectric.RobolectricTestRunner
 import studio.kahn.iris.tv.data.CatalogCard
 import studio.kahn.iris.tv.data.CollectionListItem
 import studio.kahn.iris.tv.data.MediaKind
-import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.ui.components.StatusTone
 import studio.kahn.iris.tv.ui.screens.home.HomeWordsTest.Companion.cw
 import studio.kahn.iris.tv.ui.state.Loadable
@@ -26,9 +25,8 @@ class HomeModelsTest {
     fun aResumedFilmHasNoEpisodes() {
         val film = UUID.fromString("00000000-0000-0000-0000-000000000002")
         val item = cw(position = 1930.0, duration = 3310.0, collection = film, kind = MediaKind.movie, name = "Avatar.2009.MULTi.1080p.BluRay.mkv")
-        val hero = resumeHero(item, null, PlaybackPrefsResponse(audioLanguage = "fr", subtitleLanguage = "off", forCollection = true))
+        val hero = resumeHero(item, null)
         assertEquals(listOf("Resume at 32:10", "Start over"), hero.actions.map { it.label })
-        assertEquals("Plays with audio in French, subtitles off, as chosen for this film.", hero.languages)
         assertTrue(CardAction.OpenSeries !in continueCard(item, null).menu)
     }
 
@@ -47,11 +45,10 @@ class HomeModelsTest {
             card.menu,
         )
 
-        val hero = resumeHero(item, null, PlaybackPrefsResponse(audioLanguage = "en"))
+        val hero = resumeHero(item, null)
         assertEquals(null, hero.eyebrow)
         assertEquals("Season 2 · Episode 4 · Woe's Hollow · 23 min left", hero.meta)
         assertEquals(listOf("Resume at 32:10", "All episodes", "Start over"), hero.actions.map { it.label })
-        assertEquals("Plays with audio in English.", hero.languages)
     }
 
     @Test
@@ -63,7 +60,7 @@ class HomeModelsTest {
         assertFalse(CardAction.MarkWatched in card.menu)
         assertNull(card.progress)
 
-        val hero = resumeHero(item, null, null)
+        val hero = resumeHero(item, null)
         assertEquals("Up next", hero.eyebrow)
         assertEquals(HeroButton(HeroAction.GetAndPlay, "Play S1:E5", "Getting S1:E5…", "get:c:$series"), hero.actions.first())
     }
@@ -72,7 +69,7 @@ class HomeModelsTest {
     fun aMovieJustStarted() {
         val item = cw(position = 2.0, duration = 6000.0, name = "Perfect.Days.2023.1080p.mkv")
         assertEquals("Movie · 1 h 40 min left", continueCard(item, null).meta)
-        val hero = resumeHero(item, null, null)
+        val hero = resumeHero(item, null)
         assertEquals(listOf("Play"), hero.actions.map { it.label })
         assertEquals("Movie · 1 h 40 min", hero.meta)
         assertEquals("Perfect Days (2023)", hero.title)
@@ -82,7 +79,9 @@ class HomeModelsTest {
     fun libraryCardsSayWhereTheFilesAre() {
         val c = CollectionListItem("Severance", 9, series, MediaKind.tv, 2, 40L * 1024 * 1024 * 1024)
         assertEquals("Series · 9 episodes", libraryCard(c, null).meta)
-        assertEquals("On disk" to StatusTone.Ok, libraryCard(c, null).let { it.status to it.tone })
+        // being on disk goes without saying, and a film's size says nothing on its card
+        assertNull(libraryCard(c, null).status)
+        assertEquals("Movie", libraryCard(c.copy(kind = MediaKind.movie, episodeCount = 1), null).meta)
         assertEquals("Downloading · 42%", libraryCard(c, 42.4).status)
         assertEquals("No longer on disk" to StatusTone.Warn, libraryCard(c.copy(ghost = true), null).let { it.status to it.tone })
     }
