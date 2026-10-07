@@ -1,4 +1,5 @@
 import axe from 'axe-core';
+import { IRIS_WEB_VERSION } from '@iris/api/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
@@ -89,9 +90,9 @@ describe('admin page', () => {
 		await expect.element(now.getByText('Movie · 2024')).toBeVisible();
 		await expect.element(now.getByText('1:02:14 of 2:46:00')).toBeVisible();
 		for (const state of ['Playing', 'Paused', 'Buffering']) await expect.element(now.getByText(state, { exact: true })).toBeVisible();
-		await expect.element(now.getByText('Web 1.5.0 · Firefox · macOS')).toBeVisible();
+		await expect.element(now.getByText(`Web ${IRIS_WEB_VERSION} · Firefox · macOS`)).toBeVisible();
 		await expect.element(now.getByText('Android TV 1.3.0')).toBeVisible();
-		await expect.element(now.getByText('Older than 1.5.0, the current release')).toHaveLength(1);
+		await expect.element(now.getByText(`Older than ${IRIS_WEB_VERSION}, the current release`)).toHaveLength(1);
 		await expect.element(now.getByText(/^Since \d\d:\d\d, .* ago$/).first()).toBeVisible();
 		await expect.element(now.getByRole('link', { name: 'Alex' })).toHaveAttribute('href', '/admin/users/u2/history');
 		expect(now.element().textContent).not.toContain('Severance.S02');

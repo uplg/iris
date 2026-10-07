@@ -1,3 +1,4 @@
+import { IRIS_WEB_VERSION } from '@iris/api/client';
 // For the admin tests: a household of realistic size (25 accounts, 300 plays of series and
 // films, three people watching, a long audit log, nine trackers, invitations waiting, used
 // and expired) and a stand-in backend that pages and filters it as the server does.
@@ -260,7 +261,7 @@ const session = (who: UserView, t: Title, e: number, position: number, more: Par
 		duration_seconds: t.minutes * 60,
 		state: 'playing',
 		client: 'web',
-		client_version: '1.5.0',
+		client_version: IRIS_WEB_VERSION,
 		started_at: ago(position * 1000 + 2 * MIN),
 		last_seen_at: ago(4_000),
 		poster_path: t.poster,
@@ -276,8 +277,8 @@ const session = (who: UserView, t: Title, e: number, position: number, more: Par
 };
 /** Alex on the web (playing), Sam on the TV (paused), Marie-Charlotte buffering on an old app. */
 export const sessions: ActiveSession[] = [
-	session(people[1], TITLES[0], 3, 42 * 60 + 14, { client: 'web', client_version: '1.5.0', browser: 'Firefox · macOS' }),
-	session(people[3], TITLES[6], 0, 3734, { state: 'paused', client: 'tv', client_version: '1.5.0', browser: null }),
+	session(people[1], TITLES[0], 3, 42 * 60 + 14, { client: 'web', client_version: IRIS_WEB_VERSION, browser: 'Firefox · macOS' }),
+	session(people[3], TITLES[6], 0, 3734, { state: 'paused', client: 'tv', client_version: IRIS_WEB_VERSION, browser: null }),
 	session(people[24], TITLES[3], 6, 9 * 60 + 5, { state: 'buffering', client: 'tv', client_version: '1.3.0', browser: null })
 ];
 
