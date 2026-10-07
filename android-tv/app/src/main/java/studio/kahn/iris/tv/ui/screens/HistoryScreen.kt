@@ -1,5 +1,7 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.state.SearchInstead
+import studio.kahn.iris.tv.ui.state.SearchInsteadEffect
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -89,11 +91,13 @@ fun HistoryScreen(
     onPickFile: (infohash: String, fileIdx: Int) -> Unit,
     onOpenCollection: (collectionId: String) -> Unit,
     onBack: () -> Unit,
+    onSearchInstead: (SearchInstead) -> Unit = {},
 ) {
     val vm = irisViewModel(container) { c, _ -> HistoryViewModel(c) }
     val state by vm.state.collectAsStateWithLifecycle()
     val event by vm.playEvents.collectAsStateWithLifecycle()
     RepeatWhileStarted(Unit) { vm.pollWhileStarted() }
+    SearchInsteadEffect(vm.searchInstead, onSearchInstead)
     LaunchedEffect(event) {
         val (infohash, idx) = event ?: return@LaunchedEffect
         vm.consumePlay()

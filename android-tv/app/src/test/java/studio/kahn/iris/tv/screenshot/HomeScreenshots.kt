@@ -46,7 +46,7 @@ class HomeScreenshots {
 
     private val hero = HeroModel(
         key = "resume:c:1",
-        eyebrow = "Continue where you left off",
+        eyebrow = null,
         title = "Severance",
         meta = "Season 2 · Episode 4 · Woe's Hollow · 23 min left",
         overview = "Mark and his team push deeper into Lumon while their outies start asking questions of their own.",
@@ -138,6 +138,12 @@ class HomeScreenshots {
 
     @Test
     fun home() = shots.snapEverySize("home") { Home(home) }
+
+    // Two lines at the hero's size: the title grows the hero downward, never into the header.
+    @Test
+    fun homeLongTitle() = shots.snapEverySize("home_long_title") {
+        Home(home.copy(hero = hero.copy(title = "May I Help You and the Sisters of the Long Night", meta = "Season 1 · Episode 3 · 41 min left")))
+    }
 
     @Test
     fun homeUpdate() = shots.snapEverySize("home_update") { Home(home, UpdateNotice("1.0.4", "1.0.2", null)) }

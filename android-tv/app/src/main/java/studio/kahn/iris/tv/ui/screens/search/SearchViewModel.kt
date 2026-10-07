@@ -97,6 +97,8 @@ data class SearchUiState(
     /** TMDB titles for what is typed (the typeahead); null below 2 characters. */
     val titles: Loadable<List<TitleCard>>? = null,
     val pages: ReleasePages = ReleasePages(),
+    /** Why this search was opened for the person (a refused "Download again"), until they search something else. */
+    val notice: String? = null,
 ) {
     val results: Loadable<SearchPage>? get() = pages.results
     val loadingMore: Boolean get() = pages.loadingMore
@@ -134,8 +136,9 @@ class SearchViewModel(
     initialQuery: String?,
     autoPlay: Boolean,
     private val saved: SavedStateHandle,
+    notice: String? = null,
 ) : ViewModel() {
-    private val mutable = MutableStateFlow(SearchUiState())
+    private val mutable = MutableStateFlow(SearchUiState(notice = notice))
     val state: StateFlow<SearchUiState> = mutable.asStateFlow()
     val grabber = Grabber(container, viewModelScope)
     private val pager = ReleasePager(viewModelScope, shown = { filterLanguage(it.rows, mutable.value.language).size }) { page ->
@@ -230,6 +233,7 @@ class SearchViewModel(
             it.copy(
                 query = q,
                 language = if (q == it.query) it.language else null,
+                notice = if (it.query.isEmpty() || q == it.query) it.notice else null,
                 editing = it.view == SearchViewMode.TITLES,
                 tooShort = false,
             )

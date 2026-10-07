@@ -33,7 +33,6 @@ import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
-import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.isVideoPath
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.screens.player.LanguageChoices
@@ -48,6 +47,10 @@ import studio.kahn.iris.tv.ui.format.markedWatchedWords
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
 import studio.kahn.iris.tv.ui.state.BusyActions
+import studio.kahn.iris.tv.ui.state.Reclaimed
+import studio.kahn.iris.tv.ui.state.Regrabbed
+import studio.kahn.iris.tv.ui.state.SearchInsteadEvent
+import studio.kahn.iris.tv.ui.state.regrab
 import studio.kahn.iris.tv.ui.state.FAST_MS
 
 /** One episode row, its words already said. */
@@ -74,7 +77,7 @@ data class EpisodeRowUi(
 data class PackUi(val key: String, val title: String, val facts: String, val season: Long, val language: String?)
 
 @Immutable
-data class GoneUi(val infohash: String, val name: String, val watchLine: String?, val watched: Boolean, val facts: String, val provider: String, val externalId: String)
+data class GoneUi(val infohash: String, val name: String, val watchLine: String?, val watched: Boolean, val facts: String)
 
 @Immutable
 data class FileUi(val key: String, val infohash: String, val fileIdx: Int, val name: String, val facts: String)
@@ -162,6 +165,7 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     private val actions = BusyActions(viewModelScope)
     private val play = MutableStateFlow<PlayEvent?>(null)
     val playEvents: StateFlow<PlayEvent?> = play
+    val searchInstead = SearchInsteadEvent()
     /** The episode row pressed last: coming back from the player lands on it. */
     var lastRow: String? = null
     private var decided = false
@@ -260,16 +264,31 @@ class CollectionViewModel(private val container: AppContainer, private val colle
     }
 
     fun downloadAgain(g: Variant.Gone) = act("again:${g.infohash}", null) {
-        container.api().ingest(ResolveBody(providerId = g.sourceProvider, externalId = g.sourceExternalId, allowDuplicate = true, tmdbId = detail.value?.tmdbId))
-        refreshAll()
-        play.value = PlayEvent(g.infohash, g.fileIdx, replace = false)
-        "${g.releaseName} is downloading again. Your watch position is kept."
+        val title = detail.value?.displayTitle
+        when (val r = regrab(container.api(), Reclaimed(g.infohash, title, g.season, g.episode, g.releaseName))) {
+            is Regrabbed.Refused -> {
+                searchInstead.send(r.search)
+                null
+            }
+            is Regrabbed.Back -> {
+                refreshAll()
+                play.value = PlayEvent(g.infohash, g.fileIdx, replace = false)
+                "${g.releaseName} is downloading again. Your watch position is kept."
+            }
+        }
     }
 
     fun downloadAgain(g: GoneUi) = act("again:${g.infohash}", null) {
-        container.api().ingest(ResolveBody(providerId = g.provider, externalId = g.externalId, allowDuplicate = true, tmdbId = detail.value?.tmdbId))
-        refreshAll()
-        "${g.name} is downloading again. Your watch position is kept."
+        when (val r = regrab(container.api(), Reclaimed(g.infohash, detail.value?.displayTitle, name = g.name))) {
+            is Regrabbed.Refused -> {
+                searchInstead.send(r.search)
+                null
+            }
+            is Regrabbed.Back -> {
+                refreshAll()
+                "${g.name} is downloading again. Your watch position is kept."
+            }
+        }
     }
 
     fun hide(infohash: String, name: String) = act("hide:$infohash", null) {
@@ -429,8 +448,6 @@ fun collectionPage(
                 watched = r.watched == true,
                 facts = listOfNotNull(formatSize(r.totalSizeBytes), fromProvider(r.sourceProvider), r.deletedAt?.let { "removed ${ago(it, AgoStyle.Sentence, now)}" })
                     .joinToString(" · "),
-                provider = r.sourceProvider,
-                externalId = r.sourceExternalId,
             )
         },
         files = c.torrents.flatMap { t ->

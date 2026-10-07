@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.api
 import studio.kahn.iris.tv.data.HistoryItem
-import studio.kahn.iris.tv.data.ResolveBody
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
@@ -24,6 +23,10 @@ import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.components.Notice
 import studio.kahn.iris.tv.ui.state.LiveRead
 import studio.kahn.iris.tv.ui.state.BusyActions
+import studio.kahn.iris.tv.ui.state.Reclaimed
+import studio.kahn.iris.tv.ui.state.Regrabbed
+import studio.kahn.iris.tv.ui.state.SearchInsteadEvent
+import studio.kahn.iris.tv.ui.state.regrab
 
 /** What OK does on a history line. */
 enum class LineAction { Play, Restore, OpenTitle, None }
@@ -73,6 +76,7 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
     private val actions = BusyActions(viewModelScope)
     private val play = MutableStateFlow<Pair<String, Int>?>(null)
     val playEvents: StateFlow<Pair<String, Int>?> = play
+    val searchInstead = SearchInsteadEvent()
 
     val state: StateFlow<HistoryUiState> = combine(history.state, actions.state) { h, a ->
         HistoryUiState(groups = h.map { items -> historyUi(items, Instant.now()) }, busy = a.busy, notice = a.notice)
@@ -88,12 +92,15 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
 
     fun restore(line: HistoryLine) {
         val item = history.value?.firstOrNull { historyKey(it) == line.key } ?: return
-        val provider = item.sourceProvider ?: return
-        val external = item.sourceExternalId ?: return
         actions.run("restore:${line.key}") {
-            container.api().ingest(ResolveBody(providerId = provider, externalId = external, tmdbId = item.tmdbId, allowDuplicate = true))
-            history.refresh()
-            play.value = item.infohash to item.fileIdx.toInt()
+            val reclaimed = Reclaimed(item.infohash, item.collectionTitle, item.season, item.episode, item.torrentName)
+            when (val r = regrab(container.api(), reclaimed)) {
+                is Regrabbed.Refused -> searchInstead.send(r.search)
+                is Regrabbed.Back -> {
+                    history.refresh()
+                    play.value = item.infohash to item.fileIdx.toInt()
+                }
+            }
             null
         }
     }

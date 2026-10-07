@@ -221,6 +221,7 @@ fun IrisRoot(
                     onOpenTorrent = { infohash -> navController.navigate(Routes.Detail(infohash)) },
                     onManageReleases = { navController.navigate(Routes.Torrents) },
                     onBack = { navController.popBackStack() },
+                    onSearchInstead = { navController.navigate(Routes.Search(q = it.query, notice = it.notice)) },
                 )
             }
             composable<Routes.Detail> { backStackEntry ->
@@ -279,6 +280,7 @@ fun IrisRoot(
                         navController.navigate(Routes.Collection(collectionId))
                     },
                     onBack = { navController.popBackStack() },
+                    onSearchInstead = { navController.navigate(Routes.Search(q = it.query, notice = it.notice)) },
                 )
             }
             section<Routes.Search>(TopTab.Search, shellHost) { backStackEntry ->
@@ -287,6 +289,7 @@ fun IrisRoot(
                     container = container,
                     initialQuery = route.q?.takeIf { it.isNotBlank() },
                     autoPlay = route.autoPlay,
+                    notice = route.notice,
                     onOpenRelease = { providerId, externalId, tmdbId, kind ->
                         navController.navigate(Routes.SearchDetail(providerId, externalId, tmdbId, kind))
                     },
@@ -360,6 +363,11 @@ fun IrisRoot(
                     },
                     onPickAnother = { query ->
                         navController.navigate(Routes.Search(q = query)) {
+                            popUpTo<Routes.Watch> { inclusive = true }
+                        }
+                    },
+                    onSearchInstead = {
+                        navController.navigate(Routes.Search(q = it.query, notice = it.notice)) {
                             popUpTo<Routes.Watch> { inclusive = true }
                         }
                     },

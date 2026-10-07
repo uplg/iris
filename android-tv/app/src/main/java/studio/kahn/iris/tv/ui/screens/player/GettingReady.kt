@@ -52,7 +52,7 @@ data class ReadyInput(
     val playStatus: PlayStatus? = null,
 )
 
-private val deadSwarmError = Regex("""no seeders|^stalled:""", RegexOption.IGNORE_CASE)
+internal val deadSwarmError = Regex("""no seeders|^stalled:""", RegexOption.IGNORE_CASE)
 
 /** Nobody is sharing it: the probe said so, or the swarm is [stalled] (the library's rule). */
 fun isDeadSwarm(t: TorrentView, probeError: String?): Boolean =

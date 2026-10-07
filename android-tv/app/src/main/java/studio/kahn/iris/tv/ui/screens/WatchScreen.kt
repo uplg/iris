@@ -2,6 +2,8 @@
 
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.state.SearchInstead
+import studio.kahn.iris.tv.ui.state.SearchInsteadEffect
 import studio.kahn.iris.tv.ui.format.languagesPhrase
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -49,7 +51,8 @@ import studio.kahn.iris.tv.ui.format.OFF
  * ready steps and the top bar's facts, never the picture or the controls.
  *
  * [onNavigateToFile] swaps to another file (the next episode, a row of the
- * episodes panel); [onPickAnother] opens a search for another release.
+ * episodes panel); [onPickAnother] opens a search for another release, and
+ * [onSearchInstead] one with the reason a "Grab it again" was refused.
  */
 @Composable
 fun WatchScreen(
@@ -59,9 +62,11 @@ fun WatchScreen(
     onBack: () -> Unit,
     onNavigateToFile: (String, Int) -> Unit,
     onPickAnother: (String) -> Unit = {},
+    onSearchInstead: (SearchInstead) -> Unit = {},
 ) {
     LockLandscape()
     val vm = irisViewModel(container, key = "watch:$infohash:$fileIdx") { c, _ -> WatchViewModel(c, infohash, fileIdx) }
+    SearchInsteadEffect(vm.searchInstead, onSearchInstead)
     val setup by vm.setup.collectAsStateWithLifecycle()
     val header by vm.header.collectAsStateWithLifecycle()
     val collection by vm.collection.collectAsStateWithLifecycle()

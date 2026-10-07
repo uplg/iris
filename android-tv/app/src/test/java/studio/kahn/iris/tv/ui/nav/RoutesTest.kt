@@ -71,6 +71,7 @@ class RoutesTest {
             Routes.Detail("0123456789abcdef0123456789abcdef01234567"),
             Routes.Search(),
             Routes.Search(awkward, autoPlay = true),
+            Routes.Search("Past Lives", notice = "This tracker is turned off in Admin. Here are other releases of $awkward."),
             Routes.SearchDetail("c411", awkward),
             Routes.SearchDetail("v3x", "42", tmdbId = 1399L, kind = "tv"),
             Routes.Series("anime:one piece/2"),
