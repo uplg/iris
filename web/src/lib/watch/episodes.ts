@@ -1,9 +1,9 @@
 // The watch page's side panel and episode context, framework-free: the season's episodes (one
-// row per episode, whichever torrent holds it) or the torrent's own video files, the language
-// to prefer, and what to search for when a release is dead.
+// row per episode, whichever torrent holds it) or the torrent's own video files, and the language
+// to prefer.
 
 import type { AvailableEpisodeEntry, CollectionEpisodeEntry, FileEntry, FileProgressEntry } from '@iris/api/client';
-import { episodeCode, fileName, formatSize, prettySceneName } from '@iris/api/format';
+import { episodeCode, fileName, formatSize } from '@iris/api/format';
 import { watchedShare } from '#lib/watched.ts';
 
 export interface SideRow {
@@ -144,17 +144,4 @@ export function sideRows(i: SideInput): SideRow[] {
 			active: f.index === i.fileIdx
 		};
 	});
-}
-
-/** What to search when the release is dead: the series and the episode, else the title, else
- * the cleaned-up release name (its SCENE name would find the same corpse). */
-export function retrySearchQuery(
-	title: string | null | undefined,
-	current: { season: number; episode: number } | undefined,
-	releaseName: string | null | undefined
-): string {
-	const pad = (n: number) => String(n).padStart(2, '0');
-	if (title && current) return `${title} S${pad(current.season)}E${pad(current.episode)}`;
-	if (title) return title;
-	return prettySceneName(releaseName ?? '');
 }

@@ -42,8 +42,9 @@
 	import EpisodesPanel from './EpisodesPanel.svelte';
 	import GettingReady from './GettingReady.svelte';
 	import { isTheaterKey } from './keys.ts';
-	import { fetchAgain } from '#lib/regrab.ts';
-	import { listsEpisodes, retrySearchQuery, sideRows, type SideRow } from './episodes.ts';
+	import { fetchAgainOrSearch, retrySearchQuery } from '#lib/regrab.ts';
+	import { searchHref } from '#lib/search/params.ts';
+	import { listsEpisodes, sideRows, type SideRow } from './episodes.ts';
 	import { factsLine } from './facts.ts';
 	import { keptForText, PlaybackChoices } from './prefs.ts';
 	import { ProgressSaver } from './progress.ts';
@@ -273,8 +274,10 @@
 	let regrabbed = $state(false);
 	function regrab() {
 		return g.run(
-			() => fetchAgain(infohash),
-			() => {
+			() => fetchAgainOrSearch({ infohash, title: collectionQ.data?.display_title, episode: currentEpisode, name: data?.name }),
+			(res) => {
+				// a refusal went to Search
+				if (!res) return;
 				regrabbed = true;
 				void qc.invalidateQueries({ queryKey: KEYS.torrent(infohash) });
 				void qc.invalidateQueries({ queryKey: KEYS.playStatus(infohash, fileIdx) });
@@ -329,7 +332,7 @@
 			() => {
 				void refreshLibrary();
 				if (collectionId) void qc.invalidateQueries({ queryKey: KEYS.collection(collectionId) });
-				return goto(`/search?${new URLSearchParams({ q })}`);
+				return goto(searchHref({ q }));
 			},
 			'replace',
 			{ inline: true }

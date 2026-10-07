@@ -3,7 +3,7 @@
 	// how far it was watched, its name; « Download again » brings the same release back (same
 	// infohash: the saved position resumes), « Hide » takes it off this page for this person only.
 	import { me, type GoneReleaseEntry } from '@iris/api/client';
-	import { fetchAgain } from '#lib/regrab.ts';
+	import { fetchAgainOrSearch } from '#lib/regrab.ts';
 	import { ago, formatSize, plural } from '@iris/api/format';
 	import { progressWords } from '#lib/history/words.ts';
 	import { Gesture, pending } from '#lib/gesture.svelte.ts';
@@ -13,7 +13,7 @@
 	import StatusLine from '#lib/components/StatusLine.svelte';
 	import { refetchCollection } from './actions.ts';
 
-	let { collectionId, releases }: { collectionId: string; releases: GoneReleaseEntry[] } = $props();
+	let { collectionId, title, releases }: { collectionId: string; title: string; releases: GoneReleaseEntry[] } = $props();
 	const id = $props.id();
 	const g = new Gesture();
 	let heading = $state<HTMLElement>();
@@ -62,12 +62,15 @@
 						class="btn"
 						aria-label="Download again: {r.name}"
 						{...pending(g.is(`again:${r.infohash}`))}
-						onclick={() =>
+						onclick={() => {
+							const done = then(r, `${r.name} is downloading again. Your watch position is kept.`);
+							// a refusal went to Search: nothing left here to read again
 							g.run(
-								() => fetchAgain(r.infohash),
-								then(r, `${r.name} is downloading again. Your watch position is kept.`),
+								() => fetchAgainOrSearch({ infohash: r.infohash, title, name: r.name }),
+								(res) => res && done(),
 								`again:${r.infohash}`
-							)}
+							);
+						}}
 					>
 						<Icon name="rotate-ccw" size={16} busy={g.is(`again:${r.infohash}`)} />Download again
 					</button>

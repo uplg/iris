@@ -33,7 +33,7 @@
 
 	{#if absolute}
 		{#if flat.length}
-			<EpisodeList collectionId={c.id} episodes={flat} {torrents} />
+			<EpisodeList collectionId={c.id} title={c.display_title} episodes={flat} {torrents} />
 		{:else}
 			<p class="hint">No episode found yet for this series.</p>
 		{/if}
@@ -59,7 +59,7 @@
 			<SeasonPack collectionId={c.id} pack={p} />
 		{/each}
 		{#if s.items.length}
-			{#key n}<EpisodeList collectionId={c.id} episodes={s.items} {torrents} />{/key}
+			{#key n}<EpisodeList collectionId={c.id} title={c.display_title} episodes={s.items} {torrents} />{/key}
 		{:else if s.packOnDisk}
 			<p class="hint">The season pack is on disk. Its episodes are not known one by one yet: play it from its files below.</p>
 		{:else}

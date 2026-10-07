@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AvailableEpisodeEntry, CollectionEpisodeEntry } from '@iris/api/client';
-import { currentLanguage, retrySearchQuery, sideRows, type SideInput } from './episodes.ts';
+import { currentLanguage, sideRows, type SideInput } from './episodes.ts';
 
 const ep = (
 	season: number,
@@ -84,11 +84,5 @@ describe('the side panel', () => {
 		expect(currentLanguage(ep(1, 1, 'h', 0, 'en'), [])).toBe('en');
 		expect(currentLanguage(undefined, [ep(1, 1, 'a', 0, 'fr'), ep(1, 2, 'b', 0, 'fr'), ep(1, 3, 'c', 0, 'en')])).toBe('fr');
 		expect(currentLanguage(ep(1, 1, 'h', 0, 'unknown'), [])).toBeNull();
-	});
-
-	it('searches for the series and episode when a release is dead, never its SCENE name', () => {
-		expect(retrySearchQuery('Severance', { season: 2, episode: 4 }, 'Severance.S02E04.1080p')).toBe('Severance S02E04');
-		expect(retrySearchQuery('Dune', undefined, 'x')).toBe('Dune');
-		expect(retrySearchQuery(null, undefined, 'Mercato.2025.FRENCH.1080p.WEB.H265-BOUBA.mkv')).toBe('Mercato (2025)');
 	});
 });

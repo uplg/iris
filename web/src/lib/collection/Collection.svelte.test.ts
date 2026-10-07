@@ -6,6 +6,7 @@ import type { CollectionDetail, TorrentView } from '@iris/api/client';
 import { stubApi } from '#lib/test/api.ts';
 import { queryClient } from '#lib/query.ts';
 import { KEYS } from '#lib/queries.ts';
+import { ui } from '#lib/ui.svelte.ts';
 import Collection from './Collection.svelte';
 // the page as drawn: the 320 px check needs the shared classes (.btn, .chip, tabs)
 import '../../styles/app.css';
@@ -357,5 +358,48 @@ describe('Collection', () => {
 		);
 		await render(Collection, { id: 'm1' });
 		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/watch/mv/2', { replace: true }));
+	});
+
+	it('a refused download again of an episode lands on Search for other releases of it', async () => {
+		const goneEp = {
+			season: 2,
+			episode: 6,
+			infohash: 'g6',
+			file_idx: 0,
+			watched: false,
+			language: 'english',
+			release_name: 'Severance.S02E06.1080p.WEB.H265-GONE',
+			source_provider: 'tr4ker',
+			source_external_id: '6',
+			total_size_bytes: 1_000_000_000,
+			quality: '1080p'
+		};
+		backend(series({ gone_episodes: [goneEp] }), {
+			'POST /torrents/g6/regrab': new Response(JSON.stringify({ error: 'provider_off', message: 'This tracker is turned off in Admin.' }), {
+				status: 409,
+				headers: { 'Content-Type': 'application/json' }
+			})
+		});
+		await render(Collection, { id: 'c1' });
+		await page.getByRole('tab', { name: /^Season 2/ }).click();
+		await page.getByRole('button', { name: 'Download again: season 2, episode 6' }).click();
+		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/search?q=Severance+S02E06'));
+		expect(nav.goto).not.toHaveBeenCalledWith('/watch/g6/0');
+		expect(ui.toasts.at(-1)?.text).toBe('This tracker is turned off in Admin. Here are other releases of Severance S02E06.');
+	});
+
+	it('a refused download again of a release no longer listed lands on Search for the title', async () => {
+		backend(
+			series({
+				gone_releases: [
+					{ infohash: 'gp', name: 'Severance.S01.REPACK.1080p', source_provider: 'c411', source_external_id: '9', total_size_bytes: 9 }
+				]
+			}),
+			{ 'POST /torrents/gp/regrab': new Response(JSON.stringify({ error: 'not_found', message: 'not found' }), { status: 404 }) }
+		);
+		await render(Collection, { id: 'c1' });
+		await page.getByRole('button', { name: 'Download again: Severance.S01.REPACK.1080p' }).click();
+		await vi.waitFor(() => expect(nav.goto).toHaveBeenCalledWith('/search?q=Severance'));
+		expect(ui.toasts.at(-1)?.text).toBe('Its tracker no longer has this release. Here are other releases of Severance.');
 	});
 });
