@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
     && cp dist/libav-6.10.9.0-iris.wasm.js /libav-iris.wasm.js
 
 # Frontend build (bun + Vite)
-FROM oven/bun:1.4.2 AS web-builder
+FROM oven/bun:1.4.3 AS web-builder
 WORKDIR /app
 # A bun workspace: the root lockfile, every member's manifest, AND the
 # patches directory before installing — bun resolves `patchedDependencies`

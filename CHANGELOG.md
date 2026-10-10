@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under (alternative titles and translations included) is the release's,
   and an anime collection only matches a title filed under Animation (the
   One Piece anime no longer shows the live-action series).
+- **Bun 1.4.3** builds the web app (Docker and CI); Vite 8.3.4, Playwright
+  1.64.
+
+### Fixed
+
+- **Live TV** plays again on proxied channels: since 1.6.0 a segment sent
+  compressed was cut short, so the player stalled on the first one.
 
 ## [1.6.1] - 2026-10-07
 
