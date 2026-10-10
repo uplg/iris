@@ -2223,7 +2223,9 @@ impl LiveTvService {
                 }
                 item.map(|chunk| (chunk, (body, outcome)))
             });
-        axum::body::Body::from_stream(stream)
+        // Fused: the gzip layer polls a body again after its end, and a bare
+        // unfold panics there (the segment then reaches the player truncated).
+        axum::body::Body::from_stream(stream.fuse())
     }
 
     /// Record the outcome of a segment/key fetch for the source that minted
@@ -3394,6 +3396,10 @@ https://a/x.m3u8
             b"a whole segment"
         );
         assert_eq!(failures(), 0, "a finished body is a success");
+
+        let mut ended = body("/full.ts").await.into_data_stream();
+        while ended.next().await.is_some() {}
+        assert!(ended.next().await.is_none(), "polled again past its end");
     }
 
     #[tokio::test]
