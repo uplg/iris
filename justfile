@@ -30,7 +30,8 @@ dev port="8080":
     IRIS_BIND_PORT={{ port }} docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # Pull a consistent copy of the prod DB into ~/iris-prod-rehearsal/incoming (VACUUM INTO, prod keeps running).
-rehearsal-fetch host="yuki":
+# As yuki-apps: the user whose rootless Docker owns the volume.
+rehearsal-fetch host="yuki-apps":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p ~/iris-prod-rehearsal/incoming
