@@ -7,7 +7,8 @@
 	import { languageLabel } from '@iris/api/format';
 	import Poster from '#lib/components/Poster.svelte';
 	import StatusLine from '#lib/components/StatusLine.svelte';
-	import { DEAD, isDead, ownedFile, partWords, releaseHref, resolution, seedersWords, titleOf } from './release.ts';
+	import { DEAD, isDead, ownedFile, partWords, releaseHref, resolution, titleOf } from './release.ts';
+	import Swarm from './Swarm.svelte';
 	import { watchHref } from '#lib/paths.ts';
 
 	let { r }: { r: SearchResult } = $props();
@@ -16,7 +17,8 @@
 	const what = $derived(
 		[partWords(r.parsed_season, r.parsed_episode, r.title), languageLabel(r.language_tag, 'short')].filter(Boolean).join(' · ')
 	);
-	const how = $derived([resolution(r.title), seedersWords(r.seeders)].filter(Boolean).join(' · '));
+	const picture = $derived(resolution(r.title));
+	const swarm = $derived(typeof r.seeders === 'number' || typeof r.leechers === 'number');
 </script>
 
 <li class="card whole-card">
@@ -28,7 +30,11 @@
 		<a class="name card-link" href={owned ? watchHref(owned.infohash, owned.idx) : releaseHref(r)}>{title}</a>
 		<span class="release" title={r.title}>{r.title}</span>
 		{#if what}<span class="meta">{what}</span>{/if}
-		{#if how}<span class="meta">{how}</span>{/if}
+		{#if picture || swarm}
+			<span class="meta"
+				>{picture ?? ''}{#if picture && swarm}{' · '}{/if}<Swarm seeders={r.seeders} leechers={r.leechers} /></span
+			>
+		{/if}
 		{#if owned}
 			<StatusLine tone="ok" text="In your library · plays from disk" />
 		{:else if isDead(r.seeders)}

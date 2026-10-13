@@ -43,6 +43,11 @@ export function seedersWords(n: number | null | undefined): string | null {
 	return plural(n, 'seeder');
 }
 
+export function leechersWords(n: number | null | undefined): string | null {
+	if (typeof n !== 'number') return null;
+	return plural(n, 'leecher');
+}
+
 /** A confirmed empty swarm: its pieces would never all arrive. Unknown is not dead. */
 export const isDead = (seeders: number | null | undefined) => seeders === 0;
 export const DEAD = 'No seeders right now';
@@ -57,10 +62,9 @@ export function releaseChips(r: SearchResult): string[] {
 	].filter((c): c is string => !!c);
 }
 
-/** « 142 seeders · 12.4 GB · torr9 · 3 Oct » */
+/** « 12.4 GB · torr9 · 3 Oct », after the swarm */
 export function factsLine(r: SearchResult): string {
 	return [
-		seedersWords(r.seeders),
 		typeof r.size_bytes === 'number' ? formatSize(r.size_bytes) : null,
 		r.provider_id,
 		r.uploaded_at ? ago(r.uploaded_at, 'short') : null

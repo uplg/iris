@@ -51,3 +51,17 @@ describe('search cards open from anywhere on them', () => {
 		expect(controlAt(play.element())).toBe(play.element());
 	});
 });
+
+describe('a release says its swarm', () => {
+	it('seeders and leechers in words, each in its own color, in the grid and in the list', async () => {
+		for (const view of [ReleaseCard, ReleaseRow]) {
+			const { container, unmount } = await render(view, { r: release() });
+			const seed = container.querySelector('.seed');
+			const leech = container.querySelector('.leech');
+			expect(seed?.textContent).toBe('142 seeders');
+			expect(leech?.textContent).toBe('3 leechers');
+			expect(getComputedStyle(seed!).color).not.toBe(getComputedStyle(leech!).color);
+			unmount();
+		}
+	});
+});

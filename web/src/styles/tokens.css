@@ -25,6 +25,9 @@
  *   Iris (2026-10-06)
  *     stage-ink    #EAE7E0 on stage #0E1218 15.6:1 (the player is always dark)
  *     stage-muted  #A8AEB8 on stage 8.6:1
+ *   Iris (2026-10-13)
+ *     swarm-seed   #2F6B3C on ground 5.60:1, on ground-raised 5.02:1;  #7CC48A on ground-raised 7.43:1
+ *     swarm-leech  = status-down
  */
 
 :root {
@@ -57,6 +60,8 @@
 	--raw-warn-dark: #d89372;
 	--raw-down: #a5372a;
 	--raw-down-dark: #e07a63;
+	--raw-seed: #2f6b3c;
+	--raw-seed-dark: #7cc48a;
 
 	/* semantic: light, dark */
 	--ground: light-dark(var(--raw-cloud), var(--raw-night));
@@ -76,6 +81,9 @@
 	--warn-text: light-dark(#8f4b22, var(--raw-warn-dark));
 	--blocked: var(--status-down);
 	--blocked-wash: light-dark(#f3e2dc, #33211f);
+	/* a release's swarm in search: who shares it, who still downloads it (the counts say it) */
+	--swarm-seed: light-dark(var(--raw-seed), var(--raw-seed-dark));
+	--swarm-leech: var(--status-down);
 
 	/* shadows: their colors follow the theme, their geometry does not */
 	--shadow-near: light-dark(rgb(27 34 44 / 6%), rgb(0 0 0 / 30%));

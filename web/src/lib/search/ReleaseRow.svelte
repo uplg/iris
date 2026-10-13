@@ -10,12 +10,15 @@
 	import { Grab, type GrabTarget } from '#lib/release/grab.svelte.ts';
 	import GrabNotice from '#lib/release/GrabNotice.svelte';
 	import { DEAD, factsLine, isDead, ownedFile, releaseChips, releaseHref, titleLine, titleOf } from './release.ts';
+	import Swarm from './Swarm.svelte';
 	import { watchHref } from '#lib/paths.ts';
 
 	let { r }: { r: SearchResult } = $props();
 	const id = $props.id();
 	const owned = $derived(ownedFile(r));
 	const dead = $derived(isDead(r.seeders));
+	const facts = $derived(factsLine(r));
+	const swarm = $derived(typeof r.seeders === 'number' || typeof r.leechers === 'number');
 	const grab = new Grab((href) => goto(href));
 	let grabButton = $state<HTMLElement>();
 	const target = $derived<GrabTarget>({ provider: r.provider_id, id: r.external_id, tmdbId: r.title_match?.tmdb_id ?? r.tmdb_id });
@@ -31,7 +34,9 @@
 			{#if r.freeleech}<span class="chip accent">Freeleech</span>{/if}
 			{#each releaseChips(r) as c (c)}<span class="chip">{c}</span>{/each}
 		</span>
-		<span class="facts">{factsLine(r)}</span>
+		<span class="facts"
+			><Swarm seeders={r.seeders} leechers={r.leechers} />{#if swarm && facts}{' · '}{/if}{facts}</span
+		>
 		{#if dead && !owned}<span class="dead" id="{id}-dead"><Icon name="triangle-alert" size={14} />{DEAD}</span>{/if}
 		<GrabNotice {grab} {target} back={() => grabButton} />
 	</div>

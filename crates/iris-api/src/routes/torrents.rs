@@ -1141,7 +1141,7 @@ pub(crate) async fn list(
     get,
     path = "/api/torrents/{infohash}",
     params(("infohash" = String, Path)),
-    responses((status = 200, body = TorrentView), (status = 404, description = "Unknown infohash")),
+    responses((status = 200, description = "The torrent's live state", body = TorrentView), (status = 404, description = "Unknown infohash")),
     tag = "torrents",
 )]
 pub(crate) async fn get_one(

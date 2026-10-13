@@ -404,7 +404,7 @@ pub(crate) struct RecordSearchRequest {
     post,
     path = "/api/me/recent-searches",
     request_body = RecordSearchRequest,
-    responses((status = 204), (status = 400, description = "Empty or too long")),
+    responses((status = 204, description = "Recorded"), (status = 400, description = "Empty or too long")),
     tag = "me",
 )]
 pub(crate) async fn record_search(
@@ -432,7 +432,7 @@ pub(crate) struct ForgetSearchParams {
     delete,
     path = "/api/me/recent-searches",
     params(ForgetSearchParams),
-    responses((status = 204)),
+    responses((status = 204, description = "Forgotten")),
     tag = "me",
 )]
 pub(crate) async fn forget_searches(
@@ -477,7 +477,7 @@ pub(crate) struct DiskSpace {
 #[utoipa::path(
     get,
     path = "/api/me/summary",
-    responses((status = 200, body = HomeSummary)),
+    responses((status = 200, description = "The caller's home summary", body = HomeSummary)),
     tag = "me",
 )]
 pub(crate) async fn summary(

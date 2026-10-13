@@ -63,7 +63,7 @@ pub(crate) struct LoginOptions {
     path = "/api/auth/passkey/login/start",
     request_body = LoginStartRequest,
     responses(
-        (status = 200, body = LoginOptions),
+        (status = 200, description = "The ceremony's challenge for the authenticator", body = LoginOptions),
         (status = 404, description = "Passkeys aren't available on this server"),
     ),
     tag = "passkeys",
@@ -138,7 +138,7 @@ impl From<iris_db::passkeys::PasskeyRow> for PasskeyView {
 #[utoipa::path(
     get,
     path = "/api/me/passkeys",
-    responses((status = 200, body = [PasskeyView])),
+    responses((status = 200, description = "The caller's passkeys", body = [PasskeyView])),
     tag = "passkeys",
 )]
 pub(crate) async fn list(
@@ -162,7 +162,7 @@ pub(crate) struct RegisterOptions {
     post,
     path = "/api/me/passkeys/register/start",
     responses(
-        (status = 200, body = RegisterOptions),
+        (status = 200, description = "The ceremony's challenge for the authenticator", body = RegisterOptions),
         (status = 404, description = "Passkeys aren't available on this server"),
     ),
     tag = "passkeys",
@@ -197,7 +197,7 @@ pub(crate) struct RegisterFinishRequest {
     path = "/api/me/passkeys/register/finish",
     request_body = RegisterFinishRequest,
     responses(
-        (status = 200, body = PasskeyView),
+        (status = 200, description = "The passkey just registered", body = PasskeyView),
         (status = 400, description = "The ceremony expired"),
         (status = 401, description = "The authenticator's answer was refused"),
     ),
@@ -236,7 +236,7 @@ pub(crate) struct RenamePasskeyRequest {
     path = "/api/me/passkeys/{id}",
     params(("id" = Uuid, Path)),
     request_body = RenamePasskeyRequest,
-    responses((status = 204), (status = 404, description = "Not one of the caller's passkeys")),
+    responses((status = 204, description = "Renamed"), (status = 404, description = "Not one of the caller's passkeys")),
     tag = "passkeys",
 )]
 pub(crate) async fn rename(
@@ -259,7 +259,7 @@ pub(crate) async fn rename(
     delete,
     path = "/api/me/passkeys/{id}",
     params(("id" = Uuid, Path)),
-    responses((status = 204), (status = 404, description = "Not one of the caller's passkeys")),
+    responses((status = 204, description = "Removed"), (status = 404, description = "Not one of the caller's passkeys")),
     tag = "passkeys",
 )]
 pub(crate) async fn remove(

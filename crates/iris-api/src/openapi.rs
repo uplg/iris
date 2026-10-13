@@ -361,4 +361,29 @@ mod tests {
              `cargo run -q -p iris-api --bin gen-openapi -- --write` (or `bun run gen-api`) and commit it",
         );
     }
+
+    /// The `OpenAPI` spec requires a description on every response and the TV's
+    /// `openapi-generator` refuses the spec without one; utoipa 6 no longer
+    /// emits an empty one for `(status = 204)`.
+    #[test]
+    fn every_response_has_a_description() {
+        let spec: serde_json::Value = serde_json::from_str(&spec_json()).expect("spec is JSON");
+        let mut missing = Vec::new();
+        for (path, ops) in spec["paths"].as_object().expect("paths") {
+            for (method, op) in ops.as_object().expect("operations") {
+                let Some(responses) = op.get("responses").and_then(|r| r.as_object()) else {
+                    continue;
+                };
+                for (status, response) in responses {
+                    if response.get("description").is_none() {
+                        missing.push(format!("{method} {path} {status}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "responses without a description: {missing:?}"
+        );
+    }
 }

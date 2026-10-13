@@ -858,7 +858,7 @@
         },
         "responses": {
           "200": {
-            "description": "",
+            "description": "The ceremony's challenge for the authenticator",
             "content": {
               "application/json": {
                 "schema": {
@@ -2267,7 +2267,7 @@
         "operationId": "list",
         "responses": {
           "200": {
-            "description": "",
+            "description": "The caller's passkeys",
             "content": {
               "application/json": {
                 "schema": {
@@ -2300,7 +2300,7 @@
         },
         "responses": {
           "200": {
-            "description": "",
+            "description": "The passkey just registered",
             "content": {
               "application/json": {
                 "schema": {
@@ -2326,7 +2326,7 @@
         "operationId": "register_start",
         "responses": {
           "200": {
-            "description": "",
+            "description": "The ceremony's challenge for the authenticator",
             "content": {
               "application/json": {
                 "schema": {
@@ -2360,7 +2360,7 @@
         ],
         "responses": {
           "204": {
-            "description": ""
+            "description": "Removed"
           },
           "404": {
             "description": "Not one of the caller's passkeys"
@@ -2395,7 +2395,7 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "Renamed"
           },
           "404": {
             "description": "Not one of the caller's passkeys"
@@ -2578,7 +2578,7 @@
         },
         "responses": {
           "204": {
-            "description": ""
+            "description": "Recorded"
           },
           "400": {
             "description": "Empty or too long"
@@ -2606,7 +2606,7 @@
         ],
         "responses": {
           "204": {
-            "description": ""
+            "description": "Forgotten"
           }
         }
       }
@@ -2619,7 +2619,7 @@
         "operationId": "summary",
         "responses": {
           "200": {
-            "description": "",
+            "description": "The caller's home summary",
             "content": {
               "application/json": {
                 "schema": {
@@ -2881,10 +2881,10 @@
             "schema": {
               "oneOf": [
                 {
-                  "type": "null"
+                  "$ref": "#/components/schemas/SortField"
                 },
                 {
-                  "$ref": "#/components/schemas/SortField"
+                  "type": "null"
                 }
               ]
             }
@@ -2896,10 +2896,10 @@
             "schema": {
               "oneOf": [
                 {
-                  "type": "null"
+                  "$ref": "#/components/schemas/SortOrder"
                 },
                 {
-                  "$ref": "#/components/schemas/SortOrder"
+                  "type": "null"
                 }
               ]
             }
@@ -2911,10 +2911,10 @@
             "schema": {
               "oneOf": [
                 {
-                  "type": "null"
+                  "$ref": "#/components/schemas/MediaKind"
                 },
                 {
-                  "$ref": "#/components/schemas/MediaKind"
+                  "type": "null"
                 }
               ]
             }
@@ -3133,7 +3133,7 @@
         ],
         "responses": {
           "200": {
-            "description": "",
+            "description": "The torrent's live state",
             "content": {
               "application/json": {
                 "schema": {
@@ -4008,11 +4008,11 @@
               "kind": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/MediaKind",
                     "description": "`\"movie\"` / `\"tv\"` collection hint for the TMDB poster lookup."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -4075,11 +4075,11 @@
           "parsed_query": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ParsedQueryInfo",
                 "description": "SCENE-parsed view of the user query when the raw `q` looked\nlike a SCENE-style request (e.g. `Classroom of the Elite S04E11`).\nFrontend uses this to render a \"Showing results for X · S04E11\"\nbanner; absent when the parser saw nothing useful."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -4688,11 +4688,11 @@
           "watch": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TitleWatch",
                 "description": "The caller's progress in this title. Additive."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -4765,11 +4765,11 @@
           "watch": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TitleWatch",
                 "description": "The caller's progress in this title. Additive."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -4841,11 +4841,11 @@
           "kind": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MediaKind",
                 "description": "`\"movie\"` / `\"tv\"` from the parent collection. Clients pass\nthis to `/api/metadata/tmdb/{id}?kind=` — without it, TMDB's\nseparate id namespaces collide and the lookup serves a\nstranger's poster."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5138,10 +5138,10 @@
           "current": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/EpisodePoint"
               },
               {
-                "$ref": "#/components/schemas/EpisodePoint"
+                "type": "null"
               }
             ]
           },
@@ -5151,21 +5151,21 @@
           "next": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/EpisodePoint"
               },
               {
-                "$ref": "#/components/schemas/EpisodePoint"
+                "type": "null"
               }
             ]
           },
           "prev": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/EpisodePoint",
                 "description": "Previous episode (symmetric to [`Self::next`]). Powers the\n\"‹ Prev\" chip in the TV player so the user can step back\nwithout bouncing through the Series detail screen."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -5950,10 +5950,10 @@
           "kind": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/MediaKind"
               },
               {
-                "$ref": "#/components/schemas/MediaKind"
+                "type": "null"
               }
             ]
           },
@@ -6021,11 +6021,11 @@
           "disk": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/DiskSpace",
                 "description": "Deprecated: always `None`."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6250,11 +6250,11 @@
           "watch": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TitleWatch",
                 "description": "The caller's progress: on the episode asked for when the query named\none, else on the title. Additive."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -6536,20 +6536,20 @@
           "next": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/LiveProgramme"
               },
               {
-                "$ref": "#/components/schemas/LiveProgramme"
+                "type": "null"
               }
             ]
           },
           "now": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/LiveProgramme"
               },
               {
-                "$ref": "#/components/schemas/LiveProgramme"
+                "type": "null"
               }
             ]
           }
@@ -6781,10 +6781,10 @@
           "tail_byte_range": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ByteRange"
               },
               {
-                "$ref": "#/components/schemas/ByteRange"
+                "type": "null"
               }
             ]
           },
@@ -6838,10 +6838,10 @@
           "video": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/VideoInfo"
               },
               {
-                "$ref": "#/components/schemas/VideoInfo"
+                "type": "null"
               }
             ]
           }
@@ -7692,10 +7692,10 @@
           "last_search": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/SearchOutcome"
               },
               {
-                "$ref": "#/components/schemas/SearchOutcome"
+                "type": "null"
               }
             ]
           }
@@ -7819,11 +7819,11 @@
               "title_match": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/TitleMatch",
                     "description": "The TMDB title the release name resolves to. Additive."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               }
@@ -8033,11 +8033,11 @@
           "kind": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MediaKind",
                 "description": "Coarse classification (movie / tv / unknown), derived from the\nprovider's category taxonomy."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8141,11 +8141,11 @@
           "title_match": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TitleMatch",
                 "description": "API-layer enrichment: the title this release resolves to on TMDB,\nfrom its SCENE name (the indexer's own `tmdb_id` is unreliable).\nClients take the poster from here and group releases by title.\nProviders always emit `None`."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8703,20 +8703,20 @@
           "parsed": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TmdbDiagnoseParsed"
               },
               {
-                "$ref": "#/components/schemas/TmdbDiagnoseParsed"
+                "type": "null"
               }
             ]
           },
           "picked": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TmdbDiagnoseSuggestion"
               },
               {
-                "$ref": "#/components/schemas/TmdbDiagnoseSuggestion"
+                "type": "null"
               }
             ]
           },
@@ -8928,11 +8928,11 @@
           "media_info": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MediaInfoSummary",
                 "description": "Server-side parsed view of the NFO so web + TV consume the same\nshape rather than each having to ship a `MediaInfo` regex tower."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -9232,11 +9232,11 @@
               "kind": {
                 "oneOf": [
                   {
-                    "type": "null"
-                  },
-                  {
                     "$ref": "#/components/schemas/MediaKind",
                     "description": "`\"movie\"` / `\"tv\"` from the parent collection. Clients pass\nthis to `/api/metadata/tmdb/{id}?kind=` so TMDB's separate\nmovie / tv namespaces don't collide on poster lookups."
+                  },
+                  {
+                    "type": "null"
                   }
                 ]
               },
@@ -9400,10 +9400,10 @@
           "kind": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/MediaKind"
               },
               {
-                "$ref": "#/components/schemas/MediaKind"
+                "type": "null"
               }
             ]
           },
@@ -9873,10 +9873,10 @@
               "kind": {
                 "oneOf": [
                   {
-                    "type": "null"
+                    "$ref": "#/components/schemas/MediaKind"
                   },
                   {
-                    "$ref": "#/components/schemas/MediaKind"
+                    "type": "null"
                   }
                 ]
               },
