@@ -50,14 +50,14 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 
-clap = { version = "4.6.6", features = ["derive", "env"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
 # Cookie Max-Age plumbing (axum-extra cookies speak `time`, not chrono).
 time = "0.3.55"
 reqwest = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }
 # Accent folding for the TMDB trust gate's title comparison.
-unicode-normalization = "0.1.25"
+unicode-normalization = "0.1.26"
 utoipa = { workspace = true }
 
 # Live TV: playlist proxy signing + XMLTV guide decoding

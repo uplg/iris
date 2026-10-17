@@ -99,8 +99,8 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 #
 # The chef base must stay on trixie — the runtime stage's glibc note depends
 # on that pairing. The base stays on 1.98.0 (Docker Hub lags Rust point
-# releases; unverified for 1.99.0 on 2026-10-01) and rustup installs the
-# toolchain `rust-toolchain.toml` names (1.99.0) into its own cached layer,
+# releases; unverified for 1.99.1 on 2026-10-17) and rustup installs the
+# toolchain `rust-toolchain.toml` names (1.99.1) into its own cached layer,
 # before any source is copied. Swap the base tag once a matching image exists.
 #
 # `--bin iris` on `cook` mirrors the final build, so cook doesn't also compile
@@ -135,7 +135,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
-# and the glibc Rust binary (built above on rust 1.99.0 / trixie glibc 2.41 —
+# and the glibc Rust binary (built above on rust 1.99.1 / trixie glibc 2.41 —
 # older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
 # musl would break the prebuilt shaka binary and hurt librqbit's allocation-
 # heavy throughput. Codec parity re-verified on ffmpeg 9.0.1 (2026-09-08):

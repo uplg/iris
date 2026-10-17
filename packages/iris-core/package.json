@@ -8,12 +8,12 @@
 		"./*": "./src/*.ts"
 	},
 	"dependencies": {
-		"@hevcjs/core": "^1.4.8",
+		"@hevcjs/core": "^1.4.9",
 		"@iris/api": "workspace:*",
 		"@jellyfin/libass-wasm": "^4.2.4",
 		"hls.js": "^1.7.3",
 		"libav.js": "^6.10.9",
 		"libpgs": "^0.9.0",
-		"mediabunny": "1.61.4"
+		"mediabunny": "1.61.6"
 	}
 }
