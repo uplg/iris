@@ -16,7 +16,9 @@ const props = (over = {}) => ({
 const field = () => page.getByLabelText('Nom');
 
 describe('RenameField', () => {
-	afterEach(() => (ui.toasts = []));
+	afterEach(() => {
+		ui.toasts = [];
+	});
 
 	it('saves the trimmed name on Entrée, says it, and keeps the focus', async () => {
 		const say = vi.spyOn(ui, 'say');
