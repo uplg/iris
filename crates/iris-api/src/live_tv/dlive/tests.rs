@@ -818,14 +818,15 @@ async fn wrapped_segments_unwrap_and_bad_ones_rotate_to_vavoo() {
     let snap = rig.channel(&[("dlive://469/1", P1), (&vavoo, SourceOrigin::Vavoo)]);
     let mp = rig.svc.master_playlist("fr", "tf1").await.unwrap();
     assert_eq!(mp.source_index, 0);
+    let played = rig.svc.played_playlist("fr", "tf1", &mp.body).await;
 
-    let (ts, ct) = proxy_wrapped(&rig, &mp.body).await.unwrap();
+    let (ts, ct) = proxy_wrapped(&rig, &played).await.unwrap();
     assert_eq!(ct, "video/mp2t");
     assert_eq!(ts, unwrap::tests::ts());
 
     rig.fake.segment_mode.store(1, Ordering::SeqCst);
     for _ in 0..3 {
-        assert!(proxy_wrapped(&rig, &mp.body).await.is_err());
+        assert!(proxy_wrapped(&rig, &played).await.is_err());
     }
     assert!(cooling(&snap, 0), "demoted after three bad segments");
     assert_eq!(snap.active_source[0].load(Ordering::Relaxed), 1);

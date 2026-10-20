@@ -373,6 +373,12 @@ pub struct SourceHealth {
     failures: AtomicU64,
     /// Epoch-millis until which the source must not be elected (0 = ok).
     cooldown_until_ms: AtomicU64,
+    /// Consecutive client playback reports, kept apart from
+    /// [`Self::failures`]: a playlist that answers says nothing of a feed a
+    /// player couldn't play, so no election success clears them.
+    playback_failures: AtomicU64,
+    /// Epoch-millis until which a playback report keeps the source out.
+    playback_until_ms: AtomicU64,
     /// Consecutive failed segment/key fetches while this source is live
     /// (reset on any success). Demotes the source past a threshold.
     segment_failures: AtomicU64,
@@ -400,6 +406,37 @@ fn first_variant_uri(master: &str) -> Option<&str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+impl LiveTvService {
+    /// The playlist a player reads off `master`: the source playlist a
+    /// pinned master names, the master itself otherwise.
+    pub(crate) async fn played_playlist(&self, country: &str, id: &str, master: &str) -> String {
+        match master.split_once("source.m3u8?s=") {
+            Some((_, tag)) => self.source_playlist(country, id, tag.trim()).await.unwrap(),
+            None => master.to_string(),
+        }
+    }
+}
+
+/// A media playlist (segments, no variants) rather than a master.
+fn is_media_playlist(body: &str) -> bool {
+    first_variant_uri(body).is_none() && body.contains("#EXTINF")
+}
+
+/// `BANDWIDTH` of a [`pinned_master`]'s one variant: required by the spec,
+/// unknown for a restream, and no player picks between variants of one.
+const PINNED_BANDWIDTH: u32 = 5_000_000;
+
+/// A master over the one source an election picked, for a source that serves
+/// a media playlist. The player then reloads that source's playlist
+/// ([`LiveTvService::source_playlist`]), never the election: a report or a
+/// demotion made meanwhile can't swap another encoder's stream under a
+/// playing decoder (no discontinuity, likely mid-GOP: a green picture). A
+/// master's variants are pinned the same way, by their proxy URLs.
+fn pinned_master(tag: proxy::SourceTag) -> String {
+    format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH={PINNED_BANDWIDTH}\nsource.m3u8?s={tag}\n")
 }
 
 /// An election attempt failed on source `si`: it cools down. Returns why.
@@ -438,6 +475,19 @@ fn source_encrypted(
     format!("encrypted with {scheme}")
 }
 
+/// One more step on a failure ladder: [`SOURCE_COOLDOWN_BASE`] doubled per
+/// consecutive step, up to `ceiling`.
+fn backoff_ms(failures: &AtomicU64, ceiling: Duration) -> u64 {
+    let failures = failures.fetch_add(1, Ordering::Relaxed) + 1;
+    let exp = u32::try_from(failures.saturating_sub(1))
+        .unwrap_or(u32::MAX)
+        .min(16);
+    let backoff = SOURCE_COOLDOWN_BASE
+        .saturating_mul(2u32.saturating_pow(exp))
+        .min(ceiling);
+    u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// Index of the source to elect first: the best-ranked one not cooling down
 /// (sources arrive pre-ordered by tier+quality), else 0 so a fully-cooled
 /// channel still gets tried by the election's second pass.
@@ -452,6 +502,17 @@ fn best_electable(sources: &[Arc<SourceHealth>], now_ms: u64) -> Option<usize> {
         .iter()
         .position(|h| h.electable(now_ms) && h.joins_clean(now_ms))
         .or_else(|| sources.iter().position(|h| h.electable(now_ms)))
+}
+
+/// With every feed cooling down, the one out the shortest (the best-ranked
+/// on a tie): the feed a report just demoted comes last, never straight back.
+fn soonest_free(sources: &[Arc<SourceHealth>], now_ms: u64) -> Option<usize> {
+    sources
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| !h.encrypted(now_ms))
+        .min_by_key(|(_, h)| h.cooling_until())
+        .map(|(si, _)| si)
 }
 
 /// Fold a source's playlist entries into the cross-country search list: one
@@ -495,7 +556,14 @@ fn index_source_entries(
 
 impl SourceHealth {
     fn in_cooldown(&self, now_ms: u64) -> bool {
-        self.cooldown_until_ms.load(Ordering::Relaxed) > now_ms
+        self.cooling_until() > now_ms
+    }
+
+    /// Epoch-millis the source is out until, for a failure or a report.
+    fn cooling_until(&self) -> u64 {
+        self.cooldown_until_ms
+            .load(Ordering::Relaxed)
+            .max(self.playback_until_ms.load(Ordering::Relaxed))
     }
 
     fn encrypted(&self, now_ms: u64) -> bool {
@@ -532,28 +600,31 @@ impl SourceHealth {
     }
 
     fn mark_failure(&self, now_ms: u64) {
-        self.cool_down(now_ms, SOURCE_COOLDOWN_MAX);
-    }
-
-    /// A client said it couldn't PLAY this source. Same escalation, lower
-    /// ceiling — see [`PLAYBACK_COOLDOWN_MAX`].
-    fn mark_playback_failure(&self, now_ms: u64) {
-        self.cool_down(now_ms, PLAYBACK_COOLDOWN_MAX);
-    }
-
-    fn cool_down(&self, now_ms: u64, ceiling: Duration) {
-        let failures = self.failures.fetch_add(1, Ordering::Relaxed) + 1;
-        let exp = u32::try_from(failures.saturating_sub(1))
-            .unwrap_or(u32::MAX)
-            .min(16);
-        let backoff = SOURCE_COOLDOWN_BASE
-            .saturating_mul(2u32.saturating_pow(exp))
-            .min(ceiling);
-        let millis = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX);
+        let millis = backoff_ms(&self.failures, SOURCE_COOLDOWN_MAX);
         self.cooldown_until_ms
             .store(now_ms.saturating_add(millis), Ordering::Relaxed);
     }
 
+    /// A client said it couldn't PLAY this source. Same escalation, lower
+    /// ceiling — see [`PLAYBACK_COOLDOWN_MAX`] — and a ladder of its own,
+    /// which a quiet spell as long as that ceiling starts over.
+    fn mark_playback_failure(&self, now_ms: u64) {
+        let ceiling = u64::try_from(PLAYBACK_COOLDOWN_MAX.as_millis()).unwrap_or(u64::MAX);
+        if self
+            .playback_until_ms
+            .load(Ordering::Relaxed)
+            .saturating_add(ceiling)
+            < now_ms
+        {
+            self.playback_failures.store(0, Ordering::Relaxed);
+        }
+        let millis = backoff_ms(&self.playback_failures, PLAYBACK_COOLDOWN_MAX);
+        self.playback_until_ms
+            .store(now_ms.saturating_add(millis), Ordering::Relaxed);
+    }
+
+    /// The playlist answered: the server-side ladder starts over. A playback
+    /// report stands — it was made against a playlist that answered too.
     fn mark_success(&self) {
         self.failures.store(0, Ordering::Relaxed);
         self.cooldown_until_ms.store(0, Ordering::Relaxed);
@@ -602,10 +673,12 @@ impl CountrySnapshot {
         self.active_source[i].load(Ordering::Relaxed) % self.channels[i].sources.len().max(1)
     }
 
-    /// Elect the best-ranked electable source of channel `i`; `None` (the
-    /// election left alone) when every feed cools down or is DRM-locked.
+    /// Elect the best-ranked electable source of channel `i`, the one free
+    /// soonest when every feed cools down; `None` (the election left alone)
+    /// when every feed is DRM-locked.
     fn reelect(&self, i: usize, now_ms: u64) -> Option<usize> {
-        let next = best_electable(&self.health[i], now_ms);
+        let next = best_electable(&self.health[i], now_ms)
+            .or_else(|| soonest_free(&self.health[i], now_ms));
         if let Some(si) = next {
             self.active_source[i].store(si, Ordering::Relaxed);
         }
@@ -1254,12 +1327,13 @@ impl LiveTvService {
         let n = channel.sources.len();
         let start = election_start(channel, snap.active_source[idx].load(Ordering::Relaxed));
         let mut last_err = String::new();
-        // Pass 0: healthy sources. Pass 1: the ones cooling down — it must
-        // run whenever pass 0 didn't succeed, not only when it tried nothing,
-        // otherwise one transient failure on the only-live source makes the
-        // channel 502 for its whole cooldown. Pass 2: dlive sources skipped
-        // for a reason that is not theirs (breaker open, embed not scraped
-        // yet), retried only because nothing else played.
+        // Pass 0: healthy sources. Pass 1: the ones cooling down, the one
+        // free soonest first (a feed a client just reported comes last) — it
+        // must run whenever pass 0 didn't succeed, not only when it tried
+        // nothing, otherwise one transient failure on the only-live source
+        // makes the channel 502 for its whole cooldown. Pass 2: dlive sources
+        // skipped for a reason that is not theirs (breaker open, embed not
+        // scraped yet), retried only because nothing else played.
         // A DRM-locked source counts as tried: no pass may elect it.
         let mut tried: Vec<bool> = snap.health[idx]
             .iter()
@@ -1270,10 +1344,14 @@ impl LiveTvService {
         // no clean one does.
         let mut mid_gop: Option<(usize, String, Url)> = None;
         for pass in 0..3 {
-            let order: Vec<usize> = if pass < 2 {
-                (0..n).map(|step| (start + step) % n).collect()
-            } else {
-                std::mem::take(&mut deferred)
+            let order: Vec<usize> = match pass {
+                0 => (0..n).map(|step| (start + step) % n).collect(),
+                1 => {
+                    let mut order: Vec<usize> = (0..n).map(|step| (start + step) % n).collect();
+                    order.sort_by_key(|&si| snap.health[idx][si].cooling_until());
+                    order
+                }
+                _ => std::mem::take(&mut deferred),
             };
             for (k, &si) in order.iter().enumerate() {
                 let health = &snap.health[idx][si];
@@ -1347,7 +1425,9 @@ impl LiveTvService {
 
     /// Whether `source`'s live segments start mid-GOP (see [`gop`]), from
     /// the head of its live-edge segment; remembered for [`GOP_RECHECK`].
-    /// dlive (image-wrapped segments) and anything unreadable count as clean.
+    /// Anything unreadable counts as clean; dlive (image-wrapped segments,
+    /// a page budget) is not fetched here but judged from the segments the
+    /// proxy serves ([`Self::note_segment_start`]).
     async fn starts_mid_gop(
         &self,
         channel_key: &str,
@@ -1462,8 +1542,13 @@ impl LiveTvService {
             "live tv source elected"
         );
         let tag = proxy::SourceTag::of(si, &source.url);
+        let body = if is_media_playlist(body) {
+            pinned_master(tag)
+        } else {
+            proxy::rewrite_playlist(body, base, channel_key, Some(tag), &self.inner.signer)
+        };
         MasterPlaylist {
-            body: proxy::rewrite_playlist(body, base, channel_key, Some(tag), &self.inner.signer),
+            body,
             source_index: si,
             upstream_host: host.to_string(),
             source_count: snap.channels[idx].sources.len(),
@@ -2043,6 +2128,43 @@ impl LiveTvService {
         matches!(url.scheme(), "http" | "https").then(|| proxy::logo_url(&url, &self.inner.signer))
     }
 
+    /// The live playlist of the source a [`pinned_master`] names, rewritten to
+    /// the proxy: the source is resolved again (a rotating token, a dlive
+    /// edge) but never re-elected. Its failure fails the player, whose report
+    /// and next master move the channel on.
+    pub async fn source_playlist(
+        &self,
+        country: &str,
+        id: &str,
+        tag: &str,
+    ) -> Result<String, LiveTvError> {
+        let country = validate_country(country)?;
+        let snap = self.channels(&country).await?;
+        let idx = snap.channel_index(id).ok_or(LiveTvError::UnknownChannel)?;
+        let tag = proxy::SourceTag::parse(tag).ok_or(LiveTvError::BadProxyRequest)?;
+        let channel = &snap.channels[idx];
+        let si = snap
+            .source_index(idx, tag)
+            .ok_or_else(|| LiveTvError::Upstream("the source left the channel".into()))?;
+        let source = &channel.sources[si];
+        let channel_key = format!("{country}:{}", channel.id);
+        // Past the dlive breaker: this feed already plays.
+        match self.attempt_source(source, false, true).await {
+            Attempt::Elected(body, base) => Ok(proxy::rewrite_playlist(
+                &body,
+                &base,
+                &channel_key,
+                Some(proxy::SourceTag::of(si, &source.url)),
+                &self.inner.signer,
+            )),
+            Attempt::Encrypted(scheme) => {
+                source_encrypted(&snap.health[idx][si], &channel_key, si, epoch_ms(), scheme);
+                Err(LiveTvError::Encrypted)
+            }
+            Attempt::Deferred(why) | Attempt::Failed(why) => Err(LiveTvError::Upstream(why)),
+        }
+    }
+
     /// A client failed to PLAY the stream it was served (unsupported audio
     /// codec, corrupt video, segments 404ing…). HTTP liveness said the feed
     /// was fine, so only the player can teach us it isn't: cool the active
@@ -2362,15 +2484,21 @@ impl LiveTvService {
         let unwrapped = match read_capped(resp, MAX_WRAPPED_SEGMENT_BYTES).await {
             Ok(bytes) => tokio::task::spawn_blocking(move || {
                 let ts = dlive::unwrap::unwrap_segment(&bytes);
-                (bytes, ts)
+                let start = ts.as_deref().and_then(gop::segment_start);
+                (bytes, ts, start)
             })
             .await
             .ok(),
             Err(_) => None,
         };
         let served = match unwrapped {
-            Some((_, Some(ts))) => (ts, "video/mp2t".to_string()),
-            Some((bytes, None)) if !from_dlive => (
+            Some((_, Some(ts), start)) => {
+                if let Some(start) = start {
+                    self.note_segment_start(channel_key, source, start).await;
+                }
+                (ts, "video/mp2t".to_string())
+            }
+            Some((bytes, None, _)) if !from_dlive => (
                 bytes,
                 content_type.unwrap_or_else(|| "application/octet-stream".into()),
             ),
@@ -2389,6 +2517,7 @@ impl LiveTvService {
     /// once it ends ([`Self::note_segment_result`]): a success when the last
     /// byte arrived, a failure when the upstream died mid-body. A client
     /// hanging up first records nothing — that says nothing of the source.
+    /// Its head says how it starts ([`Self::note_segment_start`]).
     pub fn segment_body(
         &self,
         channel_key: &str,
@@ -2398,31 +2527,80 @@ impl LiveTvService {
         use futures::StreamExt as _;
         let outcome = Some((self.clone(), channel_key.to_string(), source));
         let body = resp.bytes_stream().boxed();
-        let stream =
-            futures::stream::unfold((body, outcome), |(mut body, mut outcome)| async move {
+        let head: Option<Vec<u8>> = Some(Vec::new());
+        let stream = futures::stream::unfold(
+            (body, outcome, head),
+            |(mut body, mut outcome, mut head)| async move {
                 let item = body.next().await;
+                if let (Some(Ok(chunk)), Some(buf)) = (&item, head.as_mut()) {
+                    let room = GOP_PROBE_BYTES.saturating_sub(buf.len());
+                    buf.extend_from_slice(&chunk[..chunk.len().min(room)]);
+                }
                 let ended = match &item {
                     Some(Ok(_)) => None,
                     Some(Err(_)) => Some(false),
                     None => Some(true),
                 };
+                let judge = ended == Some(true)
+                    || head.as_ref().is_some_and(|b| b.len() >= GOP_PROBE_BYTES);
+                if judge
+                    && let Some(buf) = head.take()
+                    && let Some(start) = gop::segment_start(&buf)
+                    && let Some((svc, channel_key, source)) = &outcome
+                {
+                    svc.note_segment_start(channel_key, *source, start).await;
+                }
                 if let Some(ok) = ended
                     && let Some((svc, channel_key, source)) = outcome.take()
                 {
                     svc.note_segment_result(&channel_key, source, ok).await;
                 }
-                item.map(|chunk| (chunk, (body, outcome)))
-            });
+                item.map(|chunk| (chunk, (body, outcome, head)))
+            },
+        );
         // Fused: the gzip layer polls a body again after its end, and a bare
         // unfold panics there (the segment then reaches the player truncated).
         axum::body::Body::from_stream(stream.fuse())
     }
 
+    /// How a served segment of a source starts: what the election knows of a
+    /// feed it can't probe itself (dlive). One segment cut mid-GOP is enough
+    /// (a player may join on any); a clean one only tells a source not yet
+    /// judged.
+    async fn note_segment_start(
+        &self,
+        channel_key: &str,
+        source: Option<proxy::SourceTag>,
+        start: gop::Start,
+    ) {
+        let Some((snap, idx, si)) = self.locate_source(channel_key, source).await else {
+            return;
+        };
+        let health = &snap.health[idx][si];
+        let now_ms = epoch_ms();
+        let known = health.gop_known(now_ms);
+        match start {
+            gop::Start::MidGop => {
+                if known != Some(true) {
+                    tracing::info!(
+                        channel = channel_key,
+                        source = si,
+                        "live tv source serves segments cut mid-GOP, the next zap prefers a cleaner one"
+                    );
+                }
+                health.note_gop(now_ms, true);
+            }
+            gop::Start::Clean if known.is_none() => health.note_gop(now_ms, false),
+            gop::Start::Clean => {}
+        }
+    }
+
     /// Record the outcome of a segment/key fetch for the source that minted
     /// its URL. A run of failures (broken origin that serves a valid playlist
     /// but 404s its segments) demotes the source and, when it is the elected
-    /// one, re-elects, so the client's next master reload lands on a working
-    /// feed — the automatic "sanity check → fallback" the household expects.
+    /// one, re-elects: the player, pinned to the source, fails on it, and its
+    /// next master lands on a working feed — the automatic "sanity check →
+    /// fallback" the household expects.
     pub async fn note_segment_result(
         &self,
         channel_key: &str,
@@ -3307,6 +3485,10 @@ https://a/x.m3u8
             .route(
                 "/clear.m3u8",
                 get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nc-1.ts\n" }),
+            )
+            .route(
+                "/clear2.m3u8",
+                get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nd-1.ts\n" }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -3345,6 +3527,82 @@ https://a/x.m3u8
         let mp = svc.master_playlist("ie", "c").await.unwrap();
         assert_eq!(mp.source_index, 1);
         assert_eq!(drm_hits.load(Ordering::SeqCst), 1, "never fetched again");
+    }
+
+    /// The 2026-10-20 green-screen loop: a report demoted the only feed not
+    /// already cooling, the election left it elected, and the next zap's
+    /// success wiped the report.
+    #[tokio::test]
+    async fn a_reported_feed_waits_behind_the_others_and_a_player_stays_on_its_feed() {
+        let (svc, snap, _) = drm_rig(None, &["/clear.m3u8", "/clear2.m3u8"]).await;
+        let first = proxy::SourceTag::of(0, &snap.channels[0].sources[0].url);
+        let mp = svc.master_playlist("ie", "c").await.unwrap();
+        assert_eq!(mp.source_index, 0);
+        assert_eq!(mp.body, pinned_master(first), "a media playlist, pinned");
+
+        svc.report_playback_failure("ie", "c").await.unwrap();
+        assert_eq!(
+            svc.master_playlist("ie", "c").await.unwrap().source_index,
+            1
+        );
+        svc.report_playback_failure("ie", "c").await.unwrap();
+        assert_eq!(snap.active(0), 0, "every feed reported: out the shortest");
+        assert_eq!(
+            svc.master_playlist("ie", "c").await.unwrap().source_index,
+            0
+        );
+        assert!(
+            snap.health[0][0].in_cooldown(epoch_ms()),
+            "the playlist answering leaves the report standing"
+        );
+        svc.report_playback_failure("ie", "c").await.unwrap();
+        assert_eq!(snap.active(0), 1, "reported twice: out longer");
+
+        // The first player's reloads stay on its feed, whatever was elected.
+        let body = svc
+            .source_playlist("ie", "c", &first.to_string())
+            .await
+            .unwrap();
+        assert!(body.contains(&first.to_string()), "{body}");
+        assert!(matches!(
+            svc.source_playlist("ie", "c", "9-0000000000000000").await,
+            Err(LiveTvError::Upstream(_))
+        ));
+    }
+
+    #[test]
+    fn a_master_is_rewritten_and_a_media_playlist_pinned() {
+        assert!(is_media_playlist(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\ns.ts\n"
+        ));
+        assert!(!is_media_playlist(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv.m3u8\n"
+        ));
+        assert!(!is_media_playlist("#EXTM3U\n"));
+        let tag = proxy::SourceTag::of(2, "dlive://1/2");
+        assert_eq!(
+            pinned_master(tag),
+            format!("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000\nsource.m3u8?s={tag}\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_served_segment_cut_mid_gop_marks_its_feed() {
+        let (svc, snap, _) = drm_rig(None, &["/clear.m3u8", "/clear2.m3u8"]).await;
+        let tag = Some(proxy::SourceTag::of(0, &snap.channels[0].sources[0].url));
+        let now = epoch_ms();
+        svc.note_segment_start("ie:c", tag, gop::Start::Clean).await;
+        assert_eq!(snap.health[0][0].gop_known(now), Some(false));
+        svc.note_segment_start("ie:c", tag, gop::Start::MidGop)
+            .await;
+        assert!(!snap.health[0][0].joins_clean(now));
+        svc.note_segment_start("ie:c", tag, gop::Start::Clean).await;
+        assert!(!snap.health[0][0].joins_clean(now), "one cut is enough");
+        assert_eq!(
+            best_electable(&snap.health[0], now),
+            Some(1),
+            "the next zap prefers the clean feed"
+        );
     }
 
     #[tokio::test]
@@ -3702,7 +3960,9 @@ https://a/x.m3u8
         );
         let mp = svc.master_playlist("ie", "lquipe").await.unwrap();
         assert!(
-            mp.body.contains("c=ie:lequipe&"),
+            svc.played_playlist("ie", "lquipe", &mp.body)
+                .await
+                .contains("c=ie:lequipe&"),
             "minted under the current id"
         );
         svc.report_playback_failure("ie", "lquipe").await.unwrap();
@@ -3934,9 +4194,16 @@ https://a/x.m3u8
         assert_eq!(snap.reelect(1, now), Some(1));
         assert_eq!(snap.active(1), 1);
         snap.health[1][1].mark_encrypted(now);
-        snap.health[1][2].mark_failure(now);
+        snap.health[1][2].mark_failure(now + 1);
+        assert_eq!(
+            snap.reelect(1, now),
+            Some(0),
+            "every feed cooling: the one out the shortest"
+        );
+        snap.health[1][0].mark_encrypted(now);
+        snap.health[1][2].mark_encrypted(now);
         assert_eq!(snap.reelect(1, now), None, "nothing electable");
-        assert_eq!(snap.active(1), 1, "the election is left alone");
+        assert_eq!(snap.active(1), 0, "the election is left alone");
     }
 
     #[test]

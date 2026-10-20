@@ -24,6 +24,7 @@ pub fn router() -> Router<AppState> {
         .route("/logo", get(live_logo))
         .route("/{country}/channels", get(live_channels))
         .route("/{country}/channels/{id}/master.m3u8", get(live_master))
+        .route("/{country}/channels/{id}/source.m3u8", get(live_source))
         .route(
             "/{country}/channels/{id}/transcode/master.m3u8",
             get(live_transcode_master),
@@ -305,6 +306,41 @@ pub(crate) async fn live_master(
         headers.insert("x-iris-live-sources", v);
     }
     Ok(resp)
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub(crate) struct LiveSourceParams {
+    /// Source of the channel (`{index}-{hash}`), as the master names it.
+    pub s: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/livetv/{country}/channels/{id}/source.m3u8",
+    operation_id = "live_tv_source",
+    params(
+        ("country" = String, Path, description = "ISO 3166-1 alpha-2 country code"),
+        ("id" = String, Path, description = "Channel id from the channel list"),
+        LiveSourceParams,
+    ),
+    responses(
+        (status = 200, description = "The live media playlist of the source the master was elected on, every URI rewritten to the signed proxy (never re-elected)", body = String, content_type = "application/vnd.apple.mpegurl"),
+        (status = 400, description = "Malformed source"),
+        (status = 404, description = "Unknown country / channel"),
+        (status = 409, description = "`live_encrypted`: the source turned DRM-locked"),
+        (status = 502, description = "The source is down"),
+    ),
+    tag = "live-tv",
+)]
+pub(crate) async fn live_source(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path((country, id)): Path<(String, String)>,
+    Query(params): Query<LiveSourceParams>,
+) -> ApiResult<Response> {
+    let svc = service(&state)?;
+    let body = svc.source_playlist(&country, &id, &params.s).await?;
+    playlist_response(body)
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]

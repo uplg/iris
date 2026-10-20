@@ -1470,6 +1470,67 @@
         }
       }
     },
+    "/api/livetv/{country}/channels/{id}/source.m3u8": {
+      "get": {
+        "tags": [
+          "live-tv"
+        ],
+        "operationId": "live_tv_source",
+        "parameters": [
+          {
+            "name": "country",
+            "in": "path",
+            "description": "ISO 3166-1 alpha-2 country code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id from the channel list",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "s",
+            "in": "query",
+            "description": "Source of the channel (`{index}-{hash}`), as the master names it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The live media playlist of the source the master was elected on, every URI rewritten to the signed proxy (never re-elected)",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed source"
+          },
+          "404": {
+            "description": "Unknown country / channel"
+          },
+          "409": {
+            "description": "`live_encrypted`: the source turned DRM-locked"
+          },
+          "502": {
+            "description": "The source is down"
+          }
+        }
+      }
+    },
     "/api/livetv/{country}/channels/{id}/transcode/master.m3u8": {
       "get": {
         "tags": [
