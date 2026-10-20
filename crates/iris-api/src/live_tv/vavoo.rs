@@ -373,7 +373,12 @@ mod tests {
     #[tokio::test]
     #[ignore = "hits the live Vavoo API"]
     async fn vavoo_live_catalog_and_resolve() {
-        let http = reqwest::Client::builder().build().unwrap();
+        let http = reqwest::Client::builder()
+            .dns_resolver(std::sync::Arc::new(
+                super::super::dns::DohResolver::new().unwrap(),
+            ))
+            .build()
+            .unwrap();
         let v = Vavoo::default();
         let entries = v.entries_for_groups(&http, &["France".to_string()]).await;
         assert!(!entries.is_empty(), "France catalog should not be empty");

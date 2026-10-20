@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicUsize};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -192,6 +192,7 @@ fn current_form_swaps_stale_signatures_and_tokens_only() {
         url: "https://e.example:8443/hls/a.m3u8?s=new&e=2".into(),
         user_agent: None,
         referrer: None,
+        origin: None,
         kind: Kind::Signed,
         valid_until: i64::MAX,
     };
@@ -207,6 +208,7 @@ fn current_form_swaps_stale_signatures_and_tokens_only() {
         url: "https://ds.example/France2/index.m3u8?token=NEW".into(),
         user_agent: None,
         referrer: None,
+        origin: None,
         kind: Kind::Token {
             slug: "France2".into(),
             token: "NEW".into(),
@@ -265,6 +267,7 @@ fn recorded_playlists_rewrite_and_refresh_as_expected() {
         url: "https://ds167.example/France2/index.m3u8?token=NEW".into(),
         user_agent: None,
         referrer: None,
+        origin: None,
         kind: Kind::Token {
             slug: "France2".into(),
             token: "NEW".into(),
@@ -302,6 +305,31 @@ struct Fake {
     /// 0 = latest signature valid, 1 = the first one rejected, 2 = all.
     sig_mode: AtomicU8,
     refreshes: AtomicUsize,
+    /// Player 1 the way it is since 2026-10-18: the playlist wants a token
+    /// from the edge's API and the embed's `Origin`.
+    edge_wants_token: AtomicBool,
+    /// Player 1 embed pages read (edge learning).
+    dembed_pages: AtomicUsize,
+    /// Edge tokens handed out (`tok1`, `tok2`…), and the last one revoked.
+    edge_tokens: AtomicUsize,
+    edge_revoked: AtomicUsize,
+}
+
+impl Fake {
+    /// Whether a request carries the embed page's `Origin`, as the real
+    /// edge wants (`Referer` doesn't count).
+    fn from_embed(headers: &HeaderMap) -> bool {
+        headers.get(header::ORIGIN).and_then(|v| v.to_str().ok())
+            == Some(&format!("http://{}", host(headers)))
+    }
+
+    fn edge_token_valid(&self, t: Option<&String>) -> bool {
+        t.and_then(|t| t.strip_prefix("tok")?.parse::<usize>().ok())
+            .is_some_and(|n| {
+                n > self.edge_revoked.load(Ordering::SeqCst)
+                    && n <= self.edge_tokens.load(Ordering::SeqCst)
+            })
+    }
 }
 
 type Shared = Arc<Fake>;
@@ -393,11 +421,20 @@ async fn fake_signed(
     hls("#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nx-1.ts\n".into())
 }
 
-async fn fake_edge(State(fake): State<Shared>, headers: HeaderMap) -> Response {
+async fn fake_edge(
+    State(fake): State<Shared>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     fake.edge_hits.fetch_add(1, Ordering::SeqCst);
     let status = fake.edge_status.load(Ordering::SeqCst);
     if status != 0 {
         return StatusCode::from_u16(status).unwrap().into_response();
+    }
+    if fake.edge_wants_token.load(Ordering::SeqCst)
+        && !(fake.edge_token_valid(q.get("t")) && Fake::from_embed(&headers))
+    {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
     hls(format!(
         "#EXTM3U\n#EXT-X-TARGETDURATION:7\n#EXTINF:6.0,\nhttp://{}/img/a.image?refresh_token=x\n",
@@ -412,6 +449,38 @@ async fn fake_image(State(fake): State<Shared>) -> Response {
         unwrap::tests::png(b"a holiday picture", 2, &[])
     };
     ([(header::CONTENT_TYPE, "image/png")], body).into_response()
+}
+
+/// Player 1's embed: the playlist of the id it is asked about, and with
+/// `edge_wants_token` the token call of the real one
+/// (`fixtures/dembed-51.html`).
+async fn fake_dembed(
+    State(fake): State<Shared>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    fake.dembed_pages.fetch_add(1, Ordering::SeqCst);
+    let id = q.get("id").cloned().unwrap_or_default();
+    let host = host(&headers);
+    let token = if fake.edge_wants_token.load(Ordering::SeqCst) {
+        format!(
+            "const CHANNEL = \"premium{id}\";\nconst EDGE = \"http://{host}/edge\";\n\
+             fetch(EDGE + '/api/playlist-token?slug=' + encodeURIComponent(CHANNEL), {{ cache: 'no-store' }})\n"
+        )
+    } else {
+        String::new()
+    };
+    format!("<script>const SRC = \"http://{host}/edge/premium{id}/index.m3u8\";\n{token}</script>")
+        .into_response()
+}
+
+/// Player 1's token endpoint: only for the embed's `Origin`.
+async fn fake_edge_token(State(fake): State<Shared>, headers: HeaderMap) -> Response {
+    if !Fake::from_embed(&headers) {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    let n = fake.edge_tokens.fetch_add(1, Ordering::SeqCst) + 1;
+    axum::Json(serde_json::json!({ "token": format!("tok{n}"), "ttl": 120 })).into_response()
 }
 
 async fn fake_vavoo() -> Response {
@@ -434,6 +503,8 @@ async fn serve(fake: Shared) -> std::net::SocketAddr {
         .route("/e/{code}", get(fake_embed))
         .route("/hls/x.m3u8", get(fake_signed))
         .route("/edge/{premium}/index.m3u8", get(fake_edge))
+        .route("/edge/api/playlist-token", get(fake_edge_token))
+        .route("/dembed", get(fake_dembed))
         .route("/img/{name}", get(fake_image))
         .route("/vavoo.m3u8", get(fake_vavoo))
         .route("/api/refresh_token.php", post(fake_refresh))
@@ -472,12 +543,38 @@ impl Rig {
         *svc.inner.dlive.edge.write().unwrap() = Some(Edge {
             template: format!("http://{addr}/edge/premium{{id}}/index.m3u8"),
             embed_url: format!("http://{addr}/dembed?id=469"),
+            token: None,
+            origin: None,
         });
         Self { fake, addr, svc }
     }
 
     fn dlive(&self) -> &Arc<Dlive> {
         &self.svc.inner.dlive
+    }
+
+    /// Player 1 as it is since 2026-10-18: the edge wants a token asked with
+    /// the embed's `Origin`, learned that way.
+    fn tokened(&self) {
+        self.fake.edge_wants_token.store(true, Ordering::SeqCst);
+        let mut edge = self.dlive().edge.write().unwrap();
+        let edge = edge.as_mut().unwrap();
+        edge.token = Some(format!(
+            "http://{}/edge/api/playlist-token?slug=premium{{id}}",
+            self.addr
+        ));
+        edge.origin = Some(format!("http://{}", self.addr));
+    }
+
+    /// Wait for a background edge re-learning to land.
+    async fn edge_learned(&self) {
+        for _ in 0..200 {
+            if self.dlive().edge_generation() > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the edge was never learned");
     }
 
     fn vavoo(&self) -> String {
@@ -589,6 +686,8 @@ async fn unreachable_edges_open_the_breaker() {
     drop(closed);
     rig.dlive().edge.write().unwrap().as_mut().unwrap().template =
         format!("http://{dead}/premium{{id}}/index.m3u8");
+    // The fake embed would teach the live edge back.
+    *rig.dlive().edge_attempt.lock().unwrap() = Some(Instant::now());
     let vavoo = rig.vavoo();
     let snap = rig.channel(&[("dlive://469/1", P1), (&vavoo, SourceOrigin::Vavoo)]);
     for _ in 0..4 {
@@ -611,7 +710,7 @@ async fn a_403_on_a_signed_url_re_resolves_once() {
     assert_eq!(mp.source_index, 0, "the fresh signature plays");
     assert_eq!(hits(&rig.fake.embed_pages), 2);
     assert_eq!(hits(&rig.fake.site_pages), 0, "no dlive.sx load");
-    let (ua, referer) = rig.dlive().cached_headers(469, 2);
+    let (ua, referer, _) = rig.dlive().cached_headers(469, 2);
     assert_eq!(ua.as_deref(), Some(UA));
     assert_eq!(referer, Some(format!("http://{}/", rig.addr)));
 }
@@ -744,6 +843,7 @@ async fn a_player_6_token_is_renewed_and_swapped_into_held_uris() {
             url: format!("http://{}/wide/France2/index.m3u8?token={stale}", rig.addr),
             user_agent: Some(UA.into()),
             referrer: None,
+            origin: None,
             kind: Kind::Token {
                 slug: "France2".into(),
                 token: stale.clone(),
@@ -832,7 +932,10 @@ async fn dlive_live_resolve_and_segment() {
     let mut cfg = iris_config::LiveTvConfig::default().dlive;
     cfg.enabled = true;
     cfg.countries = HashMap::from([("fr".to_string(), vec![950])]);
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .dns_resolver(Arc::new(crate::live_tv::dns::DohResolver::new().unwrap()))
+        .build()
+        .unwrap();
     let dlive = Arc::new(Dlive::new(cfg, http.clone()));
     let entries = dlive.entries("fr").await;
     eprintln!("dlive fr entries: {entries:?}");
@@ -851,6 +954,9 @@ async fn dlive_live_resolve_and_segment() {
         let mut req = http.get(&resolved.url);
         if let Some(ua) = &resolved.user_agent {
             req = req.header(reqwest::header::USER_AGENT, ua);
+        }
+        if let Some(origin) = &resolved.origin {
+            req = req.header(reqwest::header::ORIGIN, origin);
         }
         let playlist = req.send().await.unwrap().text().await.unwrap();
         assert!(
@@ -903,6 +1009,8 @@ async fn scraped_embeds_and_the_edge_survive_a_restart() {
     *first.edge.write().unwrap() = Some(Edge {
         template: "https://edge.example/premium{id}/index.m3u8".into(),
         embed_url: "https://embed.example/daddy.php?id=51".into(),
+        token: None,
+        origin: None,
     });
     first.save();
     let file = dir.join("dlive.json");
@@ -920,7 +1028,12 @@ async fn scraped_embeds_and_the_edge_survive_a_restart() {
     );
     assert!(matches!(second.fresh_embed((469, 6)), Some(Embed::Absent)));
     assert_eq!(
-        second.edge_template().as_deref(),
+        second
+            .edge
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|e| e.template.as_str()),
         Some("https://edge.example/premium{id}/index.m3u8"),
         "Player 1 plays at once after a restart"
     );
@@ -1159,4 +1272,204 @@ fn the_warm_up_scrapes_the_allow_list_then_recent_zaps_only() {
         Some((900, 2)),
         "a channel zapped to"
     );
+}
+
+/// Player 1's edge serves nothing without a token; the token comes from its
+/// API, asked with the embed page's `Origin`, and is reused while fresh.
+#[tokio::test]
+async fn player_1_plays_with_a_token_asked_with_the_embed_origin() {
+    let rig = Rig::new().await;
+    rig.tokened();
+    let dlive = rig.dlive();
+    let bare = format!("http://{}/edge/premium469/index.m3u8", rig.addr);
+    let resp = reqwest::get(&bare).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "no token, no playlist"
+    );
+
+    let p1 = dlive.resolve(469, 1, ResolveMode::default()).await.unwrap();
+    assert_eq!(p1.url, format!("{bare}?t=tok1"));
+    assert!(p1.is_signed(), "a 403 re-resolves it");
+    let origin = format!("http://{}", rig.addr);
+    assert_eq!(p1.origin.as_deref(), Some(origin.as_str()));
+    assert_eq!(
+        dlive.cached_headers(469, 1).2.as_deref(),
+        Some(origin.as_str()),
+        "for proxied refreshes"
+    );
+    let now = epoch_s();
+    assert!(
+        (now + 58..=now + 60).contains(&p1.valid_until),
+        "renewed at half its 120 s"
+    );
+    assert_eq!(
+        dlive
+            .resolve(469, 1, ResolveMode::default())
+            .await
+            .unwrap()
+            .url,
+        p1.url,
+        "reused"
+    );
+    assert_eq!(hits(&rig.fake.edge_tokens), 1);
+    let vavoo = rig.vavoo();
+    rig.channel(&[("dlive://469/1", P1), (&vavoo, SourceOrigin::Vavoo)]);
+    let mp = rig.svc.master_playlist("fr", "tf1").await.unwrap();
+    assert_eq!(mp.source_index, 0, "the election sends the Origin too");
+}
+
+/// A proxied playlist refresh carries the embed's `Origin` and the live
+/// token, as the edge demands both.
+#[tokio::test]
+async fn a_proxied_player_1_playlist_carries_the_origin_and_token() {
+    let rig = Rig::new().await;
+    rig.tokened();
+    rig.channel(&[("dlive://469/1", P1)]);
+    let mp = rig.svc.master_playlist("fr", "tf1").await.unwrap();
+    assert_eq!(mp.source_index, 0);
+    let p1 = rig
+        .dlive()
+        .resolve(469, 1, ResolveMode::default())
+        .await
+        .unwrap();
+    let key = "fr:tf1";
+    let tag = crate::live_tv::proxy::SourceTag::of(0, "dlive://469/1").to_string();
+    let upstream = Url::parse(&p1.url).unwrap();
+    let proxied = crate::live_tv::proxy::proxied_url(
+        key,
+        crate::live_tv::proxy::SourceTag::parse(&tag),
+        &upstream,
+        &rig.svc.inner.signer,
+    );
+    let (c, src, u, s) = first_proxied(&format!("#EXTM3U\n{proxied}\n"));
+    let ProxiedResponse { resp, .. } = rig
+        .svc
+        .proxy_fetch(&c, src.as_deref(), &u, &s)
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "{}", resp.status());
+}
+
+/// Asked from anywhere but the embed's origin, the token endpoint says no:
+/// an outage, and the edge is re-read from the embed, which fixes it.
+#[tokio::test]
+async fn a_token_refused_for_its_origin_relearns_the_edge() {
+    let rig = Rig::new().await;
+    rig.tokened();
+    let dlive = rig.dlive();
+    dlive.edge.write().unwrap().as_mut().unwrap().origin = Some("https://elsewhere.example".into());
+    assert!(matches!(
+        dlive.resolve(469, 1, ResolveMode::default()).await,
+        Err(ResolveError::Outage(_))
+    ));
+    assert_eq!(hits(&rig.fake.edge_tokens), 0);
+    rig.edge_learned().await;
+    assert_eq!(
+        dlive.edge_generation(),
+        1,
+        "the embed's origin learned back"
+    );
+    assert!(dlive.resolve(469, 1, ResolveMode::default()).await.is_ok());
+}
+
+/// Past its half-life the token is asked again, and the playlist URL a
+/// viewer holds is swapped to it; segments elsewhere are left alone.
+#[tokio::test]
+async fn a_stale_edge_token_is_renewed_into_held_playlists() {
+    let rig = Rig::new().await;
+    rig.tokened();
+    let dlive = rig.dlive();
+    let p1 = dlive.resolve(469, 1, ResolveMode::default()).await.unwrap();
+    let held = Url::parse(&p1.url).unwrap();
+    assert_eq!(
+        dlive.refresh_upstream(469, 1, &held).await,
+        None,
+        "still the live token"
+    );
+    dlive.store(
+        (469, 1),
+        &Resolved {
+            valid_until: epoch_s(),
+            ..p1
+        },
+    );
+    let current = dlive.refresh_upstream(469, 1, &held).await.unwrap();
+    assert_eq!(current.as_str(), held.as_str().replace("t=tok1", "t=tok2"));
+    assert_eq!(hits(&rig.fake.edge_tokens), 2);
+    let tiktok = Url::parse("https://p16.example/x.image?dr=1&t=4d5b0474").unwrap();
+    assert_eq!(dlive.refresh_upstream(469, 1, &tiktok).await, None);
+}
+
+/// A token the edge revoked early: one fresh token, then the next source.
+#[tokio::test]
+async fn a_403_on_player_1_asks_one_fresh_token() {
+    let rig = Rig::new().await;
+    rig.tokened();
+    let vavoo = rig.vavoo();
+    let snap = rig.channel(&[("dlive://469/1", P1), (&vavoo, SourceOrigin::Vavoo)]);
+    rig.dlive()
+        .resolve(469, 1, ResolveMode::default())
+        .await
+        .unwrap();
+    rig.fake.edge_revoked.store(1, Ordering::SeqCst);
+    let mp = rig.svc.master_playlist("fr", "tf1").await.unwrap();
+    assert_eq!(mp.source_index, 0, "tok1 refused, tok2 plays");
+    assert_eq!(hits(&rig.fake.edge_tokens), 2);
+
+    rig.fake.edge_revoked.store(usize::MAX, Ordering::SeqCst);
+    rig.dlive().invalidate(469, 1);
+    snap.active_source[0].store(0, Ordering::Relaxed);
+    snap.health[0][0].mark_success();
+    let mp = rig.svc.master_playlist("fr", "tf1").await.unwrap();
+    assert_eq!(mp.source_index, 1);
+    assert_eq!(hits(&rig.fake.edge_tokens), 4, "re-resolved once only");
+    assert!(cooling(&snap, 0));
+}
+
+/// An embed that asks no token (or a state file from before tokens) plays
+/// the bare playlist, and is re-read until it does ask one.
+#[tokio::test]
+async fn a_tokenless_edge_plays_bare_and_picks_up_a_token() {
+    let rig = Rig::new().await;
+    let dlive = rig.dlive();
+    *dlive.edge_attempt.lock().unwrap() = Some(Instant::now());
+    let p1 = dlive.resolve(469, 1, ResolveMode::default()).await.unwrap();
+    assert_eq!(
+        (p1.url.as_str(), &p1.kind),
+        (
+            format!("http://{}/edge/premium469/index.m3u8", rig.addr).as_str(),
+            &Kind::Plain
+        )
+    );
+    assert_eq!(
+        hits(&rig.fake.dembed_pages),
+        0,
+        "re-read at most every EDGE_RELEARN_EVERY"
+    );
+
+    rig.fake.edge_wants_token.store(true, Ordering::SeqCst);
+    *dlive.edge_attempt.lock().unwrap() = None;
+    assert_eq!(
+        dlive
+            .resolve(469, 1, ResolveMode::default())
+            .await
+            .unwrap()
+            .kind,
+        Kind::Plain
+    );
+    rig.edge_learned().await;
+    assert_eq!(hits(&rig.fake.dembed_pages), 1);
+    let p1 = dlive.resolve(469, 1, ResolveMode::default()).await.unwrap();
+    assert!(p1.url.ends_with("?t=tok1"), "{}", p1.url);
+}
+
+/// A state file written before tokens still loads (the edge lacks them).
+#[test]
+fn an_edge_saved_before_tokens_still_loads() {
+    let old = r#"{"edge":{"template":"https://e.example/premium{id}/index.m3u8","embed_url":"https://d.example/x"},"embeds":[]}"#;
+    let p: Persisted = serde_json::from_str(old).unwrap();
+    let edge = p.edge.unwrap();
+    assert_eq!((edge.token, edge.origin), (None, None));
 }

@@ -13,7 +13,9 @@
 
 pub mod channels;
 pub mod dlive;
+pub(crate) mod dns;
 pub mod epg;
+mod gop;
 pub mod m3u;
 pub mod proxy;
 mod refresh_cell;
@@ -21,7 +23,7 @@ pub mod transcode;
 pub mod vavoo;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -59,6 +61,17 @@ const PLAYBACK_COOLDOWN_MAX: Duration = Duration::from_mins(30);
 /// success elsewhere doesn't either, and a refresh that brings a different
 /// URL starts a fresh record anyway.
 const DRM_RECHECK: Duration = Duration::from_hours(24);
+
+/// How long a source's segment start (clean, or mid-GOP) is trusted before
+/// the election looks again.
+const GOP_RECHECK: Duration = Duration::from_mins(30);
+
+/// Bytes of a live segment read to judge how it starts (a 1080p segment's
+/// first access unit is well inside this).
+const GOP_PROBE_BYTES: usize = 512 * 1024;
+
+/// Deadline for that read: a zap waits on it once per [`GOP_RECHECK`].
+const GOP_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Concurrency cap for the background health probe.
 const PROBE_CONCURRENCY: usize = 12;
@@ -271,6 +284,8 @@ struct Upstream {
     url: String,
     user_agent: Option<String>,
     referrer: Option<String>,
+    /// `Origin` the host demands (dlive Player 1's edge).
+    origin: Option<String>,
     /// The entry brings a DRM licence: a locked playlist is not a reason to
     /// leave it out.
     licensed: bool,
@@ -337,6 +352,7 @@ pub struct ProxiedResponse {
 struct SourceUpstream {
     user_agent: Option<String>,
     referrer: Option<String>,
+    origin: Option<String>,
     dlive: Option<(u32, u8)>,
 }
 
@@ -363,6 +379,12 @@ pub struct SourceHealth {
     /// Epoch-millis until which the source counts as DRM-locked (see
     /// [`DRM_RECHECK`]).
     encrypted_until_ms: AtomicU64,
+    /// Epoch-millis until which [`Self::mid_gop`] is trusted (see
+    /// [`GOP_RECHECK`]); 0 = never looked.
+    gop_checked_until_ms: AtomicU64,
+    /// Its segments start mid-GOP: a decoder joining shows green (see
+    /// [`gop`]). Elected only when no clean feed plays.
+    mid_gop: AtomicBool,
 }
 
 /// URI of the first variant in a master playlist, `None` when the body is
@@ -380,14 +402,56 @@ fn first_variant_uri(master: &str) -> Option<&str> {
     None
 }
 
+/// An election attempt failed on source `si`: it cools down. Returns why.
+fn source_failed(
+    health: &SourceHealth,
+    channel_key: &str,
+    si: usize,
+    now_ms: u64,
+    error: String,
+) -> String {
+    health.mark_failure(now_ms);
+    tracing::debug!(
+        channel = %channel_key,
+        source = si,
+        error = %error,
+        "live tv source failed, rotating"
+    );
+    error
+}
+
+/// Source `si` answered DRM-locked: out of the election. Returns why.
+fn source_encrypted(
+    health: &SourceHealth,
+    channel_key: &str,
+    si: usize,
+    now_ms: u64,
+    scheme: &'static str,
+) -> String {
+    health.mark_encrypted(now_ms);
+    tracing::info!(
+        channel = %channel_key,
+        source = si,
+        scheme,
+        "live tv source is DRM-locked, left out of the election"
+    );
+    format!("encrypted with {scheme}")
+}
+
 /// Index of the source to elect first: the best-ranked one not cooling down
 /// (sources arrive pre-ordered by tier+quality), else 0 so a fully-cooled
 /// channel still gets tried by the election's second pass.
 fn elect_seed(sources: &[Arc<SourceHealth>], now_ms: u64) -> usize {
+    best_electable(sources, now_ms).unwrap_or(0)
+}
+
+/// The best-ranked electable source, one whose segments a decoder can join
+/// first.
+fn best_electable(sources: &[Arc<SourceHealth>], now_ms: u64) -> Option<usize> {
     sources
         .iter()
-        .position(|h| h.electable(now_ms))
-        .unwrap_or(0)
+        .position(|h| h.electable(now_ms) && h.joins_clean(now_ms))
+        .or_else(|| sources.iter().position(|h| h.electable(now_ms)))
 }
 
 /// Fold a source's playlist entries into the cross-country search list: one
@@ -441,6 +505,24 @@ impl SourceHealth {
     /// Neither cooling down nor DRM-locked: the election's first choice.
     fn electable(&self, now_ms: u64) -> bool {
         !self.in_cooldown(now_ms) && !self.encrypted(now_ms)
+    }
+
+    /// `Some(mid_gop)` while the last look at its segment start holds.
+    fn gop_known(&self, now_ms: u64) -> Option<bool> {
+        (self.gop_checked_until_ms.load(Ordering::Relaxed) > now_ms)
+            .then(|| self.mid_gop.load(Ordering::Relaxed))
+    }
+
+    /// Not known to start its segments mid-GOP.
+    fn joins_clean(&self, now_ms: u64) -> bool {
+        self.gop_known(now_ms) != Some(true)
+    }
+
+    fn note_gop(&self, now_ms: u64, mid_gop: bool) {
+        let millis = u64::try_from(GOP_RECHECK.as_millis()).unwrap_or(u64::MAX);
+        self.mid_gop.store(mid_gop, Ordering::Relaxed);
+        self.gop_checked_until_ms
+            .store(now_ms.saturating_add(millis), Ordering::Relaxed);
     }
 
     fn mark_encrypted(&self, now_ms: u64) {
@@ -523,7 +605,7 @@ impl CountrySnapshot {
     /// Elect the best-ranked electable source of channel `i`; `None` (the
     /// election left alone) when every feed cools down or is DRM-locked.
     fn reelect(&self, i: usize, now_ms: u64) -> Option<usize> {
-        let next = self.health[i].iter().position(|h| h.electable(now_ms));
+        let next = best_electable(&self.health[i], now_ms);
         if let Some(si) = next {
             self.active_source[i].store(si, Ordering::Relaxed);
         }
@@ -664,22 +746,26 @@ impl LiveTvService {
     }
 
     pub fn new(cfg: iris_config::LiveTvConfig, jwt_secret: &str) -> anyhow::Result<Self> {
-        let http = iris_providers::tls::client_builder()
+        let doh = cfg.doh.then(dns::DohResolver::new).transpose()?;
+        let mut http = iris_providers::tls::client_builder()
             .user_agent(DEFAULT_UA)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .build()?;
+            .redirect(reqwest::redirect::Policy::limited(5));
         // Logo-only client: same knobs, but tolerant of bad TLS certs on the
         // cosmetic third-party logo hosts (see `logo_http`). Shorter timeout —
         // a logo is never worth blocking a tile for long.
-        let logo_http = reqwest::Client::builder()
+        let mut logo_http = reqwest::Client::builder()
             .user_agent(DEFAULT_UA)
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::limited(5))
-            .danger_accept_invalid_certs(true)
-            .build()?;
+            .danger_accept_invalid_certs(true);
+        if let Some(doh) = doh {
+            http = http.dns_resolver(Arc::new(doh.clone()));
+            logo_http = logo_http.dns_resolver(Arc::new(doh));
+        }
+        let (http, logo_http) = (http.build()?, logo_http.build()?);
         let dlive = Arc::new(dlive::Dlive::new(cfg.dlive.clone(), http.clone()));
         Ok(Self {
             inner: Arc::new(ServiceInner {
@@ -1180,6 +1266,9 @@ impl LiveTvService {
             .map(|h| h.encrypted(now_ms))
             .collect();
         let mut deferred: Vec<usize> = Vec::new();
+        // A feed that played but starts its segments mid-GOP, kept in case
+        // no clean one does.
+        let mut mid_gop: Option<(usize, String, Url)> = None;
         for pass in 0..3 {
             let order: Vec<usize> = if pass < 2 {
                 (0..n).map(|step| (start + step) % n).collect()
@@ -1188,7 +1277,9 @@ impl LiveTvService {
             };
             for (k, &si) in order.iter().enumerate() {
                 let health = &snap.health[idx][si];
-                if pass < 2 && (tried[si] || (pass == 0 && health.in_cooldown(now_ms))) {
+                let held_back =
+                    pass == 0 && (health.in_cooldown(now_ms) || !health.joins_clean(now_ms));
+                if pass < 2 && (tried[si] || held_back) {
                     continue;
                 }
                 tried[si] = true;
@@ -1212,6 +1303,15 @@ impl LiveTvService {
                 };
                 match self.attempt_source(source, last_option, pass == 2).await {
                     Attempt::Elected(body, base) => {
+                        if pass == 0
+                            && self
+                                .starts_mid_gop(&channel_key, si, source, health, &body, &base)
+                                .await
+                        {
+                            last_err = "segments start mid-GOP".into();
+                            mid_gop.get_or_insert((si, body, base));
+                            continue;
+                        }
                         return Ok(self.internet_elected(
                             &snap,
                             idx,
@@ -1228,32 +1328,114 @@ impl LiveTvService {
                         last_err = why;
                     }
                     Attempt::Failed(e) => {
-                        health.mark_failure(now_ms);
-                        tracing::debug!(
-                            channel = %channel_key,
-                            source = si,
-                            error = %e,
-                            "live tv source failed, rotating"
-                        );
-                        last_err = e;
+                        last_err = source_failed(health, &channel_key, si, now_ms, e);
                     }
                     Attempt::Encrypted(scheme) => {
-                        health.mark_encrypted(now_ms);
-                        tracing::info!(
-                            channel = %channel_key,
-                            source = si,
-                            scheme,
-                            "live tv source is DRM-locked, left out of the election"
-                        );
-                        last_err = format!("encrypted with {scheme}");
+                        last_err = source_encrypted(health, &channel_key, si, now_ms, scheme);
                     }
                 }
             }
+        }
+        if let Some((si, body, base)) = mid_gop {
+            return Ok(self.internet_elected(&snap, idx, si, &channel_key, &body, &base));
         }
         if snap.encrypted(idx) {
             return Err(LiveTvError::Encrypted);
         }
         Err(LiveTvError::Upstream(last_err))
+    }
+
+    /// Whether `source`'s live segments start mid-GOP (see [`gop`]), from
+    /// the head of its live-edge segment; remembered for [`GOP_RECHECK`].
+    /// dlive (image-wrapped segments) and anything unreadable count as clean.
+    async fn starts_mid_gop(
+        &self,
+        channel_key: &str,
+        si: usize,
+        source: &channels::StreamSource,
+        health: &SourceHealth,
+        body: &str,
+        base: &Url,
+    ) -> bool {
+        let now_ms = epoch_ms();
+        if let Some(known) = health.gop_known(now_ms) {
+            return known;
+        }
+        if dlive::parse_sentinel(&source.url).is_some() {
+            return false;
+        }
+        let Ok(upstream) = self.resolve_upstream(source).await else {
+            return false;
+        };
+        let verdict =
+            tokio::time::timeout(GOP_PROBE_TIMEOUT, self.segment_start(&upstream, body, base))
+                .await
+                .ok()
+                .flatten();
+        match verdict {
+            Some(start) => {
+                let mid = start == gop::Start::MidGop;
+                health.note_gop(now_ms, mid);
+                if mid {
+                    tracing::info!(
+                        channel = %channel_key,
+                        source = si,
+                        "live tv source starts its segments mid-GOP, trying a cleaner one"
+                    );
+                }
+                mid
+            }
+            None => false,
+        }
+    }
+
+    /// How the live-edge segment of a playlist (a master's first variant)
+    /// starts; `None` when it can't be told.
+    async fn segment_start(
+        &self,
+        upstream: &Upstream,
+        body: &str,
+        base: &Url,
+    ) -> Option<gop::Start> {
+        let (media, media_url) = match first_variant_uri(body) {
+            Some(variant) => {
+                let url = base.join(variant).ok()?;
+                self.fetch_upstream_text(
+                    upstream,
+                    url.as_str(),
+                    GOP_PROBE_TIMEOUT,
+                    GOP_PROBE_TIMEOUT,
+                )
+                .await
+                .ok()?
+            }
+            None => (body.to_string(), base.clone()),
+        };
+        let segment = media
+            .lines()
+            .map(str::trim)
+            .rfind(|l| !l.is_empty() && !l.starts_with('#'))?;
+        let url = media_url.join(segment).ok()?;
+        let mut req = self.inner.http.get(url).header(
+            reqwest::header::RANGE,
+            format!("bytes=0-{}", GOP_PROBE_BYTES - 1),
+        );
+        if let Some(ua) = &upstream.user_agent {
+            req = req.header(reqwest::header::USER_AGENT, ua);
+        }
+        if let Some(referrer) = &upstream.referrer {
+            req = req.header(reqwest::header::REFERER, referrer);
+        }
+        let mut resp = req.send().await.ok()?.error_for_status().ok()?;
+        let mut head = Vec::new();
+        while head.len() < GOP_PROBE_BYTES {
+            let Ok(Some(chunk)) = resp.chunk().await else {
+                break;
+            };
+            head.extend_from_slice(&chunk);
+        }
+        head.truncate(GOP_PROBE_BYTES);
+        gop::segment_start(&head)
     }
 
     /// Finalize a successful internet election: stickiness, health, and the
@@ -1419,6 +1601,7 @@ impl LiveTvService {
                 url: resolved.url.clone(),
                 user_agent: resolved.user_agent.clone(),
                 referrer: resolved.referrer.clone(),
+                origin: resolved.origin.clone(),
                 licensed: false,
             };
             match self
@@ -1977,6 +2160,7 @@ impl LiveTvService {
             url,
             user_agent: source.user_agent.clone(),
             referrer: source.referrer.clone(),
+            origin: None,
             licensed: source.licence.is_some(),
         })
     }
@@ -2053,6 +2237,9 @@ impl LiveTvService {
         if let Some(referrer) = &upstream.referrer {
             req = req.header(reqwest::header::REFERER, referrer);
         }
+        if let Some(origin) = &upstream.origin {
+            req = req.header(reqwest::header::ORIGIN, origin);
+        }
         let resp = tokio::time::timeout(first_byte, req.send())
             .await
             .map_err(|_| {
@@ -2124,6 +2311,9 @@ impl LiveTvService {
             }
             if let Some(r) = &active.referrer {
                 req = req.header(reqwest::header::REFERER, r);
+            }
+            if let Some(o) = &active.origin {
+                req = req.header(reqwest::header::ORIGIN, o);
             }
             if let Some(t) = timeout {
                 req = req.timeout(t);
@@ -2351,16 +2541,18 @@ impl LiveTvService {
         };
         let source = &snap.channels[idx].sources[si];
         if let Some((id, player)) = dlive::parse_sentinel(&source.url) {
-            let (user_agent, referrer) = self.inner.dlive.cached_headers(id, player);
+            let (user_agent, referrer, origin) = self.inner.dlive.cached_headers(id, player);
             return SourceUpstream {
                 user_agent,
                 referrer,
+                origin,
                 dlive: Some((id, player)),
             };
         }
         SourceUpstream {
             user_agent: source.user_agent.clone(),
             referrer: source.referrer.clone(),
+            origin: None,
             dlive: None,
         }
     }
@@ -3400,6 +3592,73 @@ https://a/x.m3u8
         let mut ended = body("/full.ts").await.into_data_stream();
         while ended.next().await.is_some() {}
         assert!(ended.next().await.is_none(), "polled again past its end");
+    }
+
+    /// A feed whose segments start mid-GOP (green on join) loses the
+    /// election to a clean one even when it ranks first, plays when nothing
+    /// clean does, and its verdict is remembered.
+    #[tokio::test]
+    async fn a_feed_starting_mid_gop_yields_to_a_clean_one() {
+        use std::fmt::Write as _;
+
+        use axum::routing::get;
+        let segment = |nals: &'static [u8]| move || async move { gop::tests::segment(0x1B, nals) };
+        let media = |seg: &'static str| {
+            move || async move { format!("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n{seg}\n") }
+        };
+        let app = axum::Router::new()
+            .route("/green.m3u8", get(media("green.ts")))
+            .route("/green.ts", get(segment(&[0x09, 0x41, 0x67])))
+            .route("/clean.m3u8", get(media("clean.ts")))
+            .route("/clean.ts", get(segment(&[0x09, 0x67, 0x68, 0x65])));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let svc = LiveTvService::new(iris_config::LiveTvConfig::default(), "test-secret").unwrap();
+        let install = |urls: &[&str]| {
+            let mut list = String::new();
+            for u in urls {
+                let _ = writeln!(list, "#EXTINF:-1,Canal+ Foot\nhttp://{addr}/{u}");
+            }
+            let built = channels::build_channels(
+                &[(
+                    SourceOrigin::IptvOrg,
+                    m3u::parse(&format!("#EXTM3U\n{list}")),
+                )],
+                None,
+            );
+            let snap = Arc::new(svc.build_snapshot(built));
+            svc.inner
+                .snapshots
+                .write()
+                .unwrap()
+                .insert("fr".into(), snap.clone());
+            snap
+        };
+
+        let snap = install(&["green.m3u8", "clean.m3u8"]);
+        let id = snap.channels[0].id.clone();
+        let mp = svc.master_playlist("fr", &id).await.unwrap();
+        assert_eq!(mp.source_index, 1, "the clean feed, though second");
+        let now = epoch_ms();
+        assert_eq!(snap.health[0][0].gop_known(now), Some(true));
+        assert!(
+            !snap.health[0][0].in_cooldown(now),
+            "it plays: not a failure"
+        );
+        assert_eq!(snap.reelect(0, now), Some(1), "re-elections prefer it too");
+        assert_eq!(
+            svc.master_playlist("fr", &id).await.unwrap().source_index,
+            1
+        );
+
+        let only = install(&["green.m3u8"]);
+        let mp = svc.master_playlist("fr", &id).await.unwrap();
+        assert_eq!(
+            mp.source_index, 0,
+            "nothing clean: the green feed beats nothing"
+        );
+        assert_eq!(only.health[0][0].gop_known(epoch_ms()), Some(true));
     }
 
     #[tokio::test]

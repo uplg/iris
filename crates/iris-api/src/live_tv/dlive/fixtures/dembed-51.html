@@ -1,0 +1,66 @@
+<html><body><script>
+const SRC = "https://edge.cowedd4855ws.sbs/premium51/index.m3u8";
+const CFG = {"p2p":false,"wake_lock":true,"keep_pitch":true,"start_muted":true,"autostart":true,"catchup":true,"live_sync_segments":3,"live_max_latency_segments":8,"catchup_rate":1.05,"back_buffer_seconds":15,"manifest_timeout_ms":30000,"manifest_retries":4,"frag_retries":6,"frag_timeout_ms":45000,"demux_worker":true,"audio_codec":"mp4a.40.2","max_audio_frames_drift":8,"live_timeout_seconds":60,"reload_cooldown_ms":8000,"hole_skip_ms":1200,"stuck_wait_ms":4000,"cold_start_tries":4,"cold_start_delay_ms":1500};
+(function() {
+  const btn = document.getElementById('unmute');
+  if (!btn) return;
+  const lift = function() {
+    const root = document.documentElement;
+    if (root.lastElementChild !== btn) root.appendChild(btn);
+  };
+  new MutationObserver(lift).observe(document.documentElement, { childList: true });
+  lift();
+})();
+const CHANNEL = "premium51";
+const EDGE = "https://edge.cowedd4855ws.sbs";
+const MARK = "";
+if (MARK) {
+  const el = document.createElement('span');
+  el.className = 'lw-mark';
+  el.textContent = MARK;
+  document.documentElement.appendChild(el);
+}
+
+// The edge only serves a playlist with a short token bound to this viewer's
+// address. A playlist load never waits for renewal: past half its lifetime the
+// token is renewed in the background while the current one is still valid.
+let playToken = null;
+let playTokenFlight = null;
+let playTokenRetryAt = 0;
+function fetchPlaylistToken() {
+  if (playTokenFlight) return playTokenFlight;
+  playTokenFlight = fetch(EDGE + '/api/playlist-token?slug=' + encodeURIComponent(CHANNEL), { cache: 'no-store', credentials: 'omit' })
+    .then(r => r.ok ? r.json() : null)
+    .then(j => {
+      if (!j || !j.token) throw new Error('no token');
+      const ttl = Math.max(20, Number(j.ttl) || 120);
+      const now = Date.now();
+      playToken = { value: j.token, renewAt: now + ttl * 500, validUntil: now + ttl * 900 };
+      return j.token;
+    })
+    .catch(() => {
+      playTokenRetryAt = Date.now() + 3000;
+      return playToken && Date.now() < playToken.validUntil ? playToken.value : '';
+    })
+    .finally(() => { playTokenFlight = null; });
+  return playTokenFlight;
+}
+function playlistToken() {
+  const now = Date.now();
+  if (playToken && now < playToken.validUntil) {
+    if (now >= playToken.renewAt && now >= playTokenRetryAt) fetchPlaylistToken();
+    return Promise.resolve(playToken.value);
+  }
+  if (playTokenFlight) return playTokenFlight;
+  if (now < playTokenRetryAt) return Promise.resolve('');
+  return fetchPlaylistToken();
+}
+if (CHANNEL) playlistToken();
+function cleanPlaylistUrl(u) {
+  const i = u.indexOf('?');
+  if (i < 0) return u;
+  const q = u.slice(i + 1).split('&').filter(p => p && !/^(_|t)=/.test(p));
+  return u.slice(0, i) + (q.length ? '?' + q.join('&') : '');
+}
+
+</script></body></html>

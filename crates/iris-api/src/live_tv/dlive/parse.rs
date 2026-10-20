@@ -111,12 +111,16 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
-/// Player 1's playlist URL: `const SRC = "…";` in the embed's inline script.
-pub fn const_src(html: &str) -> Option<String> {
-    between(html, "const SRC = \"", "\"")
+/// `const NAME = "…";` in the embed's inline script, when it is a URL.
+fn const_url<'a>(html: &'a str, name: &str) -> Option<&'a str> {
+    between(html, &format!("const {name} = \""), "\"")
         .map(str::trim)
         .filter(|s| s.starts_with("http"))
-        .map(str::to_string)
+}
+
+/// Player 1's playlist URL: `const SRC = "…";` in the embed's inline script.
+pub fn const_src(html: &str) -> Option<String> {
+    const_url(html, "SRC").map(str::to_string)
 }
 
 /// Player 1's playlist URL for every id, from one learned URL:
@@ -125,6 +129,33 @@ pub fn edge_template(src: &str, probe_id: u32) -> Option<String> {
     let needle = format!("premium{probe_id}/");
     src.contains(&needle)
         .then(|| src.replacen(&needle, "premium{id}/", 1))
+}
+
+/// Player 1's playlist-token URL for every id, when the embed asks its edge
+/// for one: `fetch(EDGE + '/api/playlist-token?slug=' + …(CHANNEL)` →
+/// `{EDGE}/api/playlist-token?slug=premium{id}`. `None` for an embed that
+/// plays the bare playlist.
+pub fn edge_token_template(html: &str, probe_id: u32) -> Option<String> {
+    let edge = const_url(html, "EDGE")?.trim_end_matches('/');
+    let path = between(html, "fetch(EDGE + '", "'").filter(|p| p.starts_with('/'))?;
+    let channel = between(html, "const CHANNEL = \"", "\"")?;
+    (channel == format!("premium{probe_id}")).then(|| format!("{edge}{path}premium{{id}}"))
+}
+
+/// The edge's answer: `{"token":"…","ttl":120}`.
+#[derive(Debug, serde::Deserialize)]
+struct EdgeTokenReply {
+    token: String,
+    #[serde(default)]
+    ttl: Option<u64>,
+}
+
+/// A playlist token and its lifetime in seconds: 120 when unsaid, never
+/// under 20 (the embed's own reading).
+pub fn edge_token(body: &str) -> Option<(String, u64)> {
+    let reply: EdgeTokenReply = serde_json::from_str(body).ok()?;
+    let ttl = reply.ttl.filter(|&t| t > 0).unwrap_or(120).max(20);
+    (!reply.token.is_empty()).then_some((reply.token, ttl))
 }
 
 /// The two stream URLs of an `_econfig` embed (assetrage, lunchup…).
@@ -523,6 +554,38 @@ mod tests {
         assert_eq!(tpl, "https://edge.cowedd4855ws.sbs/premium{id}/index.m3u8");
         assert_eq!(edge_template(&src, 51), None);
         assert_eq!(const_src("const SRC = \"\";"), None);
+        assert_eq!(
+            edge_token_template(include_str!("fixtures/dembed-950.html"), 950),
+            None,
+            "no token asked"
+        );
+    }
+
+    /// The embed as of 2026-10-18: the edge wants a token from its API.
+    #[test]
+    fn the_embed_names_its_token_endpoint() {
+        let html = include_str!("fixtures/dembed-51.html");
+        assert_eq!(
+            const_src(html).as_deref(),
+            Some("https://edge.cowedd4855ws.sbs/premium51/index.m3u8")
+        );
+        assert_eq!(
+            edge_token_template(html, 51).as_deref(),
+            Some("https://edge.cowedd4855ws.sbs/api/playlist-token?slug=premium{id}")
+        );
+        assert_eq!(edge_token_template(html, 5), None, "another channel's page");
+        let reply = r#"{"token":"1792335069.26e9c12cac8ff0d5bcc78744ee973c7e","ttl":120}"#;
+        assert_eq!(
+            edge_token(reply),
+            Some(("1792335069.26e9c12cac8ff0d5bcc78744ee973c7e".into(), 120))
+        );
+        assert_eq!(edge_token(r#"{"token":"a"}"#), Some(("a".into(), 120)));
+        assert_eq!(
+            edge_token(r#"{"token":"a","ttl":5}"#),
+            Some(("a".into(), 20))
+        );
+        assert_eq!(edge_token(r#"{"token":"","ttl":120}"#), None);
+        assert_eq!(edge_token("forbidden"), None);
     }
 
     #[test]

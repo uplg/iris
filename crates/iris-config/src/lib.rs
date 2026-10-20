@@ -110,6 +110,12 @@ pub struct LiveTvConfig {
     /// A country absent here simply gets no Vavoo channels.
     #[serde(default = "default_livetv_vavoo_countries")]
     pub vavoo_countries: HashMap<String, Vec<String>>,
+    /// Resolve live TV hosts over DNS-over-HTTPS (Cloudflare, then Google,
+    /// then the system resolver). French ISPs DNS-block `vavoo.to` (it
+    /// resolves to `127.0.0.1`), which silently kills every Vavoo source on
+    /// a server behind such a resolver.
+    #[serde(default = "default_true")]
+    pub doh: bool,
     /// The household's own DVB-T tuner (tunerd on the AIR 7310T box).
     /// Channels listed here are served from the antenna with ABSOLUTE
     /// priority (`SourceTier::Tuner`); every internet source stays in place
@@ -442,6 +448,7 @@ impl Default for LiveTvConfig {
             epg_id_overrides: HashMap::new(),
             vavoo_enabled: true,
             vavoo_countries: default_livetv_vavoo_countries(),
+            doh: true,
             dlive: DliveConfig::default(),
         }
     }

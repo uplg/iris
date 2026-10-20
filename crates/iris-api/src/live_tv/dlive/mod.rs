@@ -4,8 +4,10 @@
 //! configured player, so the per-URL health and cooldown handle the fallback
 //! between players like between any other feeds. Resolution:
 //! - Player 1 is built from the id and an edge host learned once a day from
-//!   one embed page (`…/premium<id>/index.m3u8`, no token, no page fetch).
-//!   Its segments are MPEG-TS hidden in images (see [`unwrap`]).
+//!   one embed page (`…/premium<id>/index.m3u8`, no page fetch). The edge
+//!   only serves it with a two-minute token from its own API, asked and
+//!   played with the embed page's `Origin`. Its segments are MPEG-TS hidden
+//!   in images (see [`unwrap`]).
 //! - The other players start from the iframe of their dlive.sx page, scraped
 //!   lazily (budgeted, cached for `embed_cache_hours`), then follow the
 //!   third-party embed to a signed `_econfig` URL (Player 2: bound to the
@@ -27,6 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use iris_config::DliveConfig;
+use reqwest::header::{HeaderName, ORIGIN, REFERER, USER_AGENT};
 use url::Url;
 
 use super::channels::SourceOrigin;
@@ -112,7 +115,7 @@ impl std::fmt::Display for ResolveError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Kind {
-    /// Plain URL, no token (Player 1 and its clones).
+    /// Plain URL, no token (Player 1's clones, an edge that asks none).
     Plain,
     /// `?s=…&e=…` signature bound to [`UA`].
     Signed,
@@ -122,6 +125,20 @@ enum Kind {
         token: String,
         refresh_url: String,
     },
+    /// `?t=…` from Player 1's edge, valid `ttl` seconds: renewed by asking
+    /// the edge again.
+    EdgeToken { token: String },
+}
+
+impl Kind {
+    /// The query parameter a token rides in, and the live token.
+    fn token(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Self::Token { token, .. } => Some(("token", token)),
+            Self::EdgeToken { token } => Some(("t", token)),
+            Self::Plain | Self::Signed => None,
+        }
+    }
 }
 
 /// A dlive source resolved to a playable URL plus the headers it demands.
@@ -130,6 +147,8 @@ pub struct Resolved {
     pub url: String,
     pub user_agent: Option<String>,
     pub referrer: Option<String>,
+    /// `Origin` the playlist demands (Player 1's edge).
+    pub origin: Option<String>,
     kind: Kind,
     /// Unix seconds after which the resolution is redone.
     valid_until: i64,
@@ -291,11 +310,36 @@ impl Embed {
 }
 
 /// Learned Player 1 edge: the playlist template and the embed page it came
-/// from (re-read first when the edge moves, before any dlive.sx load).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// from (re-read first when the edge moves, before any dlive.sx load), and
+/// when the embed asks the edge for a token, where and with which `Origin`
+/// (the embed page's own).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct Edge {
     template: String,
     embed_url: String,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    origin: Option<String>,
+}
+
+impl Edge {
+    fn playlist(&self, id: u32) -> String {
+        self.template.replace("{id}", &id.to_string())
+    }
+
+    /// The playlist as is: an embed that asks no token (or a state file from
+    /// before tokens).
+    fn plain(&self, id: u32) -> Resolved {
+        Resolved {
+            url: self.playlist(id),
+            user_agent: None,
+            referrer: None,
+            origin: None,
+            kind: Kind::Plain,
+            valid_until: i64::MAX,
+        }
+    }
 }
 
 pub struct Dlive {
@@ -305,8 +349,8 @@ pub struct Dlive {
     index: RefreshCell<Index>,
     edge: RwLock<Option<Edge>>,
     edge_attempt: Mutex<Option<Instant>>,
-    /// Bumped whenever the edge template changes, so the service can clear
-    /// the cooldowns earned on the old host.
+    /// Bumped whenever the learned edge changes, so the service can clear
+    /// the cooldowns earned on the old host (or without its token).
     edge_generation: AtomicU64,
     /// Scraped player iframes, with when (epoch seconds). Kept on disk
     /// ([`Self::persist_at`]): the codes are stable, and re-scraping them
@@ -325,6 +369,12 @@ pub struct Dlive {
 
 fn epoch_s() -> i64 {
     chrono::Utc::now().timestamp()
+}
+
+/// Until when an edge token is used: half its lifetime, as the embed renews
+/// its own.
+fn edge_token_valid_until(ttl: u64, now: i64) -> i64 {
+    now.saturating_add(i64::try_from(ttl / 2).unwrap_or(i64::MAX))
 }
 
 fn origin_of(url: &Url) -> String {
@@ -412,13 +462,19 @@ impl Dlive {
     }
 
     /// Headers of the last resolution, for proxied playlist and segment
-    /// requests. Player 1 needs none.
-    pub fn cached_headers(&self, id: u32, player: u8) -> (Option<String>, Option<String>) {
+    /// requests: user agent, referrer and `Origin` (Player 1's edge).
+    pub fn cached_headers(
+        &self,
+        id: u32,
+        player: u8,
+    ) -> (Option<String>, Option<String>, Option<String>) {
         self.resolved
             .read()
             .expect("poisoned")
             .get(&(id, player))
-            .map_or((None, None), |r| (r.user_agent.clone(), r.referrer.clone()))
+            .map_or((None, None, None), |r| {
+                (r.user_agent.clone(), r.referrer.clone(), r.origin.clone())
+            })
     }
 
     /// One playlist entry per listed channel of `country` and per player,
@@ -522,7 +578,9 @@ impl Dlive {
             }
         }
         let referer = format!("{}/", self.base());
-        let result = self.get_page(url, Some(&referer), SITE_TIMEOUT).await;
+        let result = self
+            .get_page(url, &[(REFERER, &referer)], SITE_TIMEOUT)
+            .await;
         match &result {
             Err(ResolveError::Outage(_)) => {
                 self.guard
@@ -539,19 +597,16 @@ impl Dlive {
         result
     }
 
+    /// One GET as [`UA`] with these extra headers (a `Referer`, an `Origin`).
     async fn get_page(
         &self,
         url: &str,
-        referer: Option<&str>,
+        headers: &[(HeaderName, &str)],
         timeout: Duration,
     ) -> Result<(String, Url), ResolveError> {
-        let mut req = self
-            .http
-            .get(url)
-            .header(reqwest::header::USER_AGENT, UA)
-            .timeout(timeout);
-        if let Some(r) = referer {
-            req = req.header(reqwest::header::REFERER, r);
+        let mut req = self.http.get(url).header(USER_AGENT, UA).timeout(timeout);
+        for (name, value) in headers {
+            req = req.header(name, *value);
         }
         let resp = req
             .send()
@@ -573,14 +628,6 @@ impl Dlive {
             .await
             .map_err(|e| ResolveError::Outage(e.to_string()))?;
         Ok((body, final_url))
-    }
-
-    fn edge_template(&self) -> Option<String> {
-        self.edge
-            .read()
-            .expect("poisoned")
-            .as_ref()
-            .map(|e| e.template.clone())
     }
 
     /// Learn Player 1's edge from one embed page: the known embed first
@@ -618,8 +665,12 @@ impl Dlive {
             return;
         };
         let mut slot = self.edge.write().expect("poisoned");
-        if slot.as_ref().is_none_or(|e| e.template != edge.template) {
-            tracing::info!(template = %edge.template, "dlive player 1 edge learned");
+        if slot.as_ref() != Some(&edge) {
+            tracing::info!(
+                template = %edge.template,
+                token = edge.token.is_some(),
+                "dlive player 1 edge learned"
+            );
             *slot = Some(edge);
             self.edge_generation.fetch_add(1, Ordering::Relaxed);
             drop(slot);
@@ -686,11 +737,41 @@ impl Dlive {
     }
 
     async fn edge_from_embed(&self, embed_url: &str, probe: u32) -> Option<Edge> {
-        let (html, _) = self.get_page(embed_url, None, EMBED_TIMEOUT).await.ok()?;
+        let (html, final_url) = self.get_page(embed_url, &[], EMBED_TIMEOUT).await.ok()?;
         let template = parse::edge_template(&parse::const_src(&html)?, probe)?;
+        let token = parse::edge_token_template(&html, probe);
         Some(Edge {
             template,
             embed_url: embed_url.to_string(),
+            origin: token
+                .is_some()
+                .then(|| final_url.origin().ascii_serialization()),
+            token,
+        })
+    }
+
+    /// Player 1 with a fresh token from its edge's API, asked with the
+    /// embed's `Origin` like the embed does.
+    async fn edge_token(&self, edge: &Edge, id: u32) -> Result<Resolved, ResolveError> {
+        let (Some(template), Some(origin)) = (&edge.token, &edge.origin) else {
+            return Ok(edge.plain(id));
+        };
+        let url = template.replace("{id}", &id.to_string());
+        let (body, _) = self
+            .get_page(&url, &[(ORIGIN, origin)], EMBED_TIMEOUT)
+            .await?;
+        let (token, ttl) = parse::edge_token(&body)
+            .ok_or_else(|| ResolveError::Outage("dlive edge token undecodable".into()))?;
+        let mut playlist = Url::parse(&edge.playlist(id))
+            .map_err(|e| ResolveError::Outage(format!("dlive edge template: {e}")))?;
+        playlist.query_pairs_mut().append_pair("t", &token);
+        Ok(Resolved {
+            url: playlist.into(),
+            user_agent: Some(UA.to_string()),
+            referrer: None,
+            origin: Some(origin.clone()),
+            kind: Kind::EdgeToken { token },
+            valid_until: edge_token_valid_until(ttl, epoch_s()),
         })
     }
 
@@ -863,19 +944,21 @@ impl Dlive {
         {
             return Err(ResolveError::Skip("dlive breaker open"));
         }
-        if player == 1 {
-            let Some(template) = self.edge_template() else {
+        let edge = if player == 1 {
+            let Some(edge) = self.edge.read().expect("poisoned").clone() else {
                 self.spawn_learn_edge();
                 return Err(ResolveError::Skip("dlive edge host unknown"));
             };
-            return Ok(Resolved {
-                url: template.replace("{id}", &id.to_string()),
-                user_agent: None,
-                referrer: None,
-                kind: Kind::Plain,
-                valid_until: i64::MAX,
-            });
-        }
+            if edge.token.is_none() {
+                // Re-read the embed now and then (rate-limited): it may have
+                // started asking for a token since it was learned.
+                self.spawn_learn_edge();
+                return Ok(edge.plain(id));
+            }
+            Some(edge)
+        } else {
+            None
+        };
         let key = (id, player);
         let lock = lock_in(&self.resolve_locks, key);
         let _held = lock.lock().await;
@@ -885,6 +968,14 @@ impl Dlive {
             && r.valid_until > now
         {
             return Ok(r.clone());
+        }
+        if let Some(edge) = edge {
+            let resolved = self
+                .edge_token(&edge, id)
+                .await
+                .inspect_err(|_| self.spawn_learn_edge())?;
+            self.store(key, &resolved);
+            return Ok(resolved);
         }
         if let Some(r) = cached
             && let Some(renewed) = self.renew_token(&r).await
@@ -922,7 +1013,9 @@ impl Dlive {
         let mut url = embed.to_string();
         let mut referer = format!("{}/", self.base());
         for _ in 0..MAX_HOPS {
-            let (html, final_url) = self.get_page(&url, Some(&referer), EMBED_TIMEOUT).await?;
+            let (html, final_url) = self
+                .get_page(&url, &[(REFERER, &referer)], EMBED_TIMEOUT)
+                .await?;
             let origin = origin_of(&final_url);
             let now = epoch_s();
             if let Some(src) = parse::const_src(&html) {
@@ -930,6 +1023,7 @@ impl Dlive {
                     url: src,
                     user_agent: None,
                     referrer: None,
+                    origin: None,
                     kind: Kind::Plain,
                     valid_until: now + DEFAULT_VALIDITY_S,
                 });
@@ -944,6 +1038,7 @@ impl Dlive {
                     url: cfg.stream_url,
                     user_agent: Some(UA.to_string()),
                     referrer: Some(origin),
+                    origin: None,
                     kind: Kind::Signed,
                     valid_until: expiry,
                 });
@@ -955,6 +1050,7 @@ impl Dlive {
                     url: cfg.stream_url,
                     user_agent: Some(UA.to_string()),
                     referrer: None,
+                    origin: None,
                     kind: Kind::Token {
                         refresh_url: cfg
                             .refresh_url
@@ -1018,6 +1114,7 @@ impl Dlive {
             url,
             user_agent: r.user_agent.clone(),
             referrer: r.referrer.clone(),
+            origin: r.origin.clone(),
             kind: Kind::Token {
                 slug: slug.clone(),
                 token: fresh,
@@ -1027,18 +1124,16 @@ impl Dlive {
         })
     }
 
-    /// The current form of a proxied URL a client still holds: a Player 6
-    /// URI with the live token, a Player 2 playlist with the live signature.
-    /// `None` = fetch it as is.
+    /// The current form of a proxied URL a client still holds: a Player 1
+    /// playlist with the live edge token, a Player 6 URI with the live
+    /// token, a Player 2 playlist with the live signature. `None` = fetch it
+    /// as is.
     pub async fn refresh_upstream(
         self: &Arc<Self>,
         id: u32,
         player: u8,
         upstream: &Url,
     ) -> Option<Url> {
-        if player == 1 {
-            return None;
-        }
         let mode = ResolveMode {
             bypass_breaker: true,
             inline_embed: false,
@@ -1060,12 +1155,13 @@ fn current_form(r: &Resolved, upstream: &Url) -> Option<Url> {
         Kind::Signed => {
             (live.path() == upstream.path() && live.query() != upstream.query()).then_some(live)
         }
-        Kind::Token { token, .. } => {
-            let held = parse::query_param(upstream.as_str(), "token")?;
+        kind => {
+            let (param, token) = kind.token()?;
+            let held = parse::query_param(upstream.as_str(), param)?;
             if held == token {
                 return None;
             }
-            parse::replace_query_param(upstream.as_str(), "token", token)
+            parse::replace_query_param(upstream.as_str(), param, token)
                 .and_then(|u| Url::parse(&u).ok())
         }
     }
