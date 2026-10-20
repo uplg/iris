@@ -102,6 +102,7 @@ impl DohResolver {
 
         // IPv4 first: containers commonly lack IPv6 egress, and a v6-only
         // answer would make every connect fail.
+        let mut answered = 0;
         for kind in [1u16, 28] {
             for endpoint in &self.inner.endpoints {
                 match self.query(endpoint, &key, kind).await {
@@ -111,7 +112,10 @@ impl DohResolver {
                     }
                     // Authoritative "no such record": try the next type, not
                     // the next resolver.
-                    Ok(None) => break,
+                    Ok(None) => {
+                        answered += 1;
+                        break;
+                    }
                     Err(e) => {
                         tracing::debug!(endpoint, host = %key, error = %e, "doh query failed");
                     }
@@ -123,7 +127,13 @@ impl DohResolver {
             tracing::warn!(host = %key, "doh unavailable, serving stale dns entry");
             return Ok(entry.addrs);
         }
-        tracing::warn!(host = %key, "doh unavailable, falling back to system dns");
+        // Both types answered "no such record": a dead feed's host, or a
+        // name only the local resolver knows. Not a DoH outage.
+        if answered == 2 {
+            tracing::debug!(host = %key, "no public dns record, asking the system resolver");
+        } else {
+            tracing::warn!(host = %key, "doh unavailable, falling back to system dns");
+        }
         let addrs: Vec<IpAddr> = tokio::net::lookup_host((key.as_str(), 0))
             .await?
             .map(|sa| sa.ip())
