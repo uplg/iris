@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-10-21
+
+### Added
+
+- **Search results say seeders in green and leechers in red**, in the grid
+  and the list.
+
 ### Changed
 
 - **TMDB trust re-evaluation** is now `iris maintenance tmdb-trust`, runs
@@ -14,13 +21,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under (alternative titles and translations included) is the release's,
   and an anime collection only matches a title filed under Animation (the
   One Piece anime no longer shows the live-action series).
-- **Bun 1.4.3** builds the web app (Docker and CI); Vite 8.3.4, Playwright
-  1.64.
+- **Dependencies**: Rust 1.99.1 (Docker builder too), tokio 1.54, scraper
+  0.29; Bun 1.4.3, Vite 8.3.5, bits-ui 2.20, mediabunny 1.62 and
+  @hevcjs/core 1.5 (patches carried over); on the TV, kotlinx-serialization
+  1.12, DataStore 1.3, Gradle 9.8.2.
 
 ### Fixed
 
 - **Live TV** plays again on proxied channels: since 1.6.0 a segment sent
   compressed was cut short, so the player stalled on the first one.
+- **Live TV, Vavoo channels** play again behind French ISPs, which answer
+  vavoo.to with 127.0.0.1: names are resolved over DNS-over-HTTPS.
+- **Live TV, dlive channels** play again: the edge now refuses a playlist
+  asked without its short-lived token and the player's origin.
+- **Live TV, green screen**: a feed whose segments start mid-picture loses to
+  a clean one, a reported feed is not picked straight back, and a player
+  stays on the feed it started with.
+
+### Security
+
+- rustls-webpki 0.103.16 and the root certificates 1.0.10 distrust the emSign
+  intermediates (RUSTSEC-2026-0381, 0382, 0383).
 
 ## [1.6.1] - 2026-10-07
 
@@ -1339,7 +1360,8 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.6.1...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.6.2...HEAD
+[1.6.2]: https://github.com/uplg/iris/compare/1.6.1...1.6.2
 [1.6.1]: https://github.com/uplg/iris/compare/1.6.0...1.6.1
 [1.6.0]: https://github.com/uplg/iris/compare/1.5.0...1.6.0
 [1.5.0]: https://github.com/uplg/iris/compare/1.4.2...1.5.0
