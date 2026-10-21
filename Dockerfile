@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.27
+# syntax=docker/dockerfile:1.28
 # ^ enables BuildKit cache-mounts (`--mount=type=cache`). Default with
 # Docker 23+. Without this directive the cache mounts below are silently
 # ignored and you're back to recompiling everything every time.
@@ -11,7 +11,7 @@
 
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-FROM emscripten/emsdk:6.0.10 AS libav-builder
+FROM emscripten/emsdk:6.0.13 AS libav-builder
 WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -107,7 +107,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # every crate's dev-dependencies. `migrations/` lands in the app layer only:
 # `iris-db` embeds it via `sqlx::migrate!`, so it must invalidate that layer
 # and must not invalidate the deps layer.
-FROM lukemathwalker/cargo-chef:0.1.78-rust-1.98.0-trixie AS chef
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.99.1-trixie AS chef
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
 COPY rust-toolchain.toml ./

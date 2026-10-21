@@ -135,7 +135,7 @@ describe('admin page', () => {
 		await expect.poll(() => historyCalls(api).at(-1)?.path).toBe('/admin/watch-history?kind=movie&limit=20');
 		await expect.poll(() => [...playRows()].every((r) => r.textContent?.includes('Movie'))).toBe(true);
 
-		await page.getByRole('button', { name: /^Person/ }).click();
+		await page.getByRole('combobox', { name: /^Person/ }).click();
 		await page.getByRole('option', { name: 'Tom' }).click();
 		await expect.poll(() => historyCalls(api).at(-1)?.path).toBe('/admin/watch-history?user_id=u24&kind=movie&limit=20');
 		await expect.element(region('Watch history').getByText('No plays match these filters.')).toBeVisible();
@@ -320,10 +320,10 @@ describe('admin page', () => {
 		await log.getByRole('button', { name: 'Show more entries' }).click();
 		await expect.poll(() => log.element().querySelectorAll('.entry').length).toBe(40);
 
-		await page.getByRole('button', { name: /^What/ }).click();
+		await page.getByRole('combobox', { name: /^What/ }).click();
 		await page.getByRole('option', { name: 'Accounts' }).click();
 		await expect.poll(() => api.calls.at(-1)?.path).toBe('/admin/audit-log?action=user&limit=20');
-		await page.getByRole('button', { name: /^Who/ }).click();
+		await page.getByRole('combobox', { name: /^Who/ }).click();
 		await page.getByRole('option', { name: 'Alex' }).click();
 		await expect.poll(() => api.calls.at(-1)?.path).toBe('/admin/audit-log?action=user&actor_id=u2&limit=20');
 	});
@@ -366,7 +366,7 @@ describe('a person’s page', () => {
 		await expect.poll(() => document.querySelectorAll('li.play').length).toBeGreaterThan(0);
 		expect(document.querySelector('li.play .who')).toBeNull();
 		expect(historyCalls(api)[0]?.path).toBe('/admin/watch-history?user_id=u2&limit=20');
-		await expect.element(page.getByRole('button', { name: /^Person/ })).not.toBeInTheDocument();
+		await expect.element(page.getByRole('combobox', { name: /^Person/ })).not.toBeInTheDocument();
 	});
 
 	it('an account gone says so', async () => {

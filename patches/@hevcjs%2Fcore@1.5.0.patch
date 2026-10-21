@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index e7dc02d2de792b75b0e5ed03f04f20235f3b67eb..031305f8b81d3b0b935ab8648b5706b969869f90 100644
+index 9c29b303ba064a727d0a9225c2be3ece858832c0..491463622843b5c44eb54b6ba55435edc6df600f 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -279,7 +279,9 @@ var H264Encoder = class {

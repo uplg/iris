@@ -91,7 +91,7 @@ describe('Library', () => {
 		await page.getByRole('button', { name: 'Clear filters' }).first().click();
 		await expect.element(status).toHaveTextContent('4 titles');
 
-		await page.getByRole('button', { name: /^Sort/ }).click();
+		await page.getByRole('combobox', { name: /^Sort/ }).click();
 		await page.getByRole('option', { name: 'Title A to Z' }).click();
 		await expect
 			.poll(() => [...document.querySelectorAll('.poster-grid .name')].map((a) => a.textContent))

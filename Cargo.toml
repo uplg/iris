@@ -42,7 +42,7 @@ iris-media = { path = "crates/iris-media" }
 iris-caps = { path = "crates/iris-caps" }
 
 # Async runtime + http
-tokio = { version = "1.53.3", features = ["full"] }
+tokio = { version = "1.54.0", features = ["full"] }
 tokio-util = { version = "0.7.20", features = ["io"] }
 futures = "0.3.34"
 async-trait = "0.1.92"
@@ -75,7 +75,7 @@ reqwest = { version = "0.13.5", default-features = false, features = [
 bytes = "1.12.1"
 # Mozilla's CA root bundle, compiled into the binary — so outbound TLS trust
 # doesn't depend on the (stale/incomplete) CA store of the Wolfi runtime image.
-webpki-root-certs = "1.0.9"
+webpki-root-certs = "1.0.10"
 
 # Serde / config
 serde = { version = "1.0.229", features = ["derive"] }
@@ -136,7 +136,7 @@ quick-xml = "0.42.0"
 # attribute order (IndexMap) — HD-Torrents hides the upload date in unquoted
 # attribute NAMES, so iteration order is load-bearing. Default features off:
 # they pull in the crate's CLI binary deps.
-scraper = { version = "0.27.0", default-features = false, features = [
+scraper = { version = "0.29.0", default-features = false, features = [
   "errors",
   "deterministic",
 ] }

@@ -263,7 +263,7 @@ describe('account page', () => {
 		await expect.element(region('Playback').getByText('French')).toBeVisible();
 		await expect.element(region('Playback').getByText('Subtitles off')).toBeVisible();
 		await region('Playback')
-			.getByRole('button', { name: /^Audio/ })
+			.getByRole('combobox', { name: /^Audio/ })
 			.click();
 		await page.getByRole('option', { name: 'English' }).click();
 		await expect
