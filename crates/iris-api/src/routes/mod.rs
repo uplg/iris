@@ -16,6 +16,7 @@ pub mod playback_preferences;
 pub mod preferences;
 pub mod providers;
 pub mod search;
+pub mod seleo;
 pub mod torrents;
 
 /// `?limit=&offset=` of the history-style listings.

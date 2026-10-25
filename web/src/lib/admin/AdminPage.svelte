@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The engine room (admins): one line of what is going on now, then four views, one at a
 	// time: the activity (who watches now, what was watched), the people (accounts and
-	// invitations), the system (the disk, the upkeep, the trackers) and the log of sensitive
+	// invitations), the system (the disk, the upkeep, the films on SéléoTV, the trackers) and the log of sensitive
 	// actions. The view is a tab, kept in the URL (`?view=`, without a navigation: the focus
 	// stays on the tab) and remembered per browser; only the shown view reads its server values.
 	// Every live figure is read again by its query (refetchInterval), never by a timer of ours.
@@ -20,6 +20,7 @@
 	import Maintenance from './Maintenance.svelte';
 	import NowWatching from './NowWatching.svelte';
 	import PlayHistory from './PlayHistory.svelte';
+	import SeleoShares from './SeleoShares.svelte';
 	import Storage from './Storage.svelte';
 	import Trackers from './Trackers.svelte';
 	import Users from './Users.svelte';
@@ -76,6 +77,7 @@
 						<div class="stack inner">
 							<Storage />
 							<Maintenance />
+							<SeleoShares />
 						</div>
 						<Trackers />
 					</div>

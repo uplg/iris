@@ -9,7 +9,7 @@
 //! the later of `last_played_at` and `added_at`) until usage drops
 //! below `cleanup_target_pct * max_storage`. Recently-played torrents
 //! (within `active_window`) are protected — we never yank a file out
-//! from under a viewer.
+//! from under a viewer — and so are those shared with `SéléoTV`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -330,9 +330,12 @@ impl Gc {
         let cfg = &self.inner.cfg;
         let rows = iris_db::torrents::list_active(&self.inner.pool).await?;
         let cutoff = Utc::now() - chrono::Duration::from_std(cfg.active_window).unwrap_or_default();
+        // A film shared with SéléoTV is read by another app: it stays until
+        // its share ends, whatever the pressure.
+        let shared = iris_db::seleo_shares::shared_infohashes(&self.inner.pool, Utc::now()).await?;
         let mut candidates: Vec<_> = rows
             .into_iter()
-            .filter(|r| last_activity(r) < cutoff)
+            .filter(|r| last_activity(r) < cutoff && !shared.contains(&r.infohash))
             .collect();
         candidates.sort_by_key(last_activity);
 
@@ -348,7 +351,12 @@ impl Gc {
             else {
                 continue;
             };
-            if fresh.deleted_at.is_some() || last_activity(&fresh) >= cutoff {
+            if fresh.deleted_at.is_some()
+                || last_activity(&fresh) >= cutoff
+                || iris_db::seleo_shares::shared_until(&self.inner.pool, &row.infohash, Utc::now())
+                    .await?
+                    .is_some()
+            {
                 continue;
             }
             tracing::info!(
@@ -603,6 +611,55 @@ mod tests {
             "the first copy's files stayed for the second"
         );
         assert_eq!(report.used_bytes_after, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_film_shared_with_seleo_is_never_evicted_until_its_share_ends() {
+        let dir = temp_dir();
+        let (engine, pool) = shared_pair(&dir).await;
+        let rows = iris_db::torrents::list_active(&pool).await.unwrap();
+        let admin = iris_db::test_support::make_user(&pool).await;
+        let kept = &rows[0].infohash;
+        let share = iris_db::seleo_shares::NewShare {
+            infohash: kept,
+            file_idx: 0,
+            shared_by: admin,
+            until: Utc::now() + Duration::days(7),
+            path: "Show.S01.1080p.WEB-GRP/Show.S01E01.mkv",
+            size_bytes: 40_000,
+            tmdb_id: None,
+            title: "Show",
+            year: None,
+            overview: None,
+            runtime_minutes: None,
+            poster: None,
+        };
+        iris_db::seleo_shares::put(&pool, &share).await.unwrap();
+        let gc = Gc::new(
+            engine.clone(),
+            pool.clone(),
+            config(1_000, 0, false),
+            dir.clone(),
+            None,
+            |_| {},
+        );
+        let report = gc.run_once().await.unwrap();
+        let evicted: Vec<&str> = report.evicted.iter().map(|e| e.infohash.as_str()).collect();
+        assert_eq!(
+            evicted,
+            [rows[1].infohash.as_str()],
+            "only the unshared copy"
+        );
+        assert!(engine.contains(kept));
+        assert!(dir.join("Show.S01.1080p.WEB-GRP/Show.S01E01.mkv").exists());
+
+        iris_db::seleo_shares::extend(&pool, kept, 0, Utc::now() - Duration::minutes(1))
+            .await
+            .unwrap();
+        let report = gc.run_once().await.unwrap();
+        assert_eq!(report.evicted.len(), 1, "an ended share protects nothing");
+        assert!(!engine.contains(kept));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

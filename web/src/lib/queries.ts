@@ -74,7 +74,8 @@ export const KEYS = {
 	adminStorage: ['admin', 'storage'],
 	adminRemux: ['admin', 'remux'],
 	adminAudit: (action: string | null, actor: string | null) => ['admin', 'audit-log', action, actor] as const,
-	adminProviders: ['admin', 'providers']
+	adminProviders: ['admin', 'providers'],
+	adminSeleo: ['admin', 'seleo-shares']
 } as const;
 
 /** Live progress: quick while something moves, slow otherwise. */

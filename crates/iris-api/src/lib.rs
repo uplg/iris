@@ -21,6 +21,7 @@ pub mod rate_limit;
 pub mod reco;
 pub mod routes;
 pub mod seed_stats;
+pub mod seleo;
 pub mod session_cut;
 pub mod simkl;
 pub mod state;
@@ -100,16 +101,21 @@ fn setup_gc(
     };
 
     // Derived state (remux variants, extracted subtitles) doesn't outlive
-    // its source.
+    // its source, nor does a SéléoTV share made while it was being evicted.
     let on_evict = {
         let remuxer = remuxer.clone();
         let subs_dir = routes::torrents::subtitle_cache_dir(cfg);
+        let pool = pool.clone();
+        let share_dir = seleo::share_dir(cfg);
         move |infohash: &str| {
             let remuxer = remuxer.clone();
             let subs_dir = subs_dir.clone();
+            let pool = pool.clone();
+            let share_dir = share_dir.clone();
             let h = infohash.to_string();
             tokio::spawn(async move {
                 routes::torrents::wipe_derived(&remuxer, &subs_dir, &h).await;
+                seleo::forget_torrent(&pool, &share_dir, &h).await;
             });
         }
     };
@@ -219,6 +225,7 @@ fn spawn_background_jobs(
     // on its own.
     collections_scheduler::spawn(pool.clone(), provider_registry);
     maintenance::spawn(pool.clone());
+    seleo::spawn(pool.clone(), seleo::share_dir(app_state.cfg()));
 
     // Discovery freshness scheduler: the tracker RSS rolling window. Polls
     // each provider's latest-releases feed one (provider × kind) slice per

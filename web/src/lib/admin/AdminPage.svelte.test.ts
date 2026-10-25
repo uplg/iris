@@ -12,7 +12,7 @@ import { alex, leonard, noContent } from '../account/testing.ts';
 import AdminGate from './AdminGate.svelte';
 import AdminHarness from './AdminHarness.svelte';
 import { html } from '#lib/test/snippet.ts';
-import { household, people, plays, sessions, trackers } from './testing.ts';
+import { household, people, plays, seleo, sessions, trackers } from './testing.ts';
 
 const route = vi.hoisted(() => ({ url: new URL('http://iris.test/admin') }));
 const nav = vi.hoisted(() => ({ goto: vi.fn(), replaceState: vi.fn() }));
@@ -307,6 +307,27 @@ describe('admin page', () => {
 		await page.getByRole('alertdialog', { name: 'Free space now?' }).getByRole('button', { name: 'Free space' }).click();
 		await expect.poll(() => api.sent('POST', '/admin/gc')).toHaveLength(1);
 		await expect.element(page.getByText('Old.Film.mkv')).toBeVisible();
+	});
+
+	it('the films on SéléoTV: until when, who shared it; a week more or stop, as the server says', async () => {
+		const api = household({
+			[`PUT /admin/seleo/shares/${seleo[1].infohash}/1`]: seleo[1],
+			[`DELETE /admin/seleo/shares/${seleo[0].infohash}/0`]: noContent
+		});
+		at('/admin?view=system');
+		await render(AdminHarness);
+		const films = region('SéléoTV');
+		await expect.element(films.getByRole('link', { name: '1917 (2019)' })).toHaveAttribute('href', '/collection/c-1917');
+		await expect.element(films.getByText(/^Until .* · shared by Léonard · 9\.0 GB$/)).toBeVisible();
+		await expect.element(films.getByText('Dune', { exact: true })).toBeVisible();
+
+		await films.getByRole('button', { name: 'Extend Dune on SéléoTV by a week' }).click();
+		await expect.poll(() => api.sent('PUT', `/admin/seleo/shares/${seleo[1].infohash}/1`)[0]?.body).toEqual({ days: 7 });
+
+		api.routes['GET /admin/seleo/shares'] = [seleo[1]];
+		await films.getByRole('button', { name: 'Stop sharing 1917 with SéléoTV' }).click();
+		await expect.poll(() => api.sent('DELETE', `/admin/seleo/shares/${seleo[0].infohash}/0`)).toHaveLength(1);
+		await expect.element(films.getByRole('link', { name: '1917 (2019)' })).not.toBeInTheDocument();
 	});
 
 	it('the log: by day, in words, narrowed to a kind of action and a person, a page at a time', async () => {

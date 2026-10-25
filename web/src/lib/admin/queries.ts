@@ -35,3 +35,5 @@ export const auditQuery = (f: AuditLogFilter) => ({
 });
 /** The trackers, on or off, and how each one's last search went: read every 30 s. */
 export const providersQuery = () => ({ queryKey: KEYS.adminProviders, queryFn: admin.providers, refetchInterval: 30_000 });
+/** The films on SéléoTV: they change only by an admin's gesture, read again each minute. */
+export const seleoQuery = () => ({ queryKey: KEYS.adminSeleo, queryFn: admin.seleoShares, refetchInterval: 60_000 });

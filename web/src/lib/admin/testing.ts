@@ -9,6 +9,7 @@ import type {
 	Invitation,
 	ProviderStatus,
 	RemuxJobView,
+	SeleoShare,
 	StorageStats,
 	UserView,
 	WatchHistoryEntry
@@ -360,6 +361,38 @@ export const remux: RemuxJobView[] = TITLES.slice(0, 9).map((t, i) => ({
 	mtime: Math.floor((Date.now() - i * 7 * HOUR) / 1000)
 }));
 
+/** Two films on SéléoTV, the newest share first. */
+export const seleo: SeleoShare[] = [
+	{
+		infohash: 'ef'.repeat(20),
+		file_idx: 0,
+		collection_id: 'c-1917',
+		title: '1917',
+		year: 2019,
+		tmdb_id: 530_915,
+		path: '1917.2019.1080p.BluRay-GRP/1917.mkv',
+		size_bytes: 9 * GB,
+		has_poster: true,
+		shared_by_name: 'Léonard',
+		shared_at: ago(2 * DAY),
+		until: ahead(5 * DAY)
+	},
+	{
+		infohash: 'ab'.repeat(20),
+		file_idx: 1,
+		collection_id: null,
+		title: 'Dune',
+		year: null,
+		tmdb_id: null,
+		path: 'Dune.2021.2160p-GRP/Dune.mkv',
+		size_bytes: 21 * GB,
+		has_poster: false,
+		shared_by_name: null,
+		shared_at: ago(6 * DAY),
+		until: ahead(DAY + 3 * HOUR)
+	}
+];
+
 /** One page of `rows`, as the server cuts it (`limit` defaults to 50). */
 function paged<T>(rows: T[], q: URLSearchParams): T[] {
 	const limit = Number(q.get('limit') ?? 50);
@@ -377,6 +410,7 @@ export function household(more: Record<string, unknown> = {}, data = { plays, se
 			'GET /admin/storage': storage,
 			'GET /admin/remux': remux,
 			'GET /admin/providers': trackers,
+			'GET /admin/seleo/shares': seleo,
 			...more
 		},
 		(c: ApiCall) => {

@@ -232,6 +232,9 @@ export type ActiveSession = components['schemas']['ActiveSessionView'];
 /** A recent playback row from `/admin/watch-history` (all users). */
 export type WatchHistoryEntry = components['schemas']['WatchHistoryView'];
 
+/** A film on SéléoTV (the household's other app): which file, until when. */
+export type SeleoShare = components['schemas']['SeleoShareView'];
+
 /** One persisted audit-log row — a sensitive action (deletion, password
  *  reset, admin-triggered GC) and who performed it. */
 export type AuditLogEntry = components['schemas']['AuditLogView'];
@@ -253,6 +256,13 @@ export const admin = {
 	providers: () => api.get<ProviderStatus[]>('/admin/providers'),
 	/** Turn a tracker on or off without a restart; answers its new state. */
 	setProviderEnabled: (id: string, enabled: boolean) => api.put<ProviderStatus>(`/admin/providers/${seg(id)}`, { enabled }),
+	/** The films on SéléoTV now, newest share first. */
+	seleoShares: () => api.get<SeleoShare[]>('/admin/seleo/shares'),
+	/** Share a film's file with SéléoTV for `days` (7 by default): from now, or past the end of
+	 *  a running share (never past 60 days from now). */
+	shareWithSeleo: (infohash: string, fileIdx: number, days?: number) =>
+		api.put<SeleoShare>(`/admin/seleo/shares/${seg(infohash)}/${fileIdx}`, { days }),
+	unshareFromSeleo: (infohash: string, fileIdx: number) => api.delete<void>(`/admin/seleo/shares/${seg(infohash)}/${fileIdx}`),
 	activeSessions: () => api.get<ActiveSession[]>('/admin/active-sessions'),
 	/** The household's plays, newest first: one page of them, one person's or one kind's. */
 	watchHistory: (q: WatchHistoryFilter & { limit?: number; offset?: number } = {}) =>

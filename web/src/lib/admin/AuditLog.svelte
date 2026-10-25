@@ -25,7 +25,10 @@
 		'gc.evict': 'freed disk space',
 		'remux.wipe': 'deleted a prepared copy',
 		'provider.enable': 'turned a tracker on',
-		'provider.disable': 'turned a tracker off'
+		'provider.disable': 'turned a tracker off',
+		'seleo.share': 'shared a film with SéléoTV',
+		'seleo.extend': 'extended a film on SéléoTV',
+		'seleo.unshare': 'stopped sharing a film with SéléoTV'
 	};
 	const ALL = 'all';
 	/** The families of actions (`user` is every `user.*`). */
@@ -35,7 +38,8 @@
 		{ value: 'torrent', label: 'Releases' },
 		{ value: 'gc', label: 'Disk clean-ups' },
 		{ value: 'remux', label: 'Prepared copies' },
-		{ value: 'provider', label: 'Trackers' }
+		{ value: 'provider', label: 'Trackers' },
+		{ value: 'seleo', label: 'SéléoTV' }
 	];
 
 	let family = $state(ALL);
@@ -66,7 +70,7 @@
 </script>
 
 <Group id="audit-title" title="Audit log" fact={rows.length ? 'Newest first' : undefined}>
-	<p class="hint">Deletions, password changes, clean-ups and trackers turned on or off, and who made them.</p>
+	<p class="hint">Deletions, password changes, clean-ups, trackers turned on or off and films shared with SéléoTV, and who made them.</p>
 	<div class="filters">
 		<div class="pick"><Select label="What" value={family} options={FAMILIES} onchange={(v) => (family = v)} /></div>
 		<div class="pick"><Select label="Who" value={actor} options={people} onchange={(v) => (actor = v)} /></div>

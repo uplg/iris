@@ -14,8 +14,9 @@
 	import { refetchCollection } from './actions.ts';
 	import { mainVideo, qualityWords } from './merge.ts';
 	import { eta } from './status.ts';
-	import { isFetching } from '#lib/torrent.ts';
+	import { isComplete, isFetching } from '#lib/torrent.ts';
 	import { watchHref } from '#lib/paths.ts';
+	import SeleoShare from '#lib/seleo/SeleoShare.svelte';
 
 	let { collection: c, watching = [] }: { collection: CollectionDetail; watching?: ContinueWatchingItem[] } = $props();
 
@@ -97,6 +98,9 @@
 								<p class="hint" id={reason}>{NO_DELETE}</p>
 							{/if}
 						</div>
+						{#if c.kind === 'movie' && main && isComplete(t)}
+							<SeleoShare infohash={t.infohash} fileIdx={main.index} title={c.display_title} />
+						{/if}
 					</li>
 				{/each}
 			</ul>

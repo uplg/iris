@@ -731,9 +731,48 @@ impl TmdbClient {
         }))
     }
 
+    /// A movie's metadata in French (`fr-FR`), uncached: for the rare
+    /// caller that keeps what it reads (a `SéléoTV` share's snapshot). `None`
+    /// when TMDB can't be asked or has no such movie.
+    pub async fn movie_fr(&self, tmdb_id: u64) -> Option<MediaMetadata> {
+        self.fetch_in(tmdb_id, TmdbKind::Movie, &[("language", "fr-FR")])
+            .await
+            .ok()
+    }
+
+    /// The bytes of a TMDB image (`/abc.jpg`) at `size`; `None` when TMDB
+    /// can't serve it within the client's timeout or it outgrows `cap`.
+    pub async fn image_bytes(&self, path: &str, size: &str, cap: usize) -> Option<Vec<u8>> {
+        let res = self
+            .inner
+            .http
+            .get(image_url(path, size))
+            .send()
+            .await
+            .inspect_err(|e| tracing::warn!(error = %e, "tmdb image request failed"))
+            .ok()?;
+        if !res.status().is_success() {
+            tracing::warn!(status = %res.status(), "tmdb image refused");
+            return None;
+        }
+        crate::live_tv::read_capped(res, cap)
+            .await
+            .inspect_err(|e| tracing::warn!(error = %e, "tmdb image unreadable"))
+            .ok()
+    }
+
     async fn fetch(&self, tmdb_id: u64, kind: TmdbKind) -> Result<MediaMetadata, Miss> {
+        self.fetch_in(tmdb_id, kind, &[]).await
+    }
+
+    async fn fetch_in(
+        &self,
+        tmdb_id: u64,
+        kind: TmdbKind,
+        query: &[(&str, &str)],
+    ) -> Result<MediaMetadata, Miss> {
         let raw: TmdbRaw = self
-            .get_json(&format!("{}/{tmdb_id}", kind.as_wire()), &[], "lookup")
+            .get_json(&format!("{}/{tmdb_id}", kind.as_wire()), query, "lookup")
             .await?;
         let date = raw.release_date.or(raw.first_air_date);
         let title = raw.title.or(raw.name).unwrap_or_default();

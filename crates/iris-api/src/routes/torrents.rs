@@ -1242,6 +1242,7 @@ async fn owned_row(
     responses(
         (status = 204, description = "Soft-deleted"),
         (status = 404, description = "Unknown infohash"),
+        (status = 409, description = "`shared_with_seleo`: on SéléoTV until its share ends or is stopped"),
     ),
     tag = "torrents",
 )]
@@ -1251,11 +1252,31 @@ pub(crate) async fn remove(
     Path(infohash): Path<Infohash>,
 ) -> ApiResult<StatusCode> {
     let row = owned_row(&state, &user, &infohash).await?;
+    // Another app reads a shared film: an admin stops the share first, so a
+    // delete never pulls a film from under SéléoTV by surprise.
+    if let Some(until) =
+        iris_db::seleo_shares::shared_until(state.db(), &row.infohash, chrono::Utc::now()).await?
+    {
+        return Err(ApiError::Refused {
+            code: "shared_with_seleo",
+            message: format!(
+                "Shared with SéléoTV until {}: an admin stops sharing it first.",
+                until.format("%-d %b %Y")
+            ),
+        });
+    }
     // Not in the engine (it failed to restore after a restart): the row is
     // still removed. Files the same release from another tracker reads stay.
     iris_torrent::removal::remove_torrent(state.engine(), state.db(), &row)
         .await
         .map_err(ApiError::Internal)?;
+    // A share made since the check above goes with the torrent.
+    crate::seleo::forget_torrent(
+        state.db(),
+        &crate::seleo::share_dir(state.cfg()),
+        &row.infohash,
+    )
+    .await;
     // Cascade the removal into `episode_files`. Soft-deleting the torrent
     // row + dropping the handle + wiping files would otherwise leave the
     // (collection, season, episode) → infohash mappings behind, and the

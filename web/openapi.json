@@ -360,6 +360,132 @@
         }
       }
     },
+    "/api/admin/seleo/shares": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_list_seleo_shares",
+        "responses": {
+          "200": {
+            "description": "The films on SéléoTV now, newest share first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SeleoShareView"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          }
+        }
+      }
+    },
+    "/api/admin/seleo/shares/{infohash}/{file_idx}": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Share the film's file for `days`. A running share is extended by as much\n(never past 60 days from now) and keeps its metadata; a new one reads\nTMDB and the poster.",
+        "operationId": "admin_share_with_seleo",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The share, new or extended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeleoShareView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`not_the_film`: not the film's main video file"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such torrent on disk"
+          },
+          "409": {
+            "description": "`not_a_movie`, `not_downloaded`, `not_in_engine` or `file_missing`"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_unshare_from_seleo",
+        "parameters": [
+          {
+            "name": "infohash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file_idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No longer on SéléoTV"
+          },
+          "403": {
+            "description": "Caller is not an admin"
+          },
+          "404": {
+            "description": "No such share"
+          }
+        }
+      }
+    },
     "/api/admin/storage": {
       "get": {
         "tags": [
@@ -3229,6 +3355,9 @@
           },
           "404": {
             "description": "Unknown infohash"
+          },
+          "409": {
+            "description": "`shared_with_seleo`: on SéléoTV until its share ends or is stopped"
           }
         }
       }
@@ -8315,6 +8444,81 @@
           }
         }
       },
+      "SeleoShareView": {
+        "type": "object",
+        "description": "A film on `SéléoTV`, as the admin sees it.",
+        "required": [
+          "infohash",
+          "file_idx",
+          "title",
+          "path",
+          "size_bytes",
+          "has_poster",
+          "shared_at",
+          "until"
+        ],
+        "properties": {
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The film's library title page."
+          },
+          "file_idx": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "has_poster": {
+            "type": "boolean"
+          },
+          "infohash": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "The file, relative to the download dir."
+          },
+          "shared_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shared_by_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` once that admin's account is deleted."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string",
+            "description": "TMDB's French title, else the library's."
+          },
+          "tmdb_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "SetDisplayNameRequest": {
         "type": "object",
         "required": [
@@ -8334,6 +8538,20 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "ShareRequest": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long: from now for a new share, past its end for a running one.\n7 when absent, clamped to 1..=60.",
+            "minimum": 0
           }
         }
       },
@@ -10109,7 +10327,7 @@
     },
     {
       "name": "admin",
-      "description": "Admin-only: invitations, users, storage / GC, remux cache, presence, diagnostics."
+      "description": "Admin-only: invitations, users, storage / GC, remux cache, presence, diagnostics, SéléoTV shares."
     },
     {
       "name": "health",

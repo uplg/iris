@@ -11,6 +11,8 @@ pub mod gc;
 mod locks;
 pub mod metadata;
 pub mod removal;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use engine::{Engine, EngineError, FileEntry, IngestResult, TorrentSnapshot, TorrentState};
 pub use gc::{DerivedCache, DerivedTrimFn, Gc, GcConfig, GcReport, disk_space};

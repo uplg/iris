@@ -1,7 +1,8 @@
 <script lang="ts">
 	// One release: its title (to its title's page), the release name, how far it is, its state in
-	// words, who added it, and what can be done: play it, open its files, delete it. Delete is
-	// for an admin or whoever added it; anyone else sees it, not operable, and why.
+	// words, who added it, and what can be done: play it, open its files, delete it, and for an
+	// admin, share a movie with SéléoTV. Delete is for an admin or whoever added it; anyone else
+	// sees it, not operable, and why.
 	import { tmdbImage, torrents, type CollectionListItem, type ContinueWatchingItem, type TorrentView } from '@iris/api/client';
 	import { formatSize, isVideo, percent, ago } from '@iris/api/format';
 	import { ui } from '#lib/ui.svelte.ts';
@@ -13,9 +14,11 @@
 	import Disclosure from '#lib/components/Disclosure.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import { deleteDescription, ratioOf, releaseName, releaseStatus, watchState } from './model.ts';
-	import { isFetching } from '#lib/torrent.ts';
+	import { isComplete, isFetching } from '#lib/torrent.ts';
 	import { refreshLibrary } from '#lib/queries.ts';
 	import FileList from './FileList.svelte';
+	import SeleoShare from '#lib/seleo/SeleoShare.svelte';
+	import { mainVideo } from '#lib/collection/merge.ts';
 
 	interface Props {
 		t: TorrentView;
@@ -48,6 +51,7 @@
 	);
 	const single = $derived(videos.length === 1 ? videos[0] : undefined);
 	const singleWatch = $derived(single ? watchState(watched?.get(single.index)) : null);
+	const film = $derived(t.kind === 'movie' && isComplete(t) ? mainVideo(t) : undefined);
 
 	function remove() {
 		return g.run(
@@ -106,6 +110,9 @@
 		{:else}
 			<button class="btn ghost danger" aria-label="Delete {title}" {...unavailable(`${id}-why`)}><Icon name="trash-2" />Delete</button>
 			<span id="{id}-why" class="why">Only an admin or {t.added_by_name} can delete this</span>
+		{/if}
+		{#if film}
+			<SeleoShare infohash={t.infohash} fileIdx={film.index} {title} />
 		{/if}
 	</div>
 </li>

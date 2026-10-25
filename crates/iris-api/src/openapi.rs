@@ -149,6 +149,9 @@ use utoipa::OpenApi;
         crate::routes::admin::diagnose_tmdb,
         crate::routes::providers::admin_list,
         crate::routes::providers::admin_set,
+        crate::routes::seleo::list,
+        crate::routes::seleo::share,
+        crate::routes::seleo::unshare,
         crate::routes::health::get,
     ),
     components(schemas(
@@ -220,7 +223,7 @@ use utoipa::OpenApi;
         (name = "live-tv", description = "Live TV — per-country IPTV channel lists, now/next guide, signed HLS proxy."),
         (name = "providers", description = "Registered search providers and their capabilities."),
         (name = "metadata", description = "TMDB metadata lookup, typeahead search, SCENE-name resolution."),
-        (name = "admin", description = "Admin-only: invitations, users, storage / GC, remux cache, presence, diagnostics."),
+        (name = "admin", description = "Admin-only: invitations, users, storage / GC, remux cache, presence, diagnostics, SéléoTV shares."),
         (name = "health", description = "Unauthenticated liveness probe (excluded from the client-version gate)."),
     ),
 )]
