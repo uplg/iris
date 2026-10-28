@@ -102,7 +102,7 @@ sqlx = { version = "0.9.0", default-features = false, features = [
 
 # Auth (latest stable)
 argon2 = "0.6.0"
-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 rand = "0.10.3"
 
 # Passkeys (optional second way in, next to passwords): same stack as

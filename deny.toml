@@ -3,13 +3,8 @@
 [advisories]
 yanked = "deny"
 # Each ignore is a known, fix-less transitive advisory we've reviewed. Revisit
-# whenever a dependency (esp. the pinned librqbit RC and jsonwebtoken) bumps.
+# whenever a dependency (esp. librqbit) bumps.
 ignore = [
-    # rsa "Marvin Attack" timing sidechannel. Pulled by jsonwebtoken's
-    # `rust_crypto` feature for RS*/PS* algorithms — but Iris signs/verifies
-    # JWTs with HS256 (HMAC, `EncodingKey::from_secret`), so the RSA private-key
-    # path is never executed. No fixed rsa release exists yet.
-    "RUSTSEC-2023-0071",
     # crypto-hash unmaintained — transitive via librqbit's sha1 wrapper. No
     # safe upgrade; goes away when librqbit drops it. Not a vulnerability.
     # cargo-deny currently reports this one as unmatched (the advisory DB no
