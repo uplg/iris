@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-10-28
+
+### Added
+
+- **SéléoTV sharing**: an admin shares a downloaded film with SéléoTV for a
+  while (7 days by default, up to 60); a shared film is kept by the disk
+  clean-up and by a delete until its share ends or is stopped.
+
+### Changed
+
+- **Dependencies**: tokio 1.54.1, uuid 1.29; Bun 1.4.4 (Docker too),
+  Svelte 5.57.3, bits-ui 2.20.2, hls.js 1.7.4, mediabunny 1.63 and
+  @hevcjs/core 1.6 (patches carried over); on the TV, AGP 9.5.
+
+### Fixed
+
+- **TV app update notice** shows up after the TV wakes: a version check made
+  before the Wi-Fi was back hid an update already found, and the next check
+  came half an hour later.
+- **Firefox on macOS, HEVC**: a seek back no longer leaves the picture
+  crawling; the player restarts cleanly on a keyframe the browser accepts.
+
+### Security
+
+- OkHttp 5.5.1 on the TV distrusts the compromised eMudhra intermediates
+  (boxes without Google Play Services); root certificates 1.0.11 on the
+  server.
+
 ## [1.6.2] - 2026-10-21
 
 ### Added
