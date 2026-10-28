@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OkHttp 5.5.1 on the TV distrusts the compromised eMudhra intermediates
   (boxes without Google Play Services); root certificates 1.0.11 on the
   server.
+- The server's JWT signing runs on aws-lc-rs: the unused elliptic-curve and
+  RSA code, with its timing advisories (RUSTSEC-2026-0387), is gone.
 
 ## [1.6.2] - 2026-10-21
 
