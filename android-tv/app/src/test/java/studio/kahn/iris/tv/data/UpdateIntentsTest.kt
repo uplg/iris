@@ -1,7 +1,9 @@
 package studio.kahn.iris.tv.data
 
 import android.app.Application
+import android.content.ComponentName
 import android.content.Intent
+import android.content.IntentFilter
 import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
@@ -26,15 +28,14 @@ class UpdateIntentsTest {
     @Test
     fun withoutThePerAppPageTheSecurityPageOpens() {
         shadowOf(app).checkActivities(true)
-        shadowOf(app.packageManager).addResolveInfoForIntent(
-            Intent(Settings.ACTION_SECURITY_SETTINGS),
-            android.content.pm.ResolveInfo().apply {
-                activityInfo = android.content.pm.ActivityInfo().apply {
-                    packageName = "com.android.tv.settings"
-                    name = "SecuritySettings"
-                }
-            },
-        )
+        val security = ComponentName("com.android.tv.settings", "SecuritySettings")
+        shadowOf(app.packageManager).apply {
+            addActivityIfNotPresent(security)
+            addIntentFilterForActivity(
+                security,
+                IntentFilter(Settings.ACTION_SECURITY_SETTINGS).apply { addCategory(Intent.CATEGORY_DEFAULT) },
+            )
+        }
         assertTrue(AppUpdater.openInstallPermissionSettings(app))
         assertEquals(Settings.ACTION_SECURITY_SETTINGS, shadowOf(app).nextStartedActivity.action)
     }
