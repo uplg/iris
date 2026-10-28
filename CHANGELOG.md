@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Draupnirr tracker**: francophone general tracker, searched through its
   Torznab feed. Release pages come from its REST API (BBCode description,
   uploader, tags), and a grab still downloads after a server restart.
+- **AstraTorrent tracker**: francophone general tracker, searched through its
+  Torznab feed. Release pages come from its JSON API (poster, synopsis,
+  MediaInfo, uploader, tags), and a grab still downloads after a server
+  restart.
 
 ## [1.6.3] - 2026-10-28
 

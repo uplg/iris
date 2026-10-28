@@ -159,6 +159,27 @@ api_key_env = "MEMPHIS_API_KEY"
 tvsearch_q = false
 origin = "fr"
 
+# AstraTorrent — francophone general tracker (100 % freeleech), Torznab at
+# /api/torznab.php. t=search / t=movie honor `q` and the cat filter, but
+# t=tvsearch's `ep=` never matches (0 hits for an episode that exists) and
+# `season=` only matches `.S01.` packs, so `tvsearch_q = false` routes TV
+# queries through t=search with the raw SxxExx query (verified at episode
+# level). Standard 2000/5000 buckets. `kind = "astratorrent"` composes the
+# generic Torznab provider: details come from the JSON API
+# (`/api/torrents.php?id=N`: poster, synopsis, MediaInfo, uploader, tags), and
+# the guid (`/api/download.php?id=N&passkey=…`) yields the id that rebuilds the
+# download link after a restart. The key is the account passkey.
+# Releases are tagged (MULTi/VFF/VOSTFR) so no `default_language`.
+[[providers]]
+id = "astratorrent"
+kind = "astratorrent"
+enabled = true
+base_url = "https://astratorrent.la"
+api_path = "/api/torznab.php"
+api_key_env = "ASTRA_PASSKEY"
+tvsearch_q = false
+origin = "fr"
+
 # Draupnirr — francophone general tracker with a clean generic Torznab 1.3:
 # t=search / t=movie / t=tvsearch honor `q`, tvsearch honors season/ep (the
 # catalogue is mostly season packs, so episode-level queries often come back

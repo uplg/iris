@@ -10,6 +10,7 @@
 //! [`torznab::TorznabProvider`] from the new module instead of
 //! reimplementing the wire format (see [`c411`] for an example).
 
+pub mod astratorrent;
 pub mod c411;
 mod cache;
 pub mod draupnirr;
