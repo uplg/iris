@@ -55,4 +55,19 @@ class UpdateNoticeTest {
         assertEquals("1.0.4", available.copy(dismissed = "1.0.4").available)
         assertNull(UpdateState(latest = AppUpdater.VersionStatus.UpToDate("1.0.4")).available)
     }
+
+    @Test
+    fun aFailedCheckKeepsTheUpdateAlreadyFound() {
+        val failed = available.copy(checking = true).checked(null)
+        assertEquals("1.0.4", failed.available)
+        assertEquals(true, failed.checkFailed)
+        assertEquals(false, failed.checking)
+    }
+
+    @Test
+    fun theNextAnswerClearsTheFailure() {
+        val answered = available.copy(checkFailed = true).checked("1.0.5")
+        assertEquals("1.0.5", answered.available)
+        assertEquals(false, answered.checkFailed)
+    }
 }

@@ -1,8 +1,12 @@
 package studio.kahn.iris.tv.data
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +24,8 @@ data class UpdateState(
     val latest: AppUpdater.VersionStatus = AppUpdater.VersionStatus.Unknown,
     /** Whether the sidecar version check is running (it never blocks the download). */
     val checking: Boolean = false,
+    /** The last check got no version (no network yet, host down): the next validated network reads it again. */
+    val checkFailed: Boolean = false,
     val progress: AppUpdater.Progress? = null,
     /** The version the home notice was put off for ("Later"), until the app starts again. */
     val dismissed: String? = null,
@@ -31,6 +37,18 @@ data class UpdateState(
     val available: String?
         get() = (latest as? AppUpdater.VersionStatus.UpdateAvailable)?.latest
 }
+
+/**
+ * The state once a check answered [fetched] (null: no version read). A failed check keeps the
+ * version known before: a TV waking up reads before its Wi-Fi is back, and that must not take
+ * away an update already found.
+ */
+fun UpdateState.checked(fetched: String?): UpdateState =
+    if (fetched == null) {
+        copy(checking = false, checkFailed = true)
+    } else {
+        copy(latest = AppUpdater.versionStatus(installed, fetched), checking = false, checkFailed = false)
+    }
 
 /** The home's update notice: the versions ([latest] null when unknown), and the download. */
 @Immutable
@@ -67,6 +85,10 @@ class AppUpdates(
     private var check: Job? = null
     private var download: Job? = null
 
+    init {
+        recheckWhenOnline()
+    }
+
     /** Reads the hosted version, unless it is being read, or it is known and [force] is false. */
     fun check(force: Boolean = false) {
         if (check?.isActive == true) return
@@ -74,8 +96,19 @@ class AppUpdates(
         mutable.update { it.copy(checking = true) }
         check = scope.launch {
             val latest = AppUpdater.fetchLatestVersion(client())
-            mutable.update { it.copy(latest = AppUpdater.versionStatus(it.installed, latest), checking = false) }
+            mutable.update { it.checked(latest) }
         }
+    }
+
+    /** After a failed check, reads the version again as soon as a network reaches the internet. */
+    private fun recheckWhenOnline() {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return
+        connectivity.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return
+                if (mutable.value.checkFailed) scope.launch(Dispatchers.Main) { check(force = true) }
+            }
+        })
     }
 
     /** Downloads the APK; Android 8+ first asks once for "Install unknown apps" (a system page). */
