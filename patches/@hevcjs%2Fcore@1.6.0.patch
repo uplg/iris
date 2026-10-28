@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index 9c29b303ba064a727d0a9225c2be3ece858832c0..491463622843b5c44eb54b6ba55435edc6df600f 100644
+index 3be214d2061583d4a1a983d7e473fdc97d06c525..7e21017a9224d6dc8eb83481c6f7c160e0e5dda1 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -279,7 +279,9 @@ var H264Encoder = class {
+@@ -33,7 +33,9 @@ var H264Encoder = class {
        // ~0.1 bpp
        framerate: this._fps,
        hardwareAcceleration: "no-preference",
@@ -14,7 +14,7 @@ index 9c29b303ba064a727d0a9225c2be3ece858832c0..491463622843b5c44eb54b6ba55435ed
      });
    }
 diff --git a/dist/transcode-worker.js b/dist/transcode-worker.js
-index b5e135ae256d3d78ae246ce35ad2a0e0fa2df17c..cc297a3656f232204a44db0244b7a6c84da593d1 100644
+index 3664fe1203bd0a199edd624b684725a39418622f..494282e28203c7c6edfccaa68fd4e3e65a072b3e 100644
 --- a/dist/transcode-worker.js
 +++ b/dist/transcode-worker.js
 @@ -9933,7 +9933,9 @@
