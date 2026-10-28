@@ -12,6 +12,7 @@
 
 pub mod c411;
 mod cache;
+pub mod draupnirr;
 pub mod hdtorrents;
 mod login_gate;
 pub mod nyaa;

@@ -652,6 +652,7 @@ fn counts_as_timeout(budget: std::time::Duration) -> bool {
 pub fn build_provider(entry: &ProviderEntry) -> Result<Arc<dyn SearchProvider>> {
     match entry.kind.as_str() {
         "torznab" => Ok(crate::torznab::TorznabProvider::from_config(entry)?),
+        "draupnirr" => Ok(crate::draupnirr::Draupnirr::from_config(entry)?),
         "tr4ker" => Ok(crate::tr4ker::Tr4ker::from_config(entry)?),
         "unit3d" => Ok(crate::unit3d::Unit3dProvider::from_config(entry)?),
         "c411" => Ok(crate::c411::C411::from_config(entry)?),
