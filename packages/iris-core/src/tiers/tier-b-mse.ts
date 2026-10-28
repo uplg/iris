@@ -296,6 +296,8 @@ export const mountTierB: EngineMount = async (opts) => {
 	/** Firefox only: playhead position to apply once a buffered range covers it.
 	 *  See `anchorPlayhead` for why it can't be set up front. */
 	let pendingPlayheadAnchor: number | null = null;
+	/** The live run feeds through the CRA splicer (Gecko-mac HEVC open GOP). */
+	let splicing = false;
 	// Diagnostics: furthest video timestamp handed to the muxer, and whether
 	// the video feed loop has finished. Distinguishes "demux/feed stopped"
 	// (fedMax frozen / feedEnded) from "decoder stalled with a full buffer".
@@ -593,6 +595,15 @@ export const mountTierB: EngineMount = async (opts) => {
 				console.warn('[iris-core] Tier B: aborted wedged SourceBuffer op (FF unwedge)');
 			} catch {
 				/* MediaSource not open — dispose path will clean up */
+			}
+			// The abort reset the segment parser, so the next fragment opens a coded frame
+			// group on this run's next CRA — left a CRA by the splicer, which Gecko-mac drops
+			// with every frame after it (bug 2065822). Only a new run, opening on a spliced
+			// IDR again, gets frames stored.
+			if (splicing) {
+				console.warn('[iris-core] Tier B: unwedged under the CRA splice — restarting at the playhead');
+				void restartConversionFromSeek(effectivePlayhead());
+				return;
 			}
 		}
 		evictPlayedRange(playedKeep, 0);
@@ -938,6 +949,7 @@ export const mountTierB: EngineMount = async (opts) => {
 				sourceVideoCodec === 'hevc' && hevcMseNeedsIdrStart()
 					? new HevcCraSplicer(descriptionBytes(decoderConfig?.description ?? undefined))
 					: null;
+			splicing = splicer !== null;
 
 			// Feed every packet in decode order. We used to DROP open-GOP "stray"
 			// (PTS < keyframe) and "bridge" (PTS ≥ next keyframe) frames to dodge
