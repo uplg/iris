@@ -7,6 +7,6 @@
   ],
   "patchedDependencies": {
     "@hevcjs/core@1.6.0": "patches/@hevcjs%2Fcore@1.6.0.patch",
-    "mediabunny@1.63.0": "patches/mediabunny@1.63.0.patch"
+    "mediabunny@1.64.0": "patches/mediabunny@1.64.0.patch"
   }
 }
