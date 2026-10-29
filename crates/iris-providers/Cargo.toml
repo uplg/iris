@@ -32,3 +32,5 @@ scraper = { workspace = true }
 [dev-dependencies]
 # Paused clock for the circuit-breaker test.
 tokio = { workspace = true, features = ["test-util"] }
+# Builds the responses the rate-limit test feeds `check_rate_limit`.
+http = { workspace = true }

@@ -202,6 +202,7 @@ impl HdTorrents {
                 .send()
                 .await
                 .map_err(|e| crate::util::http_error("hdtorrents request", e))?;
+            let res = crate::util::check_rate_limit("hdtorrents", res)?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(

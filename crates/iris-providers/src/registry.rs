@@ -32,6 +32,12 @@ const BREAKER_TIMEOUTS: u32 = 3;
 /// How long a provider that keeps timing out is skipped. Then one search
 /// probes it: an answer closes the breaker, a timeout opens it again.
 const BREAKER_COOLDOWN: std::time::Duration = std::time::Duration::from_mins(5);
+/// How long a provider that answered `429` is skipped when it sent no
+/// readable `Retry-After`.
+const RATE_LIMIT_PAUSE: std::time::Duration = std::time::Duration::from_mins(1);
+/// The longest `Retry-After` honoured: a tracker asking for hours would
+/// otherwise vanish from search until the next restart.
+const RATE_LIMIT_PAUSE_MAX: std::time::Duration = std::time::Duration::from_mins(15);
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ProviderInfo {
@@ -149,7 +155,8 @@ pub struct ProviderRegistry {
     switched_off: Arc<RwLock<HashSet<String>>>,
     /// Provider-id → how its last aggregated search went.
     last_search: Arc<Mutex<HashMap<String, SearchOutcome>>>,
-    /// Provider-id → its run of deadline timeouts ([`BREAKER_TIMEOUTS`]).
+    /// Provider-id → its run of deadline timeouts ([`BREAKER_TIMEOUTS`]),
+    /// or the pause a `429` asked for.
     breakers: Arc<Mutex<HashMap<String, Breaker>>>,
 }
 
@@ -160,11 +167,16 @@ struct Breaker {
     /// probe's own deadline, so the searches meanwhile still skip it and a
     /// probe dropped half-way (client gone) can't hold it open for good.
     open_until: Option<tokio::time::Instant>,
+    /// Opened by a `429` rather than by timeouts.
+    rate_limited: bool,
 }
 
 enum Admit {
     Ask,
-    Skip(std::time::Duration),
+    Skip {
+        left: std::time::Duration,
+        rate_limited: bool,
+    },
 }
 
 /// How a provider's last aggregated search went, for the admin view.
@@ -321,7 +333,7 @@ impl ProviderRegistry {
 
     #[cfg(test)]
     fn breaker_open(&self, id: &str) -> bool {
-        matches!(self.admit(id), Admit::Skip(_))
+        matches!(self.admit(id), Admit::Skip { .. })
     }
 
     fn admit(&self, id: &str) -> Admit {
@@ -334,7 +346,10 @@ impl ProviderRegistry {
         };
         let now = tokio::time::Instant::now();
         if now < until {
-            return Admit::Skip(until.saturating_duration_since(now));
+            return Admit::Skip {
+                left: until.saturating_duration_since(now),
+                rate_limited: b.rate_limited,
+            };
         }
         b.open_until = Some(now + SEARCH_DEADLINE);
         Admit::Ask
@@ -347,11 +362,24 @@ impl ProviderRegistry {
             return;
         }
         let b = breakers.entry(id.to_owned()).or_default();
+        b.rate_limited = false;
         b.timeouts += 1;
         if b.timeouts >= BREAKER_TIMEOUTS {
             b.open_until = Some(tokio::time::Instant::now() + BREAKER_COOLDOWN);
             tracing::warn!(provider = %id, timeouts = b.timeouts, "provider keeps timing out; skipped for {} min", BREAKER_COOLDOWN.as_secs() / 60);
         }
+    }
+
+    /// Skip the provider for the pause its `429` asked for.
+    fn pause(&self, id: &str, retry_after: Option<std::time::Duration>) {
+        let pause = retry_after
+            .unwrap_or(RATE_LIMIT_PAUSE)
+            .min(RATE_LIMIT_PAUSE_MAX);
+        let mut breakers = self.breakers.lock().unwrap_or_else(PoisonError::into_inner);
+        let b = breakers.entry(id.to_owned()).or_default();
+        b.open_until = Some(tokio::time::Instant::now() + pause);
+        b.rate_limited = true;
+        tracing::warn!(provider = %id, pause_secs = pause.as_secs(), "provider rate limited; skipped for the pause it asked");
     }
 
     fn record_outcome(&self, id: &str, took: std::time::Duration, error: Option<&Error>) {
@@ -512,8 +540,8 @@ impl ProviderRegistry {
         let mut futs = FuturesUnordered::new();
         let mut skipped = Vec::new();
         for (id, p) in self.enabled().into_iter().filter(|(id, _)| include(id)) {
-            if let Admit::Skip(left) = self.admit(&id) {
-                skipped.push((id, left));
+            if let Admit::Skip { left, rate_limited } = self.admit(&id) {
+                skipped.push((id, left, rate_limited));
                 continue;
             }
             let q = q.clone();
@@ -557,21 +585,28 @@ impl ProviderRegistry {
         let mut agg = AggregatedResults::default();
         let limit = q.limit.unwrap_or(25);
         let page = q.page.unwrap_or(1);
-        for (id, left) in skipped {
+        for (id, left, rate_limited) in skipped {
+            let minutes = left.as_secs().div_ceil(60).max(1);
+            let error = if rate_limited {
+                format!("skipped: rate limited by the tracker, asked again in {minutes} min")
+            } else {
+                format!(
+                    "skipped: timed out {BREAKER_TIMEOUTS} times in a row, asked again in {minutes} min"
+                )
+            };
             agg.providers.push(ProviderResultMeta {
                 id,
                 current_page: page,
                 limit,
                 total_count: None,
                 total_pages: None,
-                error: Some(format!(
-                    "skipped: timed out {BREAKER_TIMEOUTS} times in a row, asked again in {} min",
-                    left.as_secs().div_ceil(60).max(1)
-                )),
+                error: Some(error),
             });
         }
         while let Some((id, took, res, timed_out)) = futs.next().await {
-            if let Some(timed_out) = timed_out {
+            if let Err(Error::RateLimited { retry_after, .. }) = &res {
+                self.pause(&id, *retry_after);
+            } else if let Some(timed_out) = timed_out {
                 self.settle(&id, timed_out);
             }
             self.record_outcome(&id, took, res.as_ref().err());
@@ -852,6 +887,116 @@ mod policy_tests {
         assert_eq!(error(registry.search_all(&q).await), None);
         assert_eq!(error(registry.search_all(&q).await), None, "closed again");
         assert_eq!(asked.load(Ordering::SeqCst), 6);
+    }
+
+    /// Answers `429` with the `Retry-After` it is given.
+    struct Limited {
+        http: reqwest::Client,
+        retry_after: Option<std::time::Duration>,
+        asked: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::SearchProvider for Limited {
+        fn id(&self) -> &'static str {
+            "limited"
+        }
+        fn capabilities(&self) -> iris_core::search::ProviderCapabilities {
+            iris_core::search::ProviderCapabilities::default()
+        }
+        fn http(&self) -> &reqwest::Client {
+            &self.http
+        }
+        async fn search(
+            &self,
+            _q: &iris_core::search::SearchQuery,
+        ) -> iris_core::Result<iris_core::search::ProviderPage> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(iris_core::Error::RateLimited {
+                what: "test: HTTP 429".into(),
+                retry_after: self.retry_after,
+            })
+        }
+        async fn resolve(&self, _id: &str) -> iris_core::Result<iris_core::search::TorrentSource> {
+            Err(iris_core::Error::Provider("unused".into()))
+        }
+    }
+
+    fn limited(
+        retry_after: Option<std::time::Duration>,
+    ) -> (
+        super::ProviderRegistry,
+        std::sync::Arc<std::sync::atomic::AtomicU32>,
+    ) {
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let p: std::sync::Arc<dyn crate::SearchProvider> = std::sync::Arc::new(Limited {
+            http: reqwest::Client::new(),
+            retry_after,
+            asked: asked.clone(),
+        });
+        let registry = super::ProviderRegistry {
+            providers: std::sync::Arc::new([("limited".to_string(), p)].into()),
+            ..Default::default()
+        };
+        (registry, asked)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limited_provider_is_skipped_for_the_pause_it_asked() {
+        use std::sync::atomic::Ordering;
+        let (registry, asked) = limited(Some(std::time::Duration::from_secs(150)));
+        let q = iris_core::search::SearchQuery {
+            q: "x".into(),
+            ..Default::default()
+        };
+        let error = |agg: super::AggregatedResults| agg.providers[0].error.clone();
+
+        assert!(error(registry.search_all(&q).await).is_some_and(|e| e.contains("429")));
+        let skipped = error(registry.search_all(&q).await).expect("an error entry");
+        assert_eq!(
+            skipped,
+            "skipped: rate limited by the tracker, asked again in 3 min"
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "a paused provider is never asked"
+        );
+
+        tokio::time::advance(std::time::Duration::from_secs(149)).await;
+        registry.search_all(&q).await;
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "still inside its Retry-After"
+        );
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        registry.search_all(&q).await;
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            2,
+            "asked again once the pause is over"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limit_without_retry_after_pauses_a_minute_and_a_huge_one_is_capped() {
+        use std::sync::atomic::Ordering;
+        let q = iris_core::search::SearchQuery {
+            q: "x".into(),
+            ..Default::default()
+        };
+        let (registry, asked) = limited(None);
+        registry.search_all(&q).await;
+        tokio::time::advance(super::RATE_LIMIT_PAUSE).await;
+        registry.search_all(&q).await;
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+
+        let (registry, asked) = limited(Some(std::time::Duration::from_hours(6)));
+        registry.search_all(&q).await;
+        tokio::time::advance(super::RATE_LIMIT_PAUSE_MAX).await;
+        registry.search_all(&q).await;
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
     }
 
     #[test]

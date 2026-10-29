@@ -507,6 +507,7 @@ pub(crate) async fn details(
 fn details_failure(e: iris_core::Error) -> ApiError {
     match e {
         iris_core::Error::Provider(m) => ApiError::Upstream(m),
+        e @ iris_core::Error::RateLimited { .. } => ApiError::Upstream(e.to_string()),
         e => ApiError::Internal(anyhow::anyhow!("details: {e}")),
     }
 }
@@ -605,6 +606,14 @@ mod tests {
     fn a_failing_tracker_reads_as_bad_gateway() {
         let res = details_failure(iris_core::Error::Provider("timed out".into())).into_response();
         assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        let limited = iris_core::Error::RateLimited {
+            what: "unit3d: HTTP 429".into(),
+            retry_after: None,
+        };
+        assert_eq!(
+            details_failure(limited).into_response().status(),
+            StatusCode::BAD_GATEWAY
+        );
         let res = details_failure(iris_core::Error::InvalidInput("x".into())).into_response();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }

@@ -60,6 +60,11 @@ const TICK_INTERVAL: Duration = Duration::from_hours(4);
 /// browser tab burns indexer credits.
 const PER_COLLECTION_COOLDOWN_SECS: i64 = 2 * 60 * 60;
 
+/// Pause between two collections of a pass, so a boot with every series
+/// due trickles instead of bursting a search a second into every tracker
+/// (some rate-limit to ~10 requests a minute, as `pulse` found).
+const SCAN_SPACING: Duration = Duration::from_secs(10);
+
 pub fn spawn(pool: SqlitePool, providers: ProviderRegistry) {
     let providers = Arc::new(providers);
     tokio::spawn(async move {
@@ -100,8 +105,11 @@ async fn run_pass(pool: &SqlitePool, providers: Arc<ProviderRegistry>) {
         count = collections.len(),
         "scheduler: scanning TV collections"
     );
-    for collection in collections {
-        if let Err(e) = check_one(pool, &providers, &collection).await {
+    for (i, collection) in collections.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(SCAN_SPACING).await;
+        }
+        if let Err(e) = check_one(pool, &providers, collection).await {
             tracing::warn!(
                 collection_id = %collection.id,
                 display = %collection.display_title,

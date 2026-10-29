@@ -2510,6 +2510,7 @@ fn map_provider_err(e: iris_core::Error) -> ApiError {
             ApiError::BadRequest(format!("provider: {m}"))
         }
         iris_core::Error::ProviderRefused(m) => ApiError::ProviderRefused(m),
+        e @ iris_core::Error::RateLimited { .. } => ApiError::BadRequest(format!("provider: {e}")),
         iris_core::Error::InvalidInput(m) => ApiError::BadRequest(m),
         other => ApiError::Internal(anyhow::anyhow!(other)),
     }

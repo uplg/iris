@@ -30,6 +30,14 @@ pub enum Error {
     #[error("provider refused the request: {0}")]
     ProviderRefused(String),
 
+    /// The tracker answered `429 Too Many Requests`. `retry_after` is its
+    /// `Retry-After`, when it sent one the registry can read.
+    #[error("rate limited by the tracker: {what}")]
+    RateLimited {
+        what: String,
+        retry_after: Option<std::time::Duration>,
+    },
+
     #[error("internal: {0}")]
     Internal(String),
 }

@@ -303,7 +303,7 @@ impl TorznabProvider {
                 );
                 continue;
             }
-            break res
+            break crate::util::check_rate_limit("torznab", res)?
                 .error_for_status()
                 .map_err(|e| crate::util::http_error("torznab status", e))?
                 .text()

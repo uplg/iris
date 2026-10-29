@@ -137,7 +137,8 @@ impl NyaaProvider {
             .get(url)
             .send()
             .await
-            .map_err(|e| crate::util::http_error("nyaa get", e))?
+            .map_err(|e| crate::util::http_error("nyaa get", e))?;
+        let resp = crate::util::check_rate_limit("nyaa", resp)?
             .error_for_status()
             .map_err(|e| crate::util::http_error("nyaa status", e))?;
         resp.text()

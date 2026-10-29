@@ -228,6 +228,7 @@ impl TorrentLeech {
                 .send()
                 .await
                 .map_err(|e| crate::util::http_error("torrentleech request", e))?;
+            let res = crate::util::check_rate_limit("torrentleech", res)?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(
@@ -266,6 +267,7 @@ impl TorrentLeech {
                 .send()
                 .await
                 .map_err(|e| crate::util::http_error("torrentleech request", e))?;
+            let res = crate::util::check_rate_limit("torrentleech", res)?;
             if !res.status().is_success() {
                 let status = res.status();
                 return Err(Error::Provider(format!(

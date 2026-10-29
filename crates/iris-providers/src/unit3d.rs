@@ -334,7 +334,8 @@ impl SearchProvider for Unit3dProvider {
             .query(&qs)
             .send()
             .await
-            .map_err(|e| crate::util::http_error("unit3d request", e))?
+            .map_err(|e| crate::util::http_error("unit3d request", e))?;
+        let resp = crate::util::check_rate_limit("unit3d", resp)?
             .error_for_status()
             .map_err(|e| crate::util::http_error("unit3d status", e))?
             .text()

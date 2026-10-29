@@ -200,6 +200,37 @@ pub(crate) fn http_error(context: &str, e: reqwest::Error) -> Error {
     Error::Provider(format!("{context}: {}", redact(e)))
 }
 
+/// A `429` as [`Error::RateLimited`], with the tracker's `Retry-After`
+/// (seconds or an HTTP date); any other response passes through.
+pub(crate) fn check_rate_limit(
+    what: &str,
+    res: reqwest::Response,
+) -> Result<reqwest::Response, Error> {
+    if res.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Ok(res);
+    }
+    let retry_after = res
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_retry_after);
+    Err(Error::RateLimited {
+        what: format!("{what}: HTTP 429"),
+        retry_after,
+    })
+}
+
+fn parse_retry_after(v: &str) -> Option<std::time::Duration> {
+    let v = v.trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(std::time::Duration::from_secs(secs));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(v).ok()?;
+    (at.with_timezone(&chrono::Utc) - chrono::Utc::now())
+        .to_std()
+        .ok()
+}
+
 /// The first 200 bytes of a response body, for an error or a log line: a
 /// tracker's error page can be megabytes.
 pub(crate) fn body_preview(bytes: &[u8]) -> String {
@@ -406,5 +437,52 @@ mod tests {
         assert_eq!(extract_year("Bitrate 20091 kbps"), None);
         // First valid year wins.
         assert_eq!(extract_year("Show 2018 S03 2026"), Some(2018));
+    }
+
+    #[test]
+    fn a_429_is_a_rate_limit_with_its_retry_after() {
+        let res = |status: u16, retry_after: Option<&str>| {
+            let mut b = http::Response::builder().status(status);
+            if let Some(v) = retry_after {
+                b = b.header("retry-after", v);
+            }
+            reqwest::Response::from(b.body("").expect("response"))
+        };
+        match super::check_rate_limit("torznab", res(429, Some("30"))) {
+            Err(iris_core::Error::RateLimited { what, retry_after }) => {
+                assert_eq!(what, "torznab: HTTP 429");
+                assert_eq!(retry_after, Some(std::time::Duration::from_secs(30)));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            super::check_rate_limit("torznab", res(429, None)),
+            Err(iris_core::Error::RateLimited {
+                retry_after: None,
+                ..
+            })
+        ));
+        assert!(super::check_rate_limit("torznab", res(503, Some("30"))).is_ok());
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_and_http_dates() {
+        use std::time::Duration;
+        assert_eq!(
+            super::parse_retry_after(" 120 "),
+            Some(Duration::from_secs(120))
+        );
+        let soon = (chrono::Utc::now() + chrono::Duration::seconds(90)).to_rfc2822();
+        let left = super::parse_retry_after(&soon).expect("an HTTP date");
+        assert!(
+            left > Duration::from_secs(80) && left <= Duration::from_secs(90),
+            "{left:?}"
+        );
+        assert_eq!(
+            super::parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"),
+            None,
+            "already past"
+        );
+        assert_eq!(super::parse_retry_after("soon"), None);
     }
 }

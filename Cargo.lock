@@ -2346,6 +2346,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
+ "http",
  "iris-config",
  "iris-core",
  "quick-xml 0.42.0",
