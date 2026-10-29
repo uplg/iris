@@ -37,7 +37,7 @@ Three project-wide rules — never relax them without explicit user approval.
 | Layer       | Stack                                                                              |
 | ----------- | ---------------------------------------------------------------------------------- |
 | Backend     | Rust 2024 workspace (edition 2024, MSRV 1.99.1), Axum 0.8, sqlx 0.9 / SQLite       |
-| Torrent     | librqbit 9.0.1                                                                     |
+| Torrent     | librqbit 9.1.0                                                                     |
 | Media       | ffmpeg-driven remuxer + HLS manifest builder + JS subtitle pipeline                |
 | Auth        | JWT in HttpOnly cookies, argon2id, invitation-only registration                    |
 | Frontend    | SvelteKit 3 (Svelte 5 runes, adapter-static SPA), bits-ui, TanStack Query, Vite 8  |
@@ -173,7 +173,7 @@ behaviour (`ProviderPolicy` in `registry.rs`):
   `stopped`, so the tracker isn't counting it either.
 
 **Leaving a swarm:** librqbit never sends `event=stopped` on an HTTP tracker
-(9.0.1 constructs `TrackerRequestEvent::Stopped` only on the UDP path), so
+(9.1.0 constructs `TrackerRequestEvent::Stopped` only on the UDP path), so
 `Engine::delete_by_infohash` / `pause_by_infohash` send it themselves
 (`iris-torrent/src/announce.rs`) before dropping the torrent. Without it a
 torrent removed before completion leaves a ghost leecher on the tracker until

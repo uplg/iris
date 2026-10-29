@@ -158,9 +158,15 @@ sha2 = "0.11.1"
 # Default features (`default-tls`) link OpenSSL — SHA-1 via `crypto-hash` and
 # reqwest via native-tls — and the Wolfi runtime ships no `libssl3`. `rust-tls`
 # swaps both for aws-lc-rs / rustls, matching the rest of the workspace.
-librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls", "http-api-client"] }
+librqbit = { version = "9.1.0", default-features = false, features = ["rust-tls", "http-api-client"] }
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# librqbit 9.1.0 was tagged upstream (2026-10-29) before it reached crates.io.
+# Pinned to the v9.1.0 tag's commit; drop this block once the crate is
+# published and `cargo update -p librqbit` takes it from the registry.
+[patch.crates-io]
+librqbit = { git = "https://github.com/ikatson/rqbit", rev = "4309d38769ef93f6ee4f01a1ab147009a197fa8f" }

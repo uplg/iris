@@ -2,6 +2,7 @@
 // watch page, the polls): whether it still fetches data, its state in one word, when it is done.
 
 import type { TorrentView } from '@iris/api/client';
+import { plural } from '@iris/api/format';
 
 type Torrent = Pick<TorrentView, 'state' | 'finished' | 'progress_pct' | 'peers' | 'download_speed_bps'> &
 	Partial<Pick<TorrentView, 'added_at' | 'fetched_at'>>;
@@ -55,4 +56,12 @@ export const stateWord = (t: Torrent): string => PHASE_WORDS[phaseOf(t)];
 export function etaSeconds(t: Pick<TorrentView, 'download_speed_bps' | 'total_size_bytes' | 'progress_bytes'>): number | null {
 	if (t.download_speed_bps <= 0) return null;
 	return Math.max(0, t.total_size_bytes - t.progress_bytes) / t.download_speed_bps;
+}
+
+/** Who it downloads from: « 12 peers, 3 seeders », « 4 peers, no seeder » when none of them has the
+ * whole file. Once complete, or from a server that doesn't count seeders, the peers alone. */
+export function peerWords(t: Pick<TorrentView, 'peers' | 'seeders' | 'finished' | 'progress_pct'>): string {
+	const peers = plural(t.peers, 'peer');
+	if (t.seeders === undefined || t.peers === 0 || isComplete(t)) return peers;
+	return `${peers}, ${t.seeders === 0 ? 'no seeder' : plural(t.seeders, 'seeder')}`;
 }

@@ -12,17 +12,7 @@
 	import { untrack } from 'svelte';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { follows, library, progress as progressApi, torrents } from '@iris/api/client';
-	import {
-		duration as lengthWords,
-		episodeCode,
-		fileName,
-		formatSize,
-		isVideo,
-		percent,
-		plural,
-		prettySceneName,
-		speed
-	} from '@iris/api/format';
+	import { duration as lengthWords, episodeCode, fileName, formatSize, isVideo, percent, prettySceneName, speed } from '@iris/api/format';
 	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
 	import { irisFetch } from '@iris/core/stream-fetch';
 	import { fetchManifest, ManifestNotReadyError, pickTier, postSeekHint, rawStreamUrl, type DecodeTier } from '@iris/core/manifest-client';
@@ -33,7 +23,7 @@
 	import { stored, text as words } from '#lib/stored.ts';
 	import { pageTitle } from '#lib/title.ts';
 	import { KEYS, read, refreshLibrary } from '#lib/queries.ts';
-	import { stateWord } from '#lib/torrent.ts';
+	import { peerWords, stateWord } from '#lib/torrent.ts';
 	import { isNotOnDisk } from '@iris/api/refusals';
 	import { ui } from '#lib/ui.svelte.ts';
 	import IrisPlayer from '#lib/player/IrisPlayer.svelte';
@@ -522,7 +512,7 @@
 					<p class="hint line">
 						<span>Down {speed(data.download_speed_bps)}</span>
 						<span>Up {speed(data.upload_speed_bps)}</span>
-						<span>{plural(data.peers, 'peer')}</span>
+						<span>{peerWords(data)}</span>
 						{#if probeQ.data?.video[0]}
 							{@const v = probeQ.data.video[0]}
 							<span>{v.codec.toUpperCase()}{v.width && v.height ? ` ${v.width}×${v.height}` : ''}</span>

@@ -13,8 +13,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use librqbit::{
-    AddTorrent, AddTorrentOptions, AddTorrentResponse, ListenerOptions, ManagedTorrent, Session,
-    SessionOptions, SessionPersistenceConfig, TorrentStatsState,
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, ConnectionOptions, ListenerOptions,
+    ManagedTorrent, PeerConnectionOptions, Session, SessionOptions, SessionPersistenceConfig,
+    TorrentStatsState,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -175,6 +176,10 @@ pub struct TorrentSnapshot {
     pub upload_speed_bps: u64,
     pub uploaded_bytes: u64,
     pub peers: u32,
+    /// Connected peers holding the whole torrent, among `peers`. Additive;
+    /// older clients ignore it.
+    #[serde(default)]
+    pub seeders: u32,
     pub files: Vec<FileEntry>,
     pub error: Option<String>,
     pub finished: bool,
@@ -251,6 +256,7 @@ impl Engine {
         download_dir: PathBuf,
         persistence_dir: PathBuf,
         listen_port: u16,
+        peer_request_window: Option<usize>,
     ) -> anyhow::Result<Arc<Self>> {
         std::fs::create_dir_all(&download_dir)?;
         std::fs::create_dir_all(&persistence_dir)?;
@@ -284,6 +290,13 @@ impl Engine {
             //     convention, real librqbit version pulled via
             //     `librqbit::client_name_and_version()`).
             client_name_and_version: Some(client_ua()),
+            connect: peer_request_window.map(|w| ConnectionOptions {
+                peer_opts: Some(PeerConnectionOptions {
+                    max_request_window: Some(w),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         Self::with_opts(download_dir, listen_port, opts).await
@@ -527,13 +540,14 @@ impl Engine {
         } else {
             0.0
         };
-        let (down_bps, up_bps, peers) = match stats.live.as_ref() {
+        let (down_bps, up_bps, peers, seeders) = match stats.live.as_ref() {
             Some(l) => (
                 mbps_to_bps(l.download_speed.mbps),
                 mbps_to_bps(l.upload_speed.mbps),
                 l.snapshot.peer_stats.live,
+                l.snapshot.peer_stats.live_seeders,
             ),
-            None => (0, 0, 0),
+            None => (0, 0, 0, 0),
         };
         TorrentSnapshot {
             infohash: hex::encode(handle.info_hash().0),
@@ -546,6 +560,7 @@ impl Engine {
             upload_speed_bps: up_bps,
             uploaded_bytes: stats.uploaded_bytes,
             peers,
+            seeders,
             files: files.to_vec(),
             error: stats.error,
             finished: stats.finished,
@@ -745,15 +760,16 @@ impl Engine {
         count: u64,
         timeout: Duration,
     ) -> Result<u64, EngineError> {
-        let mut handle = self.open_stream(infohash, file_idx).await?;
-        let file_size = handle.file_size();
-        let start = start.min(file_size);
-        let remaining = file_size.saturating_sub(start);
-        let to_read = count.min(remaining);
-        if to_read == 0 {
-            return Ok(0);
-        }
+        // Opening sits inside the timeout: since librqbit 9.1 `stream()` waits
+        // out the initial hash check, minutes after a restart.
         let read_fut = async move {
+            let mut handle = self.open_stream(infohash, file_idx).await?;
+            let file_size = handle.file_size();
+            let start = start.min(file_size);
+            let to_read = count.min(file_size.saturating_sub(start));
+            if to_read == 0 {
+                return Ok(0);
+            }
             handle
                 .inner
                 .seek(std::io::SeekFrom::Start(start))
@@ -765,6 +781,7 @@ impl Engine {
             // throughput.
             let mut buf = vec![0_u8; 256 * 1024];
             let mut taken = 0_u64;
+            let began = std::time::Instant::now();
             while taken < to_read {
                 let remaining = to_read - taken;
                 #[allow(clippy::cast_possible_truncation)]
@@ -776,6 +793,18 @@ impl Engine {
                     .map_err(|e| EngineError::Librqbit(anyhow::anyhow!("read: {e}")))?;
                 if n == 0 {
                     break;
+                }
+                if taken == 0 {
+                    // How soon the first piece lands after the seek: the
+                    // figure `peer_request_window` is tuned against.
+                    tracing::debug!(
+                        infohash,
+                        file_idx,
+                        start,
+                        first_byte_ms =
+                            u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        "prefetch_range first byte"
+                    );
                 }
                 taken += n as u64;
             }

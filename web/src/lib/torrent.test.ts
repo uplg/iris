@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
-import { etaSeconds, isComplete, isFetching, isMoving, phaseOf, stateWord } from './torrent.ts';
+import { etaSeconds, isComplete, isFetching, isMoving, peerWords, phaseOf, stateWord } from './torrent.ts';
 
 const t = (over: Partial<TorrentView> = {}) =>
 	({
@@ -55,5 +55,18 @@ describe('stalled after the grace a fresh grab gets', () => {
 		const at = '2026-10-06T20:00:00Z';
 		expect(phaseOf({ ...fresh, added_at: at, fetched_at: '2026-10-06T20:01:30Z' })).toBe('downloading');
 		expect(phaseOf({ ...fresh, added_at: at, fetched_at: '2026-10-06T20:02:01Z' })).toBe('stalled');
+	});
+});
+
+describe('who it downloads from', () => {
+	it('counts the seeders among the peers while it fetches', () => {
+		expect(peerWords(t({ peers: 12, seeders: 3 }))).toBe('12 peers, 3 seeders');
+		expect(peerWords(t({ peers: 4, seeders: 0 }))).toBe('4 peers, no seeder');
+	});
+
+	it('the peers alone once complete, with nobody, or from a server without the count', () => {
+		expect(peerWords(t({ peers: 4, seeders: 0, finished: true }))).toBe('4 peers');
+		expect(peerWords(t({ peers: 0, seeders: 0 }))).toBe('0 peers');
+		expect(peerWords(t({ peers: 4 }))).toBe('4 peers');
 	});
 });

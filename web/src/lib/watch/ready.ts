@@ -2,9 +2,9 @@
 // from the torrent snapshot, the probe, the saved position and (Tier F) the server's remux.
 
 import type { PlayStatus, TorrentView } from '@iris/api/client';
-import { percent, plural, speed } from '@iris/api/format';
+import { percent, speed } from '@iris/api/format';
 import { isNoSeeders, isNotOnDisk } from '@iris/api/refusals';
-import { isFetching } from '#lib/torrent.ts';
+import { isFetching, peerWords } from '#lib/torrent.ts';
 
 export type StepState = 'done' | 'current' | 'waiting';
 export interface ReadyStep {
@@ -40,7 +40,6 @@ export interface ReadyInput {
 }
 
 const clamp = (n: number, hi = 100) => Math.min(hi, Math.max(0, n));
-const peers = (n: number) => plural(n, 'peer');
 
 /**
  * Nobody is sharing it. The backend says so (`/probe` spends 30 s trying, then answers « no
@@ -57,7 +56,7 @@ export function isDeadSwarm(t: TorrentView, probeError: unknown): boolean {
 export function readiness(i: ReadyInput): Readiness {
 	const t = i.torrent;
 	const downloaded = clamp(t.progress_pct);
-	const flow = `${speed(t.download_speed_bps)} from ${peers(t.peers)}`;
+	const flow = `${speed(t.download_speed_bps)} from ${peerWords(t)}`;
 
 	let problem: ReadyProblem | null = null;
 	if (isDeadSwarm(t, i.probeError)) {

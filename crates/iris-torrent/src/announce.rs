@@ -1,6 +1,6 @@
 //! Explicit `stopped` announces on the way out of a swarm.
 //!
-//! librqbit never sends one on an HTTP tracker: as of 9.0.1
+//! librqbit never sends one on an HTTP tracker: as of 9.1.0
 //! `TrackerRequestEvent::Stopped` exists but only the UDP path ever
 //! constructs it, and the HTTP monitor sends `event=started` once then
 //! `event=None` forever (`tracker_comms.rs::task_single_tracker_monitor_http`).

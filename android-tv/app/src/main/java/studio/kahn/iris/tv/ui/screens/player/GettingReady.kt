@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.player
 
+import studio.kahn.iris.tv.ui.screens.library.peerWords
 import studio.kahn.iris.tv.ui.screens.library.stalled
 import androidx.compose.runtime.Immutable
 import java.util.Locale
@@ -11,7 +12,6 @@ import studio.kahn.iris.tv.ui.components.StepState
 import studio.kahn.iris.tv.ui.format.codecWord
 import studio.kahn.iris.tv.ui.format.formatSpeed
 import studio.kahn.iris.tv.ui.format.percent
-import studio.kahn.iris.tv.ui.format.plural
 
 /** Where reading the file (`/probe`) stands. */
 @Immutable
@@ -102,7 +102,7 @@ fun readiness(i: ReadyInput): Readiness {
         add(
             Raw(
                 "Connected to peers", "Connecting to peers", "Connect to peers",
-                detail = t?.takeIf { connected }?.let { plural(it.peers, "peer") },
+                detail = t?.takeIf { connected }?.let(::peerWords),
                 progress = null,
                 met = connected,
             ),

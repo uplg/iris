@@ -391,12 +391,14 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         cfg.storage.download_dir.clone(),
         cfg.storage.data_dir.join("librqbit"),
         cfg.storage.torrent_port,
+        cfg.storage.peer_request_window,
     )
     .await
     .context("starting torrent engine")?;
     tracing::info!(
         download_dir = %cfg.storage.download_dir.display(),
         torrent_port = cfg.storage.torrent_port,
+        peer_request_window = ?cfg.storage.peer_request_window,
         "torrent engine ready"
     );
 

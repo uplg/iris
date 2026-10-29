@@ -2108,10 +2108,10 @@ pub(crate) async fn stream_file(
     // Fully-downloaded torrents stream straight from disk. The bytes are
     // final, so playback must not depend on librqbit's session state:
     // after a deploy the restored session re-checks every torrent
-    // (`initializing`) and `handle.stream()` errors with
-    // "invalid state: initializing" for minutes — even though the file
-    // is perfectly readable. The FileStream path below is only needed
-    // while pieces may still be missing (its reads wait for them).
+    // (`initializing`) and `handle.stream()` waits that out for minutes
+    // — even though the file is perfectly readable. The FileStream path
+    // below is only needed while pieces may still be missing (its reads
+    // wait for them).
     let finished = torrent_finished(&state, &row);
     if finished
         && let Ok(path) = state.engine().file_path(&infohash, idx)
@@ -2857,6 +2857,7 @@ mod video_mode_tests {
             upload_speed_bps: 0,
             uploaded_bytes: 0,
             peers: 0,
+            seeders: 0,
             files: Vec::new(),
             error: None,
             finished,

@@ -176,6 +176,17 @@ private fun done(t: TorrentView) = t.finished || t.progressPct >= 100.0
 /** Still fetching data, running or not (a paused or failed one is still short): web `isFetching`. */
 fun isFetching(t: TorrentView?): Boolean = t != null && !done(t)
 
+/**
+ * Who it downloads from: « 12 peers, 3 seeders », « 4 peers, no seeder » when none of them has
+ * the whole file. Once complete, or from a server that doesn't count seeders, the peers alone (web `peerWords`).
+ */
+fun peerWords(t: TorrentView): String {
+    val peers = plural(t.peers, "peer")
+    val seeders = t.seeders
+    if (seeders == null || t.peers == 0 || done(t)) return peers
+    return "$peers, ${if (seeders == 0) "no seeder" else plural(seeders, "seeder")}"
+}
+
 /** What a release is doing, in one word each (web `PHASE_WORDS`). */
 enum class Phase(val words: String) {
     Checking("Checking files"),
@@ -253,7 +264,7 @@ fun releaseStatus(t: TorrentView): Status {
         Phase.Checking -> Status(StatusTone.Busy, "${phase.words} · $pct")
         Phase.Stalled -> Status(StatusTone.Warn, "${phase.words} · no peers · $pct")
         Phase.Downloading -> {
-            val parts = mutableListOf("${phase.words} · $pct", formatSpeed(t.downloadSpeedBps), plural(t.peers, "peer"))
+            val parts = mutableListOf("${phase.words} · $pct", formatSpeed(t.downloadSpeedBps), peerWords(t))
             etaSeconds(t)?.let { parts += etaWords(it) }
             Status(StatusTone.Busy, parts.joinToString(" · "))
         }

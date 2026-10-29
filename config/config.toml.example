@@ -20,6 +20,10 @@ delete_orphan_files = false
 # BitTorrent listen port (TCP + UDP). Pin so you can forward it in your
 # router/firewall.
 torrent_port = 45100
+# Chunk requests kept outstanding per peer (librqbit's default 128 when
+# unset). Smaller answers seeks sooner on a still-downloading release; compare
+# `first_byte_ms` in the `prefetch_range first byte` debug log (iris_torrent).
+# peer_request_window = 32
 
 # Discovery "rolling window". The freshness scheduler polls each provider's
 # latest-releases feed (UNIT3D `created_at`, Torznab query-less),

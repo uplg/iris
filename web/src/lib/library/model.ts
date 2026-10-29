@@ -19,7 +19,7 @@ import {
 } from '@iris/api/format';
 import type { Tone } from '#lib/components/StatusLine.svelte';
 import { watchedShare, watchWords } from '#lib/watched.ts';
-import { etaSeconds, isComplete, PHASE_WORDS, phaseOf } from '#lib/torrent.ts';
+import { etaSeconds, isComplete, PHASE_WORDS, peerWords, phaseOf } from '#lib/torrent.ts';
 
 /** The page's views, remembered per browser. */
 export type View = 'titles' | 'downloads';
@@ -184,7 +184,7 @@ export function releaseStatus(t: TorrentView): { tone: Tone; text: string } {
 			return { tone: 'warn', text: `${word} · no peers · ${pct}` };
 		case 'downloading': {
 			const eta = etaSeconds(t);
-			const parts = [`${word} · ${pct}`, speed(t.download_speed_bps), plural(t.peers, 'peer')];
+			const parts = [`${word} · ${pct}`, speed(t.download_speed_bps), peerWords(t)];
 			if (eta !== null) parts.push(`done in about ${duration(eta)}`);
 			return { tone: 'busy', text: parts.join(' · ') };
 		}

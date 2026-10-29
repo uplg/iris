@@ -9428,6 +9428,12 @@
             "type": "number",
             "format": "double"
           },
+          "seeders": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Connected peers holding the whole torrent, among `peers`. Additive;\nolder clients ignore it.",
+            "minimum": 0
+          },
           "state": {
             "$ref": "#/components/schemas/TorrentState"
           },

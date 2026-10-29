@@ -78,6 +78,16 @@ class LibraryModelTest {
     }
 
     @Test
+    fun peerWordsCountTheSeedersWhileFetching() {
+        val fetching = F.torrent("x", "X", pct = 40.0, peers = 12)
+        assertEquals("12 peers, 3 seeders", peerWords(fetching.copy(seeders = 3)))
+        assertEquals("12 peers, no seeder", peerWords(fetching.copy(seeders = 0)))
+        assertEquals("12 peers", peerWords(fetching))
+        assertEquals("0 peers", peerWords(fetching.copy(peers = 0, seeders = 0)))
+        assertEquals("3 peers", peerWords(F.torrent("y", "Y", peers = 3).copy(seeders = 0)))
+    }
+
+    @Test
     fun pauseAndResumeFollowTheState() {
         assertTrue(canPause(F.torrents[0]))
         assertTrue(canResume(F.torrents[4]))

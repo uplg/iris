@@ -608,6 +608,12 @@ pub struct StorageConfig {
     pub delete_orphan_files: bool,
     #[serde(default = "default_orphan_min_age_hours")]
     pub orphan_min_age_hours: u64,
+    /// Chunk requests kept outstanding per peer (librqbit's default, 128,
+    /// when unset). A piece needed after a seek is requested only behind
+    /// those, so a smaller window answers seeks sooner, at some throughput
+    /// cost on fast peers.
+    #[serde(default)]
+    pub peer_request_window: Option<usize>,
 }
 
 impl StorageConfig {
