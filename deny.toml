@@ -5,14 +5,6 @@ yanked = "deny"
 # Each ignore is a known, fix-less transitive advisory we've reviewed. Revisit
 # whenever a dependency (esp. librqbit) bumps.
 ignore = [
-    # crypto-hash unmaintained — transitive via librqbit's sha1 wrapper. No
-    # safe upgrade; goes away when librqbit drops it. Not a vulnerability.
-    # cargo-deny currently reports this one as unmatched (the advisory DB no
-    # longer flags the version we pull) but the crate is still in the tree, so
-    # the entry stays until librqbit actually drops it.
-    "RUSTSEC-2025-0141",
-    # bincode 2.0.1 unmaintained — transitive via librqbit. No safe upgrade.
-    "RUSTSEC-2025-0060",
     # ringbuf < 0.5.2 `Consumer::skip`/`clear` double free when an element's
     # `Drop` panics. Transitive via librqbit-utp 0.7.0 (ringbuf 0.4.8; the fix
     # is 0.5-only). Unreachable here: librqbit-utp's only ring buffers are
@@ -44,14 +36,16 @@ confidence-threshold = 0.9
 [bans]
 wildcards = "deny"
 allow-wildcard-paths = true
-# Surface duplicate crate versions without failing the gate: the pinned
-# `librqbit = "=9.0.0-rc.0"` drags in a parallel reqwest 0.12 tree plus older
-# majors of the RustCrypto / rand / windows-sys stacks that we can't dedupe
-# ourselves. The set is large and transient — it collapses once librqbit ships
-# a 9.0.0 stable. Tighten to "deny" + an explicit skip-list then.
+# Surface duplicate crate versions without failing the gate: librqbit and
+# sqlx still pull older majors of the RustCrypto / rand / windows-sys stacks
+# that we can't dedupe ourselves. Tighten to "deny" + an explicit skip-list
+# once that set is small.
 multiple-versions = "warn"
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# librqbit 9.1.0 through the root Cargo.toml's `[patch.crates-io]`, pinned to
+# the v9.1.0 tag's commit until crates.io has the release. Goes with the patch.
+allow-git = ["https://github.com/ikatson/rqbit"]
