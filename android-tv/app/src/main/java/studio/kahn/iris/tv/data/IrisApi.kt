@@ -66,6 +66,10 @@ interface IrisApi {
     @PUT("api/me/preferences")
     suspend fun savePreferences(@Body body: UpdatePreferencesRequest): PreferencesResponse
 
+    /** The running server's version and its update sentence. */
+    @GET("api/release-note")
+    suspend fun releaseNote(): ReleaseNote
+
     /** Merged movie + TV genre taxonomy for the onboarding picker. Anime
      *  is NOT in here — it's a distinct category driven by
      *  [UpdatePreferencesRequest.includeAnime]. */

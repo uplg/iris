@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **What changed, in a sentence**: after an update the home says it once, on
+  the web and the TV. The sentence is a `> quote` line right under the version
+  heading here; a release without one says nothing.
+
 ## [1.6.4] - 2026-10-31
 
 ### Added

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
-import { downloadsByCollection, rightNow, secondsLeft } from './data.ts';
+import { downloadsByCollection, noteDue, rightNow, secondsLeft } from './data.ts';
 
 describe('home words', () => {
 	it('"Right now": only what is downloading, in words', () => {
@@ -16,6 +16,14 @@ describe('home words', () => {
 		).toEqual(['2 downloads · 64% · 23 min left']);
 		expect(rightNow({ downloading: 1, downloading_pct: 10, new_episodes: 1, seeding: 1 })).toEqual(['1 download · 10%']);
 		expect(rightNow({ downloading: 0, downloading_pct: 0, new_episodes: 0, seeding: 0 })).toEqual([]);
+	});
+
+	it('the update sentence: after an update only, and only when the release has one', () => {
+		const release = { version: '2.0.0', note: 'Two more trackers.' };
+		expect(noteDue(release, '1.9.0')).toBe('Two more trackers.');
+		expect(noteDue(release, '2.0.0')).toBeUndefined();
+		expect(noteDue(release, undefined)).toBeUndefined();
+		expect(noteDue({ version: '2.0.0', note: null }, '1.9.0')).toBeUndefined();
 	});
 
 	it('downloads per collection, by bytes; finished ones and loose torrents left out', () => {

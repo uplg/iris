@@ -232,6 +232,13 @@ it), the worst case is the user gets a "Up to date" message and
 needs to manually hit Download. `just apk-push` is that script; don't
 upload the files by hand.
 
+### The update sentence
+
+A release that users should hear about gets one `> sentence` right under its
+`## [x.y.z]` heading in `CHANGELOG.md`, in English. The server embeds it at
+build time (`routes/release_note.rs`) and the web and TV homes say it once. No
+quote line, nothing said: fine for a quiet patch.
+
 ### Versioning & client gate
 
 **All three components** carry the same semver-aligned version

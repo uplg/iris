@@ -11,6 +11,7 @@ import {
 	me as meApi,
 	metadata,
 	progress,
+	releaseNote,
 	torrents,
 	type CollectionListItem,
 	type LibraryResponse,
@@ -49,6 +50,7 @@ export const KEYS = {
 	preferences: ['preferences'],
 	genres: ['genres'],
 	languages: ['languages'],
+	releaseNote: ['release-note'],
 	playbackPrefsAll: ['playback-prefs'],
 	playbackPrefs: (collectionId: string | null) => ['playback-prefs', collectionId] as const,
 	tmdb: (id: number | null, kind: MediaKind | null) => ['tmdb', id, kind] as const,
@@ -152,6 +154,7 @@ export const read = {
 	preferences: () => ({ queryKey: KEYS.preferences, queryFn: meApi.preferences, staleTime: 5 * 60_000 }),
 	genres: () => ({ queryKey: KEYS.genres, queryFn: discover.genres, staleTime: DAY }),
 	languages: () => ({ queryKey: KEYS.languages, queryFn: discover.languages, staleTime: DAY }),
+	releaseNote: () => ({ queryKey: KEYS.releaseNote, queryFn: releaseNote, staleTime: DAY }),
 	/** The account's audio and subtitle choice, or a series' own when it has one. */
 	playbackPrefs: (collectionId: string | null) => ({
 		queryKey: KEYS.playbackPrefs(collectionId),

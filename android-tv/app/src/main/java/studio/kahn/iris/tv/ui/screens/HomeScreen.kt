@@ -136,6 +136,7 @@ fun HomeScreen(
             state = state,
             update = updateNotice(updates),
             updateActions = updateActions,
+            onCloseReleaseNote = vm::closeReleaseNote,
             onHeroAction = vm::onHeroAction,
             onCardAction = vm::onCardAction,
             onRetry = vm::retry,
@@ -160,6 +161,7 @@ fun HomeContent(
     onOpenSearch: () -> Unit,
     update: UpdateNotice? = null,
     updateActions: UpdateActions = UpdateActions(),
+    onCloseReleaseNote: () -> Unit = {},
 ) {
     val layout = IrisLayout.current
     val header = LocalShellHeader.current
@@ -170,7 +172,7 @@ fun HomeContent(
     // A card focused during this visit before the hero came (the platform's default focus lands
     // on the first focusable) is not a card left: only a return goes back to one.
     val returning = remember { focus.returns.last != null }
-    val heroIndex by rememberUpdatedState(if (update != null) 1 else 0)
+    val heroIndex by rememberUpdatedState(listOfNotNull(update, state.releaseNote).size)
 
     // The first focus: back on this screen the card left, else the hero's main action, else the
     // menu once the home knows it has no hero. The onboarding sheet closing puts it back too.
@@ -234,6 +236,16 @@ fun HomeContent(
                 if (update != null) {
                     item(key = "update", contentType = "update") {
                         UpdateBanner(update, updateActions, Modifier.padding(horizontal = layout.safeHorizontal))
+                    }
+                }
+                state.releaseNote?.let { note ->
+                    item(key = "release-note", contentType = "update") {
+                        NoticeLine(
+                            note,
+                            Modifier.padding(horizontal = layout.safeHorizontal),
+                            onClose = onCloseReleaseNote,
+                            takeFocus = false,
+                        )
                     }
                 }
                 if (hero != null) {

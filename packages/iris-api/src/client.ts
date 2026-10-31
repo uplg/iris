@@ -9,6 +9,7 @@ declare const __IRIS_WEB_VERSION__: string;
  *  under the existing names so call sites don't change; the rest stays
  *  hand-written until its endpoints are annotated in later waves. */
 export type User = components['schemas']['UserResponse'];
+export type ReleaseNote = components['schemas']['ReleaseNote'];
 
 /** The longest name the server accepts (display names, passkey names), in bytes. */
 export const MAX_NAME = 64;
@@ -482,6 +483,8 @@ export type ForYouResponse = components['schemas']['ForYou'];
 export type MoodTile = components['schemas']['MoodTile'];
 export type MoodBoard = components['schemas']['MoodBoard'];
 export type MoodResults = components['schemas']['MoodResults'];
+export const releaseNote = () => api.get<ReleaseNote>('/release-note');
+
 export const me = {
 	/** `include_grabbable` opts into synthesised "next episode isn't on
 	 *  disk yet" tiles (`grabbable: true`, empty infohash) — the web bundle

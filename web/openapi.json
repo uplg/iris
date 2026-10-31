@@ -3020,6 +3020,26 @@
         }
       }
     },
+    "/api/release-note": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "releaseNote",
+        "responses": {
+          "200": {
+            "description": "The running version and its update sentence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseNote"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/search": {
       "get": {
         "tags": [
@@ -8021,6 +8041,25 @@
           }
         ],
         "description": "A release page: the tracker's own details plus what Iris knows about the\nrelease, so the page stands alone (no search results needed). `flatten`\nkeeps the wire shape of `TorrentDetails` for shipped clients."
+      },
+      "ReleaseNote": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed, in a sentence. Absent when the release has none to say."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version this server runs."
+          }
+        }
       },
       "RemoveWatchlistRequest": {
         "type": "object",

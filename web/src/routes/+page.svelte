@@ -10,6 +10,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import { loadable } from '#lib/query.ts';
 	import Row from '#lib/home/Row.svelte';
+	import ReleaseNote from '#lib/home/ReleaseNote.svelte';
 	import RightNow from '#lib/home/RightNow.svelte';
 	import Onboarding from '#lib/home/Onboarding.svelte';
 	import ResumeHero from '#lib/home/ResumeHero.svelte';
@@ -66,6 +67,7 @@
 {/if}
 
 <div class="home">
+	<ReleaseNote />
 	<RightNow />
 
 	<Row

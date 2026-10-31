@@ -153,11 +153,13 @@ use utoipa::OpenApi;
         crate::routes::seleo::share,
         crate::routes::seleo::unshare,
         crate::routes::health::get,
+        crate::routes::release_note::get,
     ),
     components(schemas(
         crate::routes::auth::RegisterRequest,
         crate::routes::auth::LoginRequest,
         crate::routes::auth::UserResponse,
+        crate::routes::release_note::ReleaseNote,
         crate::routes::devices::CreateCodeRequest,
         crate::routes::devices::CreateCodeResponse,
         crate::routes::devices::LinkRequest,

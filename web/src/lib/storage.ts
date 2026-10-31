@@ -6,6 +6,8 @@ export const STORAGE = {
 	librarySort: 'iris-library-sort',
 	searchView: 'iris-search-view',
 	adminView: 'iris-admin-view',
+	/** The last version whose update sentence this browser has had. */
+	releaseSeen: 'iris-release-seen',
 	/** The Live TV countries last picked, most recent first. */
 	liveCountries: 'iris-live-countries',
 	/** Kept under the React app's names, so a browser keeps its volume and theater across the switch. */

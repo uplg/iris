@@ -37,6 +37,7 @@ private val Context.prefsDataStore by preferencesDataStore("iris_prefs")
 private val KEY_SEARCH_VIEW_MODE = stringPreferencesKey("search_view_mode")
 private val KEY_LIBRARY_VIEW = stringPreferencesKey("library_view")
 private val KEY_INTERFACE_SIZE = stringPreferencesKey("interface_size")
+private val KEY_RELEASE_SEEN = stringPreferencesKey("release_seen")
 
 /**
  * Small client-side UI preferences — NOT session / auth state (that's
@@ -63,6 +64,13 @@ class PrefsStore(private val context: Context) {
 
     suspend fun setLibraryView(name: String) {
         context.prefsDataStore.edit { it[KEY_LIBRARY_VIEW] = name }
+    }
+
+    /** The last version whose update sentence this TV has had (web `STORAGE.releaseSeen`). */
+    val releaseSeen: Flow<String?> = context.prefsDataStore.data.map { it[KEY_RELEASE_SEEN] }
+
+    suspend fun setReleaseSeen(version: String) {
+        context.prefsDataStore.edit { it[KEY_RELEASE_SEEN] = version }
     }
 
     val interfaceSize: Flow<InterfaceSize> = context.prefsDataStore.data.map { InterfaceSize.named(it[KEY_INTERFACE_SIZE]) }

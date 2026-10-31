@@ -123,7 +123,7 @@ COPY --from=planner /app/recipe.json ./recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo chef cook --release --bin iris --recipe-path recipe.json
-COPY Cargo.toml Cargo.lock* ./
+COPY Cargo.toml Cargo.lock* CHANGELOG.md ./
 COPY crates ./crates
 COPY migrations ./migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \

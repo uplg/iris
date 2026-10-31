@@ -40,6 +40,7 @@ import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PreferencesResponse
 import studio.kahn.iris.tv.data.ProgressUpdate
+import studio.kahn.iris.tv.data.ReleaseNote
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
@@ -77,6 +78,8 @@ data class HomeUiState(
     /** The action in flight (`get:<tile>`, `remove:<card>`…): one at a time. */
     val busy: String? = null,
     val notice: Notice? = null,
+    /** What changed, once after an update. */
+    val releaseNote: Notice? = null,
     /** Non-null while the first-run preferences sheet is due. */
     val onboarding: PreferencesResponse? = null,
 )
@@ -100,6 +103,7 @@ internal data class HomeData(
     val onboardingClosed: Boolean = false,
     val busy: String? = null,
     val notice: Notice? = null,
+    val release: ReleaseNote? = null,
 )
 
 private const val LIBRARY_ROW = 12
@@ -107,6 +111,10 @@ private const val LIBRARY_ROW = 12
 internal fun ContinueWatchingItem.metaKey(): MetaKey? = tmdbId?.takeIf { tmdbVerified }?.let { MetaKey(it, kind) }
 internal fun CollectionListItem.metaKey(): MetaKey? = tmdbId?.let { MetaKey(it, kind) }
 private fun FeaturedResponse.pick() = movies.firstOrNull() ?: series.firstOrNull()
+
+/** The update sentence still to say to a TV that last saw [seen] (web `noteDue`): none on a first launch, nor once this version was seen. */
+internal fun noteDue(release: ReleaseNote, seen: String?): String? =
+    release.note.takeIf { seen != null && seen != release.version }
 
 /** The home's words from what it read. Pure: the unit tests feed it. */
 internal fun homeUi(d: HomeData): HomeUiState {
@@ -142,6 +150,7 @@ internal fun homeUi(d: HomeData): HomeUiState {
         libraryCount = collections.size,
         busy = d.busy,
         notice = d.notice,
+        releaseNote = d.release?.note?.let { Notice("Updated to ${d.release.version} — $it") },
         onboarding = d.preferences?.takeIf { !it.onboardingCompleted && !d.onboardingClosed },
     )
 }
@@ -172,6 +181,7 @@ class HomeViewModel(
     private var forYouReadAt: Long? = null
     private var collectionsReadAt: Long? = null
     private val actions = BusyActions(viewModelScope, oneAtATime = true)
+    private var releaseRead = false
 
     init {
         viewModelScope.launch {
@@ -201,7 +211,22 @@ class HomeViewModel(
         launch { readWatchlist() }
         launch { readCollections() }
         launch { readPreferences() }
+        launch { readReleaseNote() }
         if (force || olderThan(forYouReadAt, FOR_YOU_STALE_MS)) launch { readForYou() }
+    }
+
+    private suspend fun readReleaseNote() {
+        if (releaseRead) return
+        releaseRead = true
+        val release = bestEffort { container.api().releaseNote() } ?: return
+        val due = noteDue(release, container.prefsStore.releaseSeen.first()) != null
+        if (due) data.update { it.copy(release = release) } else container.prefsStore.setReleaseSeen(release.version)
+    }
+
+    fun closeReleaseNote() {
+        val release = data.value.release ?: return
+        data.update { it.copy(release = null) }
+        viewModelScope.launch { container.prefsStore.setReleaseSeen(release.version) }
     }
 
     private suspend fun refreshLive() = coroutineScope {

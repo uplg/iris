@@ -97,6 +97,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/torrents", torrents)
         .nest("/providers", routes::providers::router())
         .nest("/metadata", routes::metadata::router())
+        .route("/release-note", get(routes::release_note::get))
         .layer(axum::middleware::from_fn(client_version_layer));
     let api = Router::new()
         .route("/health", get(routes::health::get))

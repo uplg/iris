@@ -15,6 +15,7 @@ pub mod passkeys;
 pub mod playback_preferences;
 pub mod preferences;
 pub mod providers;
+pub mod release_note;
 pub mod search;
 pub mod seleo;
 pub mod torrents;
