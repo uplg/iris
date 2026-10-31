@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-10-31
+
+> See what a suggested title is about before you go looking for it.
+
+### Added
+
+- **Synopsis on suggestions**: a suggested title (home shelves, Discover, moods)
+  shows what it is about before you look for releases, from the info button on
+  its poster on the web and hold OK on the TV.
+
 ## [1.7.0] - 2026-10-31
 
 > Profiles for shared accounts, friends, and a little mascot for everyone.
@@ -1461,7 +1471,8 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.7.0...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.7.1...HEAD
+[1.7.1]: https://github.com/uplg/iris/compare/1.7.0...1.7.1
 [1.7.0]: https://github.com/uplg/iris/compare/1.6.4...1.7.0
 [1.6.4]: https://github.com/uplg/iris/compare/1.6.3...1.6.4
 [1.6.3]: https://github.com/uplg/iris/compare/1.6.2...1.6.3
