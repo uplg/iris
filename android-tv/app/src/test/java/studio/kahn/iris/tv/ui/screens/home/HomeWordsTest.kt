@@ -8,6 +8,7 @@ import org.junit.Test
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DiskSpace
 import studio.kahn.iris.tv.data.FriendAction
+import studio.kahn.iris.tv.data.FriendActivity
 import studio.kahn.iris.tv.data.FriendEvent
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
@@ -39,8 +40,30 @@ class HomeWordsTest {
             season = 2,
             episode = 4,
         )
-        assertEquals("Muriel is watching Severance · S2:E4", friendLine(e))
-        assertEquals("Muriel added Severance", friendLine(e.copy(action = FriendAction.added, season = null, episode = null)))
+        val added = e.copy(action = FriendAction.added, title = "Dune", season = null, episode = null)
+        val watched = e.copy(action = FriendAction.watched, title = "The Bear", season = 3, episode = 1)
+        assertEquals("Muriel is watching Severance · S2:E4", friendLine(listOf(e)))
+        assertEquals(
+            "Muriel added Dune, watched The Bear · S3:E1, Severance",
+            friendLine(listOf(added, watched, watched.copy(title = "Severance", season = null, episode = null))),
+        )
+    }
+
+    @Test
+    fun friendsALineEachThreeAtMost() {
+        val muriel = UUID.randomUUID()
+        fun news(friend: UUID, name: String, title: String) = FriendEvent(
+            action = FriendAction.watched,
+            at = OffsetDateTime.parse("2026-10-05T20:00:00Z"),
+            friendId = friend,
+            friendName = name,
+            title = title,
+        )
+        val recent = listOf("A", "B", "C", "D").map { news(muriel, "Muriel", it) } +
+            listOf("Vincent", "Loris", "Sam").map { news(UUID.randomUUID(), it, "Dune") }
+        val lines = friendLines(FriendActivity(live = emptyList(), recent = recent))
+        assertEquals(listOf("Muriel", "Vincent", "Loris"), lines.map { it.friend })
+        assertEquals("Muriel watched A, B, C", lines.first().text)
     }
 
     @Test

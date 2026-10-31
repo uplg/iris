@@ -1,7 +1,7 @@
 // The words the home and discover screens say about what they read: the "Right now" facts,
 // the downloads per collection, a title's kind, said once.
 
-import type { ContinueWatchingItem, FriendEvent, HomeSummary, ReleaseNote, TorrentView } from '@iris/api/client';
+import type { ContinueWatchingItem, FriendActivity, FriendEvent, HomeSummary, ReleaseNote, TorrentView } from '@iris/api/client';
 import { episodeCode, percent, plural, timeLeft } from '@iris/api/format';
 import { isFetching } from '#lib/torrent.ts';
 
@@ -19,10 +19,47 @@ export function rightNow(s: HomeSummary): string[] {
 
 const DOES: Record<FriendEvent['action'], string> = { watching: 'is watching', watched: 'watched', added: 'added' };
 
-/** What a friend does, in a sentence: « Muriel is watching Severance · S2:E4 ». */
-export function friendLine(e: FriendEvent): string {
-	const code = episodeCode(e.season, e.episode);
-	return `${e.friend_name} ${DOES[e.action]} ${e.title}${code ? ` · ${code}` : ''}`;
+const FRIENDS_SHOWN = 3;
+const SHOWN_PER_FRIEND = 3;
+
+/** One thing a friend did; no `verb` when it repeats the one before (« watched A, B »). */
+export interface FriendItem {
+	key: string;
+	verb: string | null;
+	title: string;
+	collection_id: string | null | undefined;
+}
+
+/** One friend's line of the home: their latest news, and when, unless they are playing it now. */
+export interface FriendRow {
+	friend_id: string;
+	name: string;
+	at: string | null;
+	items: FriendItem[];
+}
+
+/** What friends do, a line each, who plays now first: « Muriel added Dune, watched The Bear · S3:E1 ». */
+export function friendRows(activity: FriendActivity): FriendRow[] {
+	const byFriend = new Map<string, FriendEvent[]>();
+	for (const e of [...activity.live, ...activity.recent]) byFriend.set(e.friend_id, [...(byFriend.get(e.friend_id) ?? []), e]);
+	return [...byFriend.values()].slice(0, FRIENDS_SHOWN).map((events) => {
+		const shown = events.slice(0, SHOWN_PER_FRIEND);
+		const [latest] = shown;
+		return {
+			friend_id: latest.friend_id,
+			name: latest.friend_name,
+			at: latest.action === 'watching' ? null : latest.at,
+			items: shown.map((e, i) => {
+				const code = episodeCode(e.season, e.episode);
+				return {
+					key: `${e.action}:${e.collection_id ?? e.title}`,
+					verb: shown[i - 1]?.action === e.action ? null : DOES[e.action],
+					title: `${e.title}${code ? ` · ${code}` : ''}`,
+					collection_id: e.collection_id
+				};
+			})
+		};
+	});
 }
 
 /** The update sentence still to say to a browser that last saw `seen`: none on a first visit,

@@ -490,7 +490,7 @@ private fun Hero(
 
 private val COMPACT_HEIGHT = 480.dp
 
-/** What friends do, who plays now first; a line with a title opens it (web `FriendsActivity`). */
+/** What friends do, a line each, who plays now first; a line opens the friend's latest title (web `FriendsActivity`). */
 @Composable
 private fun FriendsActivity(lines: List<FriendLine>, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
@@ -498,7 +498,7 @@ private fun FriendsActivity(lines: List<FriendLine>, onOpen: (String) -> Unit, m
         lines.forEach { line ->
             RowCard(onClick = { line.collectionId?.let(onOpen) }, enabled = line.collectionId != null) { _ ->
                 Mascot(line.friend, IrisSize.avatar)
-                Text(line.text, style = IrisType.body, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(line.text, style = IrisType.body, color = IrisColor.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 line.whenSaid?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
             }
         }

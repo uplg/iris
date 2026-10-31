@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows what it is about before you look for releases, from the info button on
   its poster on the web and hold OK on the TV.
 
+### Changed
+
+- **Friends on the home**: one line per friend with their latest three titles,
+  three friends at most, on the web and the TV.
+
+### Fixed
+
+- **One banner at a time on the TV**: the update sentence waits until the app
+  itself is updated, so "Updated to x.y.z" no longer shows beside "Update
+  available" on a TV that hasn't installed it yet.
+
 ## [1.7.0] - 2026-10-31
 
 > Profiles for shared accounts, friends, and a little mascot for everyone.

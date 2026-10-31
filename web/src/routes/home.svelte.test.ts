@@ -97,10 +97,8 @@ describe('home', () => {
 		});
 		await show();
 		const friends = shelf('Friends');
-		await expect
-			.element(friends.getByRole('link', { name: 'Muriel is watching Severance · S2:E4' }))
-			.toHaveAttribute('href', '/collection/c9');
-		await expect.element(friends.getByText('Muriel added Dune')).toBeVisible();
+		await expect.element(friends.getByRole('link', { name: 'Severance · S2:E4' })).toHaveAttribute('href', '/collection/c9');
+		await expect.element(friends.getByText('Muriel is watching Severance · S2:E4, added Dune')).toBeVisible();
 	});
 
 	it('says what changed once, after an update, until closed', async () => {
