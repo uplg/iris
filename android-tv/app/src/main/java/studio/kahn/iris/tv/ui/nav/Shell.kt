@@ -20,7 +20,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -113,8 +112,8 @@ private enum class ShellSlot { Backdrop, Header, Content }
 @Stable
 class ShellBackdropHolder {
     var content by mutableStateOf<(@Composable () -> Unit)?>(null)
-    /** The header's words that stay legible over the backdrop; null when it draws none. */
-    var ink by mutableStateOf<Color?>(null)
+    /** What the header sits on; null when the backdrop draws nothing behind it. */
+    var header by mutableStateOf<HeaderBackdrop?>(null)
 }
 
 val LocalShellBackdrop = staticCompositionLocalOf<ShellBackdropHolder?> { null }
@@ -206,7 +205,7 @@ fun TopLevelShell(
                 accountName = accountName,
                 onAccount = onAccount,
                 updateAvailable = updateAvailable,
-                accountInk = backdrop.ink,
+                backdrop = backdrop.header,
             )
         }
     }

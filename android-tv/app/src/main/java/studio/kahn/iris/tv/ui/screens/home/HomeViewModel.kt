@@ -179,7 +179,7 @@ internal fun homeUi(d: HomeData): HomeUiState {
         libraryCount = collections.size,
         busy = d.busy,
         notice = d.notice,
-        releaseNote = d.release?.note?.let { Notice("Updated to ${d.release.version} — $it") },
+        releaseNote = d.release?.note?.let { Notice("Updated to ${d.release.version} · $it") },
         friends = d.friends?.let(::friendLines).orEmpty(),
         whoIsWatching = d.profiles,
         onboarding = d.preferences?.takeIf { !it.onboardingCompleted && !d.onboardingClosed && d.profiles == null },

@@ -1,18 +1,21 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.screens.home.heroBackdrop
+import studio.kahn.iris.tv.ui.screens.home.HERO_ART_WIDTH
+import studio.kahn.iris.tv.ui.screens.home.HERO_ART_HEIGHT
+import studio.kahn.iris.tv.ui.screens.home.FADE_LEFT
+import studio.kahn.iris.tv.ui.screens.home.FADE_BOTTOM
+import studio.kahn.iris.tv.ui.nav.HeaderBackdrop
 import studio.kahn.iris.tv.ui.components.Mascot
-import studio.kahn.iris.tv.ui.screens.live.toneOf
 import studio.kahn.iris.tv.ui.screens.home.WhoIsWatching
 import studio.kahn.iris.tv.ui.screens.home.FriendLine
 import studio.kahn.iris.tv.ui.nav.LocalShellBackdrop
-import studio.kahn.iris.tv.ui.format.meanLuminance
 import studio.kahn.iris.tv.ui.components.RowCard
 import java.util.concurrent.ConcurrentHashMap
 import coil3.toBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -355,8 +358,6 @@ fun HomeContent(
 private const val HERO_KEY = "hero"
 
 // The board's hero still: 1100 x 620 of 1920 x 1080, in the top right corner.
-private const val HERO_ART_WIDTH = 1100f / 1920f
-private const val HERO_ART_HEIGHT = 620f / 1080f
 
 /**
  * The hero's still in the screen's top right corner, under the header, fading into the
@@ -367,10 +368,10 @@ private const val HERO_ART_HEIGHT = 620f / 1080f
 @Composable
 private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, modifier: Modifier = Modifier) {
     val holder = LocalShellBackdrop.current
-    var ink by remember(url) { mutableStateOf(url?.let(heroInkCache::get)) }
+    var header by remember(url) { mutableStateOf(url?.let(heroHeaderCache::get)) }
     val shown by remember(list) { derivedStateOf { list.layoutInfo.visibleItemsInfo.any { it.key == HERO_KEY } } }
-    LaunchedEffect(holder, ink, shown) { holder?.ink = ink.takeIf { shown } }
-    DisposableEffect(holder) { onDispose { holder?.ink = null } }
+    LaunchedEffect(holder, header, shown) { holder?.header = header.takeIf { shown } }
+    DisposableEffect(holder) { onDispose { holder?.header = null } }
     Box(
         modifier
             .size(width, height)
@@ -391,7 +392,7 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
                     ImageRequest.Builder(context)
                         .data(url)
                         .size(width.roundToPx(), height.roundToPx())
-                        .allowHardware(heroInkCache.containsKey(url))
+                        .allowHardware(heroHeaderCache.containsKey(url))
                         .build()
                 }
             }
@@ -401,8 +402,8 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize(),
                 onSuccess = { state ->
-                    ink = heroInkCache.getOrPut(url) {
-                        runCatching { headerInk(state.result.image.toBitmap()) }.getOrDefault(IrisColor.inkMuted)
+                    header = heroHeaderCache.getOrPut(url) {
+                        runCatching { heroBackdrop(state.result.image.toBitmap()) }.getOrDefault(HeaderBackdrop(emptyList()))
                     }
                 },
             )
@@ -421,17 +422,8 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
 }
 
 /** One luminance pass per still: the home recomposes all the time. */
-private val heroInkCache = ConcurrentHashMap<String, Color>()
+private val heroHeaderCache = ConcurrentHashMap<String, HeaderBackdrop>()
 
-/** Where the account's name sits over the still: its top right corner, not under the fades. */
-private const val NAME_FROM_X = 0.7f
-private const val NAME_TO_Y = 0.2f
-
-/** The words over the still's corner: the light or dark of the channel logos' plate, whichever reads better. */
-private fun headerInk(still: Bitmap): Color = toneOf(meanLuminance(still, fromX = NAME_FROM_X, toY = NAME_TO_Y)).plate
-
-private const val FADE_LEFT = 0.45f
-private const val FADE_BOTTOM = 0.6f
 
 @Composable
 private fun Hero(

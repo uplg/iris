@@ -107,9 +107,9 @@ describe('home', () => {
 		localStorage.setItem(STORAGE.releaseSeen, '"1.9.0"');
 		home({ '/release-note': { version: '2.0.0', note: 'Two more trackers.' } });
 		await show();
-		await expect.element(page.getByText('Updated to 2.0.0 — Two more trackers.')).toBeVisible();
+		await expect.element(page.getByText('Updated to 2.0.0 · Two more trackers.')).toBeVisible();
 		await page.getByRole('button', { name: 'Close' }).click();
-		await expect.element(page.getByText('Updated to 2.0.0 — Two more trackers.')).not.toBeInTheDocument();
+		await expect.element(page.getByText('Updated to 2.0.0 · Two more trackers.')).not.toBeInTheDocument();
 		expect(localStorage.getItem(STORAGE.releaseSeen)).toBe('"2.0.0"');
 		localStorage.removeItem(STORAGE.releaseSeen);
 	});

@@ -1,5 +1,12 @@
 package studio.kahn.iris.tv.ui.components
 
+import studio.kahn.iris.tv.ui.nav.HeaderBackdrop
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -59,6 +66,7 @@ enum class TopTab(val label: String) {
 fun IrisWordmark(
     modifier: Modifier = Modifier,
     fontSize: TextUnit = IrisType.brand.fontSize,
+    ink: Color = IrisColor.ink,
 ) {
     val markSize = with(LocalDensity.current) { (fontSize * MARK_TO_TEXT).toDp() }
     val drop = with(LocalDensity.current) { (fontSize * BOREL_BASELINE_DROP).toDp() }
@@ -71,7 +79,7 @@ fun IrisWordmark(
         Text(
             "Iris",
             style = IrisType.brand.copy(fontSize = fontSize, lineHeight = fontSize),
-            color = IrisColor.ink,
+            color = ink,
             modifier = Modifier.offset(y = drop),
         )
     }
@@ -93,6 +101,7 @@ fun NavTab(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    ink: Color? = null,
 ) {
     FocusSurface(
         onClick = onClick,
@@ -105,7 +114,7 @@ fun NavTab(
         shape = IrisShape.pill,
         colors = FocusColors.Quiet.copy(
             container = if (selected) IrisColor.accentWash else Color.Transparent,
-            content = if (selected) IrisColor.accent else IrisColor.inkMuted,
+            content = if (selected) IrisColor.accent else ink ?: IrisColor.inkMuted,
         ),
     ) {
         Box(Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
@@ -133,15 +142,15 @@ fun TvHeader(
     modifier: Modifier = Modifier,
     onAccount: (() -> Unit)? = null,
     updateAvailable: Boolean = false,
-    /** The words of the account over what is drawn behind them; null: the usual ones. */
-    accountInk: Color? = null,
+    /** What is drawn behind the header: each thing in it reads the part behind it. */
+    backdrop: HeaderBackdrop? = null,
 ) {
     val currentTab = remember { FocusRequester() }
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IrisWordmark()
+        OverBackdrop(backdrop) { ink, probe -> IrisWordmark(probe, ink = ink ?: IrisColor.ink) }
         Spacer(Modifier.width(IrisSpace.s6))
         Row(
             Modifier
@@ -150,44 +159,61 @@ fun TvHeader(
             horizontalArrangement = Arrangement.spacedBy(IrisSpace.s1),
         ) {
             TopTab.entries.forEach { tab ->
-                NavTab(
-                    text = tab.label,
-                    selected = tab == current,
-                    onClick = { onSelect(tab) },
-                    modifier = if (tab == current) Modifier.focusRequester(currentTab) else Modifier,
-                )
+                OverBackdrop(backdrop) { ink, probe ->
+                    NavTab(
+                        text = tab.label,
+                        selected = tab == current,
+                        onClick = { onSelect(tab) },
+                        modifier = probe.then(if (tab == current) Modifier.focusRequester(currentTab) else Modifier),
+                        ink = ink,
+                    )
+                }
             }
         }
         Spacer(Modifier.weight(1f))
         if (accountName != null) {
-            if (onAccount != null) {
-                FocusSurface(
-                    onClick = onAccount,
-                    modifier = Modifier.heightIn(min = IrisSize.controlSmall),
-                    shape = IrisShape.pill,
-                    colors = FocusColors.Quiet.copy(content = IrisColor.inkMuted),
-                ) { focused ->
-                    Account(
-                        accountName,
-                        focused,
-                        updateAvailable,
-                        accountInk,
-                        Modifier
-                            .padding(start = 3.dp, end = 12.dp)
-                            .clearAndSetSemantics {
-                                contentDescription = if (updateAvailable) {
-                                    "Settings, update available, $accountName"
-                                } else {
-                                    "Settings, $accountName"
-                                }
-                            },
-                    )
+            OverBackdrop(backdrop) { ink, probe ->
+                if (onAccount != null) {
+                    FocusSurface(
+                        onClick = onAccount,
+                        modifier = probe.heightIn(min = IrisSize.controlSmall),
+                        shape = IrisShape.pill,
+                        colors = FocusColors.Quiet.copy(content = IrisColor.inkMuted),
+                    ) { focused ->
+                        Account(
+                            accountName,
+                            focused,
+                            updateAvailable,
+                            ink,
+                            Modifier
+                                .padding(start = 3.dp, end = 12.dp)
+                                .clearAndSetSemantics {
+                                    contentDescription = if (updateAvailable) {
+                                        "Settings, update available, $accountName"
+                                    } else {
+                                        "Settings, $accountName"
+                                    }
+                                },
+                        )
+                    }
+                } else {
+                    Account(accountName, focused = false, update = false, ink = ink, modifier = probe)
                 }
-            } else {
-                Account(accountName, focused = false, update = false, ink = accountInk)
             }
         }
     }
+}
+
+/** [content] in the words that read over the part of [backdrop] behind it, told by the probe it wears. */
+@Composable
+private fun OverBackdrop(backdrop: HeaderBackdrop?, content: @Composable (ink: Color?, probe: Modifier) -> Unit) {
+    var span by remember { mutableStateOf(0f to 0f) }
+    val probe = Modifier.onGloballyPositioned { at ->
+        val width = at.findRootCoordinates().size.width.toFloat()
+        val bounds = at.boundsInRoot()
+        if (width > 0f) span = bounds.left / width to bounds.right / width
+    }
+    content(backdrop?.inkAt(span.first, span.second), probe)
 }
 
 @Composable

@@ -4,20 +4,21 @@ import android.graphics.Bitmap
 import androidx.core.graphics.get
 
 /**
- * Mean relative luminance of the opaque pixels of a [bitmap], sampled on a 32×32 grid, within the
- * part given as fractions of its size; null when nothing there is opaque.
+ * Mean relative luminance of the opaque pixels of a [bitmap], sampled on a [grid]×[grid] grid, within
+ * the part given as fractions of its size; null when nothing there is opaque.
  */
-fun meanLuminance(bitmap: Bitmap, fromX: Float = 0f, toY: Float = 1f): Double? {
+fun meanLuminance(bitmap: Bitmap, fromX: Float = 0f, toX: Float = 1f, toY: Float = 1f, grid: Int = 32): Double? {
     val startX = (bitmap.width * fromX).toInt()
+    val endX = (bitmap.width * toX).toInt().coerceAtMost(bitmap.width)
     val endY = (bitmap.height * toY).toInt()
-    val stepX = maxOf(1, (bitmap.width - startX) / 32)
-    val stepY = maxOf(1, endY / 32)
+    val stepX = maxOf(1, (endX - startX) / grid)
+    val stepY = maxOf(1, endY / grid)
     var luma = 0.0
     var count = 0
     var y = 0
     while (y < endY) {
         var x = startX
-        while (x < bitmap.width) {
+        while (x < endX) {
             val px = bitmap[x, y]
             if (px ushr 24 and 0xFF > 25) {
                 luma += 0.2126 * linear(px ushr 16 and 0xFF) + 0.7152 * linear(px ushr 8 and 0xFF) +

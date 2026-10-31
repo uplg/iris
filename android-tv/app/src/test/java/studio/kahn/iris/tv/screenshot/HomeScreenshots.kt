@@ -163,7 +163,7 @@ class HomeScreenshots {
 
     @Test
     fun homeReleaseNote() = shots.snapEverySize("home_release_note") {
-        Home(home.copy(releaseNote = Notice("Updated to 1.7.0 — Profiles for shared accounts, and friends on the home.")))
+        Home(home.copy(releaseNote = Notice("Updated to 1.7.0 · Profiles for shared accounts, and friends on the home.")))
     }
 
     @Test

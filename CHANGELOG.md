@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **TV header**: the account's name picks its ink from the luminance of the
-  still behind it, with the same pass as the channel logos.
+- **TV header**: the logo, the tabs and the account's name each pick their ink
+  from the luminance of what is behind them, the still's fade included, with
+  the same pass as the channel logos.
 
 ## [1.6.4] - 2026-10-31
 

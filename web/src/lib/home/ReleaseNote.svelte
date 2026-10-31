@@ -23,7 +23,7 @@
 
 {#if note && release.data}
 	<p class="note">
-		<span>Updated to {release.data.version} — {note}</span>
+		<span>Updated to {release.data.version} · {note}</span>
 		<button class="close" aria-label="Close" onclick={() => (closed = true)}><Icon name="x" /></button>
 	</p>
 {/if}
