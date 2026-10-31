@@ -14,6 +14,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
+	import Mascot from '#lib/components/Mascot.svelte';
 
 	const list = createQuery(
 		() => read.profiles(),
@@ -59,7 +60,7 @@
 		<ul class="plain-list">
 			{#each list.data ?? [] as p (p.id)}
 				<ListRow second={standing(p) || undefined}>
-					{p.name}
+					<Mascot name={p.name} /><span>{p.name}</span>
 					{#snippet end()}
 						{#if !p.current}
 							<button class="btn" {...pending(g.is(`enter:${p.id}`))} onclick={() => g.run(() => enter(p), undefined, `enter:${p.id}`)}

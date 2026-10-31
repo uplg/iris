@@ -3,6 +3,7 @@
 	// all without friends or news. Read again by the query, never a timer of ours.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { ago } from '@iris/api/format';
+	import Mascot from '#lib/components/Mascot.svelte';
 	import { read } from '#lib/queries.ts';
 	import { friendLine } from './data.ts';
 
@@ -19,6 +20,7 @@
 		<ul class="plain-list">
 			{#each lines as e (`${e.action}:${e.friend_id}:${e.collection_id ?? e.title}`)}
 				<li>
+					<Mascot name={e.friend_name} />
 					{#if e.collection_id}<a href="/collection/{e.collection_id}">{friendLine(e)}</a>{:else}<span>{friendLine(e)}</span>{/if}
 					{#if e.action !== 'watching'}<span class="when">{ago(e.at, 'short')}</span>{/if}
 				</li>
@@ -38,6 +40,14 @@
 		align-items: center;
 		gap: var(--s-1) var(--s-3);
 		min-height: var(--control-h);
+	}
+	a {
+		color: var(--ink);
+		text-decoration: none;
+	}
+	a:hover {
+		color: var(--accent);
+		text-decoration: underline;
 	}
 	.when {
 		font: var(--t-meta);

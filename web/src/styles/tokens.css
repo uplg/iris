@@ -63,6 +63,18 @@
 	--raw-seed: #2f6b3c;
 	--raw-seed-dark: #7cc48a;
 
+	/* a person's mascot: its tile, in both themes; paper and blush from the Iris mark */
+	--mascot-0: #0e5e68;
+	--mascot-1: #5b3a6e;
+	--mascot-2: #9a4a36;
+	--mascot-3: #2f6b3c;
+	--mascot-4: #34508c;
+	--mascot-5: #8a6a1f;
+	--mascot-6: #8e3f5c;
+	--mascot-7: #4a5666;
+	--mascot-paper: #f2f0ea;
+	--mascot-blush: #e6a49ad9;
+
 	/* semantic: light, dark */
 	--ground: light-dark(var(--raw-cloud), var(--raw-night));
 	--ground-raised: light-dark(var(--raw-cloud-deep), var(--raw-night-raised));

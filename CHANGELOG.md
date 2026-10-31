@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other person nothing. Home says what friends play now and watched or added
   lately. What a profile watches reaches friends only once it shares it, and a
   title can be hidden from them.
+- **Mascots**: everyone gets a small Iris TV picked from their name, the same on
+  the web and the TV: who's watching, the header, friends, profiles.
 
 ### Fixed
 

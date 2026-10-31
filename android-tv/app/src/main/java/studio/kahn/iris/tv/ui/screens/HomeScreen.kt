@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.Mascot
 import studio.kahn.iris.tv.ui.screens.live.toneOf
 import studio.kahn.iris.tv.ui.screens.home.WhoIsWatching
 import studio.kahn.iris.tv.ui.screens.home.FriendLine
@@ -504,6 +505,7 @@ private fun FriendsActivity(lines: List<FriendLine>, onOpen: (String) -> Unit, m
         Eyebrow("Friends")
         lines.forEach { line ->
             RowCard(onClick = { line.collectionId?.let(onOpen) }, enabled = line.collectionId != null) { _ ->
+                Mascot(line.friend, IrisSize.avatar)
                 Text(line.text, style = IrisType.body, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 line.whenSaid?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
             }

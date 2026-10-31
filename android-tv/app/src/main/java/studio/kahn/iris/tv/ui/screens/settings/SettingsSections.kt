@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.settings
 
+import studio.kahn.iris.tv.ui.components.Mascot
 import studio.kahn.iris.tv.data.ProfileView
 import studio.kahn.iris.tv.data.PersonView
 import studio.kahn.iris.tv.data.HiddenTitleView
@@ -208,8 +209,9 @@ private fun ProfilesSection(state: SettingsUiState, actions: SettingsActions) {
 
 /** A person or a title, and what can be done about it. */
 @Composable
-private fun PersonRow(name: String, facts: String? = null, actions: @Composable RowScope.() -> Unit) {
+private fun PersonRow(name: String, facts: String? = null, person: Boolean = true, actions: @Composable RowScope.() -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4), verticalAlignment = Alignment.CenterVertically) {
+        if (person) Mascot(name, IrisSize.control)
         Column(Modifier.weight(1f)) {
             Text(name, style = IrisType.body, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             facts?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
@@ -255,7 +257,7 @@ private fun FriendsSection(state: SettingsUiState, actions: SettingsActions) {
                 Pill("Share with friends", selected = friends.shareWatching, onClick = { actions.onShare(true) })
             }
             if (friends.hidden.isNotEmpty()) ChoiceLabel("Hidden from friends", "Neither what you watch of these nor what you add.")
-            friends.hidden.forEach { h -> PersonRow(h.title) { small("Show again", false) { actions.onShowToFriends(h) } } }
+            friends.hidden.forEach { h -> PersonRow(h.title, person = false) { small("Show again", false) { actions.onShowToFriends(h) } } }
         }
     }
 }

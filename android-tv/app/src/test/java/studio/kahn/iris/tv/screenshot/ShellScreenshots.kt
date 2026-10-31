@@ -1,5 +1,13 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.ui.screens.live.toneOf
+import studio.kahn.iris.tv.ui.nav.ShellBackdrop
+import studio.kahn.iris.tv.ui.nav.LocalShellBackdrop
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -64,5 +72,26 @@ class ShellScreenshots {
         TopLevelShell(TopTab.Library, "Leonard", updateAvailable = true, onSelect = {}, onAccount = {}) {}
     }
 
+    @Composable
+    private fun OverStill(still: Color, ink: Color?) {
+        TopLevelShell(TopTab.Home, "Uplg", onSelect = {}, onAccount = {}, headerOverContent = true) {
+            ShellBackdrop { Box(Modifier.size(1280.dp, 720.dp).background(still)) }
+            val holder = LocalShellBackdrop.current
+            SideEffect { holder?.ink = ink }
+        }
+    }
+
+    @Test
+    fun nameBeforeOnALightStill() = shots.snap("shell_name_over_light_before") { OverStill(LIGHT_STILL, null) }
+
+    @Test
+    fun nameOnALightStill() = shots.snap("shell_name_over_light") { OverStill(LIGHT_STILL, toneOf(0.8).plate) }
+
+    @Test
+    fun nameOnADarkStill() = shots.snap("shell_name_over_dark") { OverStill(DARK_STILL, toneOf(0.02).plate) }
+
     private val outdated = UpdateState(installed = "1.5.0", latest = AppUpdater.VersionStatus.UpdateAvailable("1.6.0"))
 }
+
+private val LIGHT_STILL = Color(0xFFF2E8D5)
+private val DARK_STILL = Color(0xFF101418)

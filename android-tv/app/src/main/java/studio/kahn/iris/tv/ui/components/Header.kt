@@ -198,18 +198,7 @@ private fun Account(name: String, focused: Boolean, update: Boolean, ink: Color?
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(IrisSize.avatar)) {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .background(IrisColor.accentWash, IrisShape.circle),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    name.trim().take(1).uppercase(),
-                    style = IrisType.chip.copy(fontWeight = FontWeight.Bold),
-                    color = IrisColor.accent,
-                )
-            }
+            Mascot(name, IrisSize.avatar)
             if (update) {
                 Box(
                     Modifier

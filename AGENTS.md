@@ -244,6 +244,11 @@ profiles. What a profile adds is visible to friends; what it watches, live
 included, only with `share_watching`, and `friends_hidden` beats both. A declined
 request keeps its row: the asker still reads it as pending.
 
+A person's mascot comes from their name alone: the Iris mark's grammar (no mouth),
+its table and hash in `packages/iris-api/src/mascot.ts` and again in the TV's
+`ui/components/Mascot.kt`. Changing one means changing both, and the test vectors
+they share.
+
 ### The update sentence
 
 A release that users should hear about gets one `> sentence` right under its

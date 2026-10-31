@@ -261,7 +261,7 @@ private fun PageHead(state: SettingsUiState, actions: SettingsActions) {
             Text("Settings", style = IrisType.page, color = IrisColor.ink)
             val user = state.account.valueOrNull
             if (user != null) {
-                Text("${user.displayName} · ${user.email}", style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1)
+                Text(if (user.accountId == null) "${user.displayName} · ${user.email}" else user.displayName, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1)
             }
         }
         ActionButton("Watch history", actions.onOpenHistory, style = ActionStyle.Secondary, size = ActionSize.Small)

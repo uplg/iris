@@ -14,7 +14,10 @@
 	import { ui, type Theme } from '#lib/ui.svelte.ts';
 	import Brand from './Brand.svelte';
 	import Icon, { type IconName } from './Icon.svelte';
+	import Mascot from './Mascot.svelte';
 	import ToggleGroup from './ToggleGroup.svelte';
+
+	const AVATAR = 28;
 
 	const views: { href: string; label: string; icon: IconName; match: (p: string) => boolean }[] = [
 		{ href: '/', label: 'Home', icon: 'house', match: (p) => p === '/' },
@@ -62,7 +65,7 @@
 				class="btn ghost who"
 				aria-label="{name}: account, theme, sign out{asked ? `, ${plural(asked, 'friend request')}` : ''}"
 			>
-				<span class="initial" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
+				<Mascot {name} size={AVATAR} />
 				<span class="who-name">{name}</span>
 				{#if asked}<span class="asked" aria-hidden="true">{asked}</span>{/if}
 			</Popover.Trigger>
@@ -148,16 +151,6 @@
 	}
 	:global(.who) {
 		gap: var(--s-2);
-	}
-	.initial {
-		display: inline-grid;
-		place-items: center;
-		width: var(--avatar);
-		height: var(--avatar);
-		border-radius: 50%;
-		background: var(--accent-wash);
-		color: var(--accent);
-		font: var(--t-meta);
 	}
 	.asked {
 		display: inline-grid;

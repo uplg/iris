@@ -14,6 +14,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import ListRow from '#lib/components/ListRow.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
+	import Mascot from '#lib/components/Mascot.svelte';
 	import ToggleGroup from '#lib/components/ToggleGroup.svelte';
 
 	const SHARING = [
@@ -76,7 +77,7 @@
 			<ul class="plain-list">
 				{#each list.data.incoming as p (p.id)}
 					<ListRow>
-						{p.name}
+						<Mascot name={p.name} /><span>{p.name}</span>
 						{#snippet end()}
 							<button
 								class="btn primary"
@@ -98,7 +99,7 @@
 			<ul class="plain-list">
 				{#each list.data.friends as p (p.id)}
 					<ListRow>
-						{p.name}
+						<Mascot name={p.name} /><span>{p.name}</span>
 						{#snippet end()}
 							<ConfirmDialog
 								ghost
@@ -121,7 +122,7 @@
 			<ul class="plain-list">
 				{#each list.data.outgoing as p (p.id)}
 					<ListRow>
-						{p.name}
+						<Mascot name={p.name} /><span>{p.name}</span>
 						{#snippet end()}
 							<button
 								class="btn ghost"
@@ -149,7 +150,7 @@
 			<ul class="plain-list">
 				{#each found as p (p.id)}
 					<ListRow>
-						{p.name}
+						<Mascot name={p.name} /><span>{p.name}</span>
 						{#snippet end()}
 							<button class="btn" aria-label="Ask {p.name}" {...pending(g.is(`ask:${p.id}`))} onclick={() => ask(p)}>Ask</button>
 						{/snippet}

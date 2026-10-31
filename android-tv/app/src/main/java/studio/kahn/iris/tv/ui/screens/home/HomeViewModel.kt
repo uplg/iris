@@ -131,13 +131,14 @@ internal fun noteDue(release: ReleaseNote, seen: String?): String? =
 
 /** One line of what friends do; [collectionId] null when it leads nowhere. */
 @Immutable
-data class FriendLine(val key: String, val text: String, val whenSaid: String?, val collectionId: String?)
+data class FriendLine(val key: String, val friend: String, val text: String, val whenSaid: String?, val collectionId: String?)
 
 private const val FRIEND_LINES = 6
 
 internal fun friendLines(a: FriendActivity): List<FriendLine> = (a.live + a.recent).take(FRIEND_LINES).map { e ->
     FriendLine(
         key = "${e.action}:${e.friendId}:${e.collectionId ?: e.title}",
+        friend = e.friendName,
         text = friendLine(e),
         whenSaid = ago(e.at, AgoStyle.Short).takeIf { e.action != FriendAction.watching },
         collectionId = e.collectionId?.toString(),
