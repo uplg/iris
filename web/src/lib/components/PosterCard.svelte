@@ -21,14 +21,17 @@
 		actions?: Snippet;
 		/** A short fact on the art's corner ("3 new"), read with the card. */
 		badge?: string;
+		/** A control on the art's other corner (read the synopsis). */
+		artAction?: Snippet;
 	}
-	let { href, title, art, shape = 'poster', meta, status, progress, actions, badge }: Props = $props();
+	let { href, title, art, shape = 'poster', meta, status, progress, actions, badge, artAction }: Props = $props();
 </script>
 
 <li class="card whole-card {shape}">
 	<div class="art-wrap">
 		<Poster src={art} {title} {shape} />
 		{#if badge}<span class="badge">{badge}</span>{/if}
+		{#if artAction}<div class="art-action">{@render artAction()}</div>{/if}
 	</div>
 	{#if progress !== undefined}
 		<Meter share={progress} />
@@ -58,6 +61,11 @@
 		font: var(--t-meta);
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
+	}
+	.art-action {
+		position: absolute;
+		top: var(--s-2);
+		right: var(--s-2);
 	}
 	/* one column no wider than the card: a title that is one long word (a release name)
 	   would otherwise widen it to the word, the art with it */

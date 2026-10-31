@@ -97,6 +97,30 @@ describe('discover', () => {
 		expect(api.sent('POST', '/me/for-you/dismiss')[0].body).toEqual({ catalog_id: 'm1' });
 	});
 
+	it("a title's synopsis opens beside the page, with the way to its releases", async () => {
+		at('/discover?mood=chills&kind=movie');
+		backend({
+			'/me/moods/chills?kind=movie': {
+				mood: 'chills',
+				kind: 'movie',
+				items: [{ ...card('m1', 'Alien'), overview: 'A crew answers a distress call.' }]
+			}
+		});
+		await show();
+		await page.getByRole('button', { name: 'Read the synopsis of Alien' }).click();
+		const sheet = page.getByRole('dialog', { name: 'Alien' });
+		await expect.element(sheet.getByText('A crew answers a distress call.')).toBeVisible();
+		await expect.element(sheet.getByRole('link', { name: 'Find releases' })).toHaveAttribute('href', '/search?q=Alien');
+	});
+
+	it('no synopsis, no button', async () => {
+		at('/discover?mood=chills&kind=movie');
+		backend({ '/me/moods/chills?kind=movie': { mood: 'chills', kind: 'movie', items: [{ ...card('m1', 'Alien'), overview: '  ' }] } });
+		await show();
+		await expect.element(page.getByRole('button', { name: 'Not interested in Alien' })).toBeVisible();
+		await expect.element(page.getByRole('button', { name: 'Read the synopsis of Alien' })).not.toBeInTheDocument();
+	});
+
 	it('no suggestion yet: why, in words', async () => {
 		backend({ '/me/for-you/page': { shelves: [] } });
 		await show();

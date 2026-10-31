@@ -135,7 +135,7 @@ fun DiscoverContent(
             listOfNotNull(
                 KeyHint(Keys.OK, if (mood == null) "Open, find releases" else "Find releases"),
                 // Mood tiles have no menu: the hold only means something on titles.
-                if (mood != null || !state.forYou.valueOrNull.isNullOrEmpty()) KeyHint(Keys.HOLD_OK, "Not interested") else null,
+                if (mood != null || !state.forYou.valueOrNull.isNullOrEmpty()) KeyHint(Keys.HOLD_OK, "Synopsis, not interested") else null,
                 KeyHint(Keys.BACK, if (mood == null) "To the menu" else "To all moods"),
             ),
         ) { NoticeLine(state.notice) }

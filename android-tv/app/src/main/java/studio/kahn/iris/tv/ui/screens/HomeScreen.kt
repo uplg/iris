@@ -568,6 +568,6 @@ private fun Footer(notice: Notice?) {
 
 private val HOME_HINTS = listOf(
     KeyHint(Keys.OK, "Play"),
-    KeyHint(Keys.HOLD_OK, "Remove, mark watched"),
+    KeyHint(Keys.HOLD_OK, "Synopsis, remove, mark watched"),
     KeyHint(Keys.BACK, "To the menu"),
 )

@@ -22,6 +22,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Text
 import studio.kahn.iris.tv.ui.components.ActionButton
@@ -95,6 +96,9 @@ val SERVER_ACTIONS = setOf(
     CardAction.NotInterested,
 )
 
+/** Focus sits on the first action: any longer, on a small panel, that would scroll the synopsis's start away. */
+private const val SYNOPSIS_LINES = 10
+
 /** The screen's busy key while [action] of the card [key] travels: what `act` of the home and discover models set. */
 fun busyKeyOf(key: String, action: CardAction): String = when (action) {
     CardAction.GetAndPlay -> "get:${key.removePrefix(CW_PREFIX)}"
@@ -125,8 +129,17 @@ fun CardMenuHost(
             blocked = busy != null && menu.card.menu.none { busyKeyOf(menu.card.key, it) == busy },
             onAction = { onCardAction(menu.card.key, it) },
             onDismiss = focus::dismiss,
+            details = { CardSynopsis(menu.card) },
         )
     }
+}
+
+/** What a suggested title is about, above its actions; nothing for a card without a synopsis. */
+@Composable
+fun CardSynopsis(card: CardModel) {
+    val overview = card.overview ?: return
+    card.meta?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+    Text(overview, style = IrisType.reading, color = IrisColor.ink, maxLines = SYNOPSIS_LINES, overflow = TextOverflow.Ellipsis)
 }
 
 /** One card: a 16:9 still ([still]) or a 2:3 poster ([fillCell] in a grid), OK = its primary action, hold OK = its menu. */
