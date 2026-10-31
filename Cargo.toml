@@ -108,12 +108,10 @@ rand = "0.10.3"
 # Passkeys (optional second way in, next to passwords): same stack as
 # ariane/maison. `conditional-ui` = usernameless sign-in from autofill;
 # `webauthn-rs-proto` at the same version for the options it builds.
-# webauthn-rs-core links OpenSSL (signature checks only, TLS stays rustls):
-# `vendored` compiles it from source and links it statically, so the Wolfi
-# runtime needs no libssl3.
-webauthn-rs = { version = "0.5.5", default-features = false, features = ["conditional-ui"] }
-webauthn-rs-proto = "0.5.5"
-openssl = { version = "0.10.81", features = ["vendored"] }
+# 0.6 replaced OpenSSL with RustCrypto, which brings rsa, pkcs1 and kbkdf
+# release candidates through crypto-glue (user's choice, 2026-10-31).
+webauthn-rs = { version = "0.6.2", default-features = false, features = ["conditional-ui"] }
+webauthn-rs-proto = "0.6.2"
 # Software authenticator + client for end-to-end passkey tests.
 passkey = { version = "0.6.0", features = ["rust-crypto"] }
 
@@ -164,9 +162,3 @@ librqbit = { version = "9.1.0", default-features = false, features = ["rust-tls"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-
-# librqbit 9.1.0 was tagged upstream (2026-10-29) before it reached crates.io.
-# Pinned to the v9.1.0 tag's commit; drop this block once the crate is
-# published and `cargo update -p librqbit` takes it from the registry.
-[patch.crates-io]
-librqbit = { git = "https://github.com/ikatson/rqbit", rev = "4309d38769ef93f6ee4f01a1ab147009a197fa8f" }

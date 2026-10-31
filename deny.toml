@@ -11,6 +11,11 @@ ignore = [
     # `SharedRb<Heap<u8>>`, and `u8` has no `Drop`. Drop this entry once
     # librqbit-utp moves to ringbuf >= 0.5.2.
     "RUSTSEC-2026-0293",
+    # rsa Marvin attack: timing recovers a private key. Transitive via
+    # webauthn-rs 0.6 → crypto-glue (rsa 0.10.0-rc). Unreachable here: the
+    # server only verifies RS256 signatures with public keys and holds no RSA
+    # private key. Drop this entry once rsa ships a fix.
+    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
@@ -46,6 +51,3 @@ multiple-versions = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# librqbit 9.1.0 through the root Cargo.toml's `[patch.crates-io]`, pinned to
-# the v9.1.0 tag's commit until crates.io has the release. Goes with the patch.
-allow-git = ["https://github.com/ikatson/rqbit"]

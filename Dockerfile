@@ -98,10 +98,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # mounts stay: they hold downloaded sources, not build output.
 #
 # The chef base must stay on trixie — the runtime stage's glibc note depends
-# on that pairing. The base stays on 1.98.0 (Docker Hub lags Rust point
-# releases; unverified for 1.99.1 on 2026-10-17) and rustup installs the
-# toolchain `rust-toolchain.toml` names (1.99.1) into its own cached layer,
-# before any source is copied. Swap the base tag once a matching image exists.
+# on that pairing. Docker Hub can lag Rust point releases: rustup installs the
+# toolchain `rust-toolchain.toml` names into its own cached layer, before any
+# source is copied, so the base tag only has to follow once one exists.
 #
 # `--bin iris` on `cook` mirrors the final build, so cook doesn't also compile
 # every crate's dev-dependencies. `migrations/` lands in the app layer only:

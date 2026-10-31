@@ -17,13 +17,15 @@ use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use iris_core::ids::UserId;
 use iris_db::SqlitePool;
 use iris_db::passkeys::PasskeyRow;
 use url::Url;
 use uuid::Uuid;
 use webauthn_rs::prelude::{
-    CreationChallengeResponse, CredentialID, DiscoverableAuthentication, DiscoverableKey, Passkey,
+    CreationChallengeResponse, CredentialID, DiscoverableAuthentication, Passkey,
     PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential,
     RequestChallengeResponse, Webauthn, WebauthnBuilder,
 };
@@ -207,7 +209,7 @@ impl Passkeys {
             db,
             &iris_db::passkeys::NewPasskey {
                 user_id,
-                credential_id: &credential_text(pk.cred_id())?,
+                credential_id: &credential_text(pk.cred_id()),
                 passkey_json: &stored.json,
                 name,
                 backup_eligible: stored.backup_eligible,
@@ -252,7 +254,7 @@ impl Passkeys {
             .webauthn
             .identify_discoverable_authentication(credential)
             .map_err(|_| ApiError::Unauthorized)?;
-        let cred_id = credential_text(&CredentialID::from(raw_id.to_vec()))?;
+        let cred_id = credential_text(raw_id);
         let row = iris_db::passkeys::find_by_credential(db, &cred_id)
             .await?
             .ok_or(ApiError::Unauthorized)?;
@@ -264,7 +266,7 @@ impl Passkeys {
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("stored passkey: {e}")))?;
         let result = self
             .webauthn
-            .finish_discoverable_authentication(credential, state, &[DiscoverableKey::from(&pk)])
+            .finish_discoverable_authentication_v2(credential, state, &pk)
             .map_err(|e| {
                 tracing::warn!(error = %e, user = %row.user_id, "passkey sign-in refused");
                 ApiError::Unauthorized
@@ -292,17 +294,12 @@ fn expired() -> ApiError {
 }
 
 /// A credential id as text: base64url, as webauthn-rs writes it.
-fn credential_text(id: &CredentialID) -> ApiResult<String> {
-    match serde_json::to_value(id) {
-        Ok(serde_json::Value::String(s)) => Ok(s),
-        _ => Err(ApiError::Internal(anyhow::anyhow!(
-            "credential id not a string"
-        ))),
-    }
+fn credential_text(id: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(id)
 }
 
 fn credential_id(text: &str) -> Option<CredentialID> {
-    serde_json::from_value(serde_json::Value::String(text.into())).ok()
+    URL_SAFE_NO_PAD.decode(text).ok()
 }
 
 /// The serialised credential and the backup flags shown in the list.
@@ -388,6 +385,29 @@ mod tests {
         }
     }
 
+    /// What a browser sends: the soft authenticator serialises its bytes as
+    /// arrays, webauthn-rs only reads them as base64url.
+    fn as_browser_json(value: serde_json::Value) -> serde_json::Value {
+        use serde_json::Value::{Array, Object, String};
+        match value {
+            Array(items) if !items.is_empty() && items.iter().all(serde_json::Value::is_u64) => {
+                let bytes: Vec<u8> = items
+                    .iter()
+                    .filter_map(serde_json::Value::as_u64)
+                    .filter_map(|b| u8::try_from(b).ok())
+                    .collect();
+                String(super::credential_text(&bytes))
+            }
+            Array(items) => Array(items.into_iter().map(as_browser_json).collect()),
+            Object(map) => Object(
+                map.into_iter()
+                    .map(|(k, v)| (k, as_browser_json(v)))
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+
     #[tokio::test]
     async fn register_then_sign_in_with_the_same_device() {
         let db = iris_db::test_support::migrated_pool().await;
@@ -418,7 +438,9 @@ mod tests {
             .register(origin.clone(), request, DefaultClientData)
             .await
             .unwrap();
-        let credential = serde_json::from_value(serde_json::to_value(created).unwrap()).unwrap();
+        let credential =
+            serde_json::from_value(as_browser_json(serde_json::to_value(created).unwrap()))
+                .unwrap();
         let row = passkeys
             .finish_registration(&db, user.id, &ceremony, &credential, "Mac")
             .await
@@ -439,7 +461,8 @@ mod tests {
             .authenticate(origin, request, DefaultClientData)
             .await
             .unwrap();
-        let assertion = serde_json::from_value(serde_json::to_value(got).unwrap()).unwrap();
+        let assertion =
+            serde_json::from_value(as_browser_json(serde_json::to_value(got).unwrap())).unwrap();
         let signed_in = passkeys
             .finish_login(&db, &ceremony, &assertion)
             .await
@@ -449,6 +472,23 @@ mod tests {
             .await
             .unwrap();
         assert!(rows[0].last_used_at.is_some());
+    }
+
+    /// The row a passkey made on webauthn-rs 0.5 left in the database.
+    const STORED_0_5: &str = r#"{"cred":{"cred_id":"ZgPq_8TUNRTeVHQ_mdTG2w","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":"-Dhq5hD9AvG76ipiqSWgG587_lo5ZcPE_IQcQW7uR-U","y":"0KFs2C1c9q2CE0EYc_-8RTyTLVWqCW0plaFTm0rTtNw"}}},"counter":0,"transports":null,"user_verified":true,"backup_eligible":true,"backup_state":true,"registration_policy":"required","extensions":{"cred_protect":"Ignored","hmac_create_secret":"NotRequested","appid":"NotRequested","cred_props":{"Unsigned":{"rk":true}}},"attestation":{"data":"None","metadata":"None"},"attestation_format":"none"}}"#;
+
+    #[test]
+    fn a_passkey_stored_by_webauthn_rs_0_5_still_reads() {
+        let pk: webauthn_rs::prelude::Passkey = serde_json::from_str(STORED_0_5).unwrap();
+        assert_eq!(serde_json::to_string(&pk).unwrap(), STORED_0_5);
+        assert_eq!(
+            super::credential_text(pk.cred_id()),
+            "ZgPq_8TUNRTeVHQ_mdTG2w"
+        );
+        assert_eq!(
+            super::credential_id("ZgPq_8TUNRTeVHQ_mdTG2w").as_ref(),
+            Some(pk.cred_id())
+        );
     }
 
     #[test]
