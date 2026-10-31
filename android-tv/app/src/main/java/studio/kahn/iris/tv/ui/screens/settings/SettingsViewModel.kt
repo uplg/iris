@@ -456,14 +456,14 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun addProfile(name: String) {
+    fun addProfile(name: String, copyHistory: Boolean) {
         val clean = name.trim()
         if (clean.isEmpty()) {
             mutable.update { it.copy(dialogError = DialogError("Enter a name.")) }
             return
         }
         act(Busy.PROFILE, SettingsSection.Profiles, inDialog = true) { api ->
-            val next = api.createProfile(CreateProfileRequest(name = clean))
+            val next = api.createProfile(CreateProfileRequest(name = clean, copyHistory = copyHistory))
             mutable.update { it.copy(profiles = Loadable.Ready(next)) }
             "Profile $clean added."
         }

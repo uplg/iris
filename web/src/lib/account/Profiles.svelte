@@ -23,6 +23,8 @@
 	const value = loadable(list);
 	const g = new Gesture();
 	let name = $state('');
+	let copy = $state(false);
+	const main = $derived(list.data?.find((p) => p.main)?.name);
 	let field = $state<HTMLInputElement>();
 
 	function add(e: SubmitEvent) {
@@ -30,10 +32,11 @@
 		const wanted = name.trim();
 		if (!wanted) return field?.focus();
 		return g.run(
-			() => profiles.create(wanted),
+			() => profiles.create(wanted, copy),
 			(next) => {
 				queryClient.setQueryData(KEYS.profiles, next);
 				name = '';
+				copy = false;
 				ui.toast(`Profile ${wanted} added.`);
 			},
 			'add',
@@ -99,6 +102,9 @@
 			<p class="form-error" id="profile-error">{g.error}</p>
 		</div>
 		<button class="btn" {...pending(g.is('add'))}><Icon name="plus" busy={g.is('add')} />Add</button>
+		{#if main}
+			<label class="copy"><input type="checkbox" bind:checked={copy} />Start with {main}’s history and watchlist</label>
+		{/if}
 	</form>
 </Group>
 
@@ -108,6 +114,13 @@
 		flex-wrap: wrap;
 		align-items: start;
 		gap: var(--s-3);
+	}
+	.copy {
+		display: inline-flex;
+		flex-basis: 100%;
+		align-items: center;
+		gap: var(--s-2);
+		min-height: var(--control-h);
 	}
 	.add .field {
 		flex: 1 1 12rem;

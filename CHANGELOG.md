@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Profiles**: a shared account holds up to six profiles, each with its own
   history, watchlist and preferences. An account with several asks who is
   watching, on the web and the TV. The password and passkeys stay on the main
-  profile; a password change ends the sessions of every profile.
+  profile; a password change ends the sessions of every profile. A new profile
+  can start with the main profile's history and watchlist, and any title can be
+  removed from a history.
 - **Friends**: found by name, never by email, and asked; declining tells the
   other person nothing. Home says what friends play now and watched or added
   lately. What a profile watches reaches friends only once it shares it, and a

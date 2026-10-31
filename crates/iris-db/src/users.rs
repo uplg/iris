@@ -89,11 +89,14 @@ pub const MAX_PROFILES: usize = 6;
 
 /// A new profile under `account`, `None` once it holds [`MAX_PROFILES`]. Its
 /// email only fills the unique column and its hash verifies nothing: a profile
-/// is entered from its account, never signed in to.
+/// is entered from its account, never signed in to. With `copy_history` it
+/// starts from a copy of the account's watched titles, resume points, watchlist
+/// and what was dismissed from them; each then lives its own life.
 pub async fn create_profile(
     pool: &SqlitePool,
     account: UserId,
     name: &str,
+    copy_history: bool,
 ) -> Result<Option<User>, sqlx::Error> {
     let owner: Uuid = account.into();
     let id = Uuid::new_v4();
@@ -119,6 +122,32 @@ pub async fn create_profile(
     .bind(owner)
     .execute(&mut *tx)
     .await?;
+    if copy_history {
+        for sql in [
+            "INSERT INTO playback_progress (user_id, infohash, file_idx, position_seconds, \
+               duration_seconds, audio_track_idx, subtitle_track_idx, completed, last_watched_at) \
+             SELECT ?1, infohash, file_idx, position_seconds, duration_seconds, audio_track_idx, \
+               subtitle_track_idx, completed, last_watched_at \
+             FROM playback_progress WHERE user_id = ?2",
+            "INSERT INTO series_follows (id, user_id, normalized_name, name, tmdb_id, \
+               last_checked_at, last_visited_at, created_at) \
+             SELECT randomblob(16), ?1, normalized_name, name, tmdb_id, last_checked_at, \
+               last_visited_at, created_at \
+             FROM series_follows WHERE user_id = ?2",
+            "INSERT INTO cw_dismissed (user_id, collection_id, dismissed_at) \
+             SELECT ?1, collection_id, dismissed_at FROM cw_dismissed WHERE user_id = ?2",
+            "INSERT INTO ghost_dismissed (user_id, collection_id, dismissed_at) \
+             SELECT ?1, collection_id, dismissed_at FROM ghost_dismissed WHERE user_id = ?2",
+            "INSERT INTO gone_release_dismissed (user_id, infohash, dismissed_at) \
+             SELECT ?1, infohash, dismissed_at FROM gone_release_dismissed WHERE user_id = ?2",
+        ] {
+            sqlx::query(sql)
+                .bind(id)
+                .bind(owner)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
     tx.commit().await?;
     Ok(Some(User {
         id: UserId::from(id),
@@ -471,7 +500,7 @@ mod tests {
     async fn a_profile_cannot_be_signed_in_to_and_stays_out_of_the_accounts() {
         let pool = migrated_pool().await;
         let account = make_user(&pool, "shared@t.test").await;
-        let profile = create_profile(&pool, account, "Muriel")
+        let profile = create_profile(&pool, account, "Muriel", false)
             .await
             .unwrap()
             .unwrap();
@@ -499,16 +528,26 @@ mod tests {
         let pool = migrated_pool().await;
         let account = make_user(&pool, "shared@t.test").await;
         for _ in 1..MAX_PROFILES {
-            assert!(create_profile(&pool, account, "p").await.unwrap().is_some());
+            assert!(
+                create_profile(&pool, account, "p", false)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
         }
-        assert!(create_profile(&pool, account, "p").await.unwrap().is_none());
+        assert!(
+            create_profile(&pool, account, "p", false)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn a_password_change_ends_the_sessions_of_every_profile() {
         let pool = migrated_pool().await;
         let account = make_user(&pool, "shared@t.test").await;
-        let profile = create_profile(&pool, account, "Muriel")
+        let profile = create_profile(&pool, account, "Muriel", false)
             .await
             .unwrap()
             .unwrap();
@@ -539,7 +578,7 @@ mod tests {
         let pool = migrated_pool().await;
         let admin = make_user(&pool, "admin@t.test").await;
         let account = make_user(&pool, "shared@t.test").await;
-        let profile = create_profile(&pool, account, "Muriel")
+        let profile = create_profile(&pool, account, "Muriel", false)
             .await
             .unwrap()
             .unwrap();
@@ -554,6 +593,68 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(UserId::from(owner), admin);
+    }
+
+    #[tokio::test]
+    async fn a_profile_can_start_from_the_accounts_history_and_then_lives_its_own() {
+        let pool = migrated_pool().await;
+        let account = make_user(&pool, "shared@t.test").await;
+        insert_torrent(&pool, "cccc", account).await;
+        sqlx::query(
+            "INSERT INTO playback_progress (user_id, infohash, file_idx, position_seconds, last_watched_at) \
+             VALUES (?1, 'cccc', 0, 120, ?2)",
+        )
+        .bind(Uuid::from(account))
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO series_follows (id, user_id, normalized_name, name, created_at) \
+             VALUES (?1, ?2, 'severance', 'Severance', ?3)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::from(account))
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let count = async |table: &'static str, user: UserId| -> i64 {
+            let sql = match table {
+                "progress" => "SELECT COUNT(*) FROM playback_progress WHERE user_id = ?1",
+                _ => "SELECT COUNT(*) FROM series_follows WHERE user_id = ?1",
+            };
+            sqlx::query_as::<_, (i64,)>(sql)
+                .bind(Uuid::from(user))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .0
+        };
+
+        let empty = create_profile(&pool, account, "Muriel", false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(count("progress", empty.id).await, 0);
+
+        let copied = create_profile(&pool, account, "Lyros", true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(count("progress", copied.id).await, 1);
+        assert_eq!(count("follows", copied.id).await, 1);
+
+        sqlx::query("DELETE FROM playback_progress WHERE user_id = ?1")
+            .bind(Uuid::from(copied.id))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count("progress", account).await,
+            1,
+            "the account keeps its own"
+        );
     }
 
     #[tokio::test]

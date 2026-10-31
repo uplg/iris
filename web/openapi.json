@@ -5551,6 +5551,10 @@
           "name"
         ],
         "properties": {
+          "copy_history": {
+            "type": "boolean",
+            "description": "Start from a copy of the main profile's history and watchlist."
+          },
           "name": {
             "type": "string"
           }

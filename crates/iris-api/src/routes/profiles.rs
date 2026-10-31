@@ -36,6 +36,9 @@ pub struct ProfileView {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateProfileRequest {
     pub name: String,
+    /// Start from a copy of the main profile's history and watchlist.
+    #[serde(default)]
+    pub copy_history: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -107,7 +110,7 @@ pub(crate) async fn create(
 ) -> ApiResult<Json<Vec<ProfileView>>> {
     let name = crate::routes::me::checked_display_name(&body.name)?;
     let me = current(&state, &user).await?;
-    if iris_db::users::create_profile(state.db(), me.account(), name)
+    if iris_db::users::create_profile(state.db(), me.account(), name, body.copy_history)
         .await?
         .is_none()
     {
