@@ -1,29 +1,32 @@
 <script lang="ts">
-	// What friends watch and add: who is playing right now first, then what is recent. Nothing at
-	// all without friends or news. Read again by the query, never a timer of ours.
+	// What friends watch and add, a line each: who is playing right now first, then what is
+	// recent. Nothing at all without friends or news. Read again by the query, never a timer of ours.
 	import { createQuery } from '@tanstack/svelte-query';
 	import { ago } from '@iris/api/format';
 	import Mascot from '#lib/components/Mascot.svelte';
 	import { read } from '#lib/queries.ts';
-	import { friendLine } from './data.ts';
+	import { friendRows } from './data.ts';
 
 	const VISIT_MS = 30_000;
-	const SHOWN = 6;
 
 	const activity = createQuery(() => ({ ...read.friendActivity(), refetchInterval: VISIT_MS }));
-	const lines = $derived(activity.data ? [...activity.data.live, ...activity.data.recent].slice(0, SHOWN) : []);
+	const rows = $derived(activity.data ? friendRows(activity.data) : []);
 </script>
 
-{#if lines.length}
+{#if rows.length}
 	<section class="friends" aria-labelledby="friends-now-title">
 		<h2 id="friends-now-title" class="eyebrow">Friends</h2>
 		<ul class="plain-list">
-			{#each lines as e (`${e.action}:${e.friend_id}:${e.collection_id ?? e.title}`)}
+			{#each rows as row (row.friend_id)}
 				<li>
-					<Mascot name={e.friend_name} />
+					<Mascot name={row.name} />
 					<span class="line">
-						{#if e.collection_id}<a href="/collection/{e.collection_id}">{friendLine(e)}</a>{:else}<span>{friendLine(e)}</span>{/if}
-						{#if e.action !== 'watching'}<span class="when">{ago(e.at, 'short')}</span>{/if}
+						<span>
+							<strong>{row.name}</strong>{#each row.items as item, i (item.key)}{i ? ', ' : ' '}{item.verb
+									? `${item.verb} `
+									: ''}{#if item.collection_id}<a href="/collection/{item.collection_id}">{item.title}</a>{:else}{item.title}{/if}{/each}
+						</span>
+						{#if row.at}<span class="when">{ago(row.at, 'short')}</span>{/if}
 					</span>
 				</li>
 			{/each}
@@ -52,6 +55,9 @@
 	a {
 		color: var(--ink);
 		text-decoration: none;
+	}
+	strong {
+		font-weight: 600;
 	}
 	a:hover {
 		color: var(--accent);

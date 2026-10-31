@@ -28,15 +28,20 @@ fun rightNow(s: HomeSummary): List<String> = buildList {
     s.friendRequests?.takeIf { it > 0 }?.let { add(plural(it, "friend request")) }
 }
 
-/** What a friend does, in a sentence: "Muriel is watching Severance · S2:E4". */
-fun friendLine(e: FriendEvent): String {
-    val does = when (e.action) {
-        FriendAction.watching -> "is watching"
-        FriendAction.added -> "added"
-        else -> "watched"
+private fun does(action: FriendAction): String = when (action) {
+    FriendAction.watching -> "is watching"
+    FriendAction.added -> "added"
+    else -> "watched"
+}
+
+/** A friend's news in a sentence, a verb repeated once: "Muriel added Dune, watched The Bear · S3:E1, Severance". */
+fun friendLine(events: List<FriendEvent>): String {
+    val news = events.mapIndexed { i, e ->
+        val verb = if (events.getOrNull(i - 1)?.action == e.action) "" else "${does(e.action)} "
+        val code = episodeCode(e.season, e.episode)?.let { " · $it" }.orEmpty()
+        "$verb${e.title}$code"
     }
-    val code = episodeCode(e.season, e.episode)?.let { " · $it" }.orEmpty()
-    return "${e.friendName} $does ${e.title}$code"
+    return "${events.first().friendName} ${news.joinToString(", ")}"
 }
 
 /** What is still downloading in each collection, as a share of its bytes (0 to 100). */

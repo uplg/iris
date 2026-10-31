@@ -129,21 +129,26 @@ private fun FeaturedResponse.pick() = movies.firstOrNull() ?: series.firstOrNull
 internal fun noteDue(release: ReleaseNote, seen: String?): String? =
     release.note.takeIf { seen != null && seen != release.version }
 
-/** One line of what friends do; [collectionId] null when it leads nowhere. */
+/** One friend's line of what friends do; [collectionId], their latest title's, null when it leads nowhere. */
 @Immutable
 data class FriendLine(val key: String, val friend: String, val text: String, val whenSaid: String?, val collectionId: String?)
 
-private const val FRIEND_LINES = 6
+private const val FRIENDS_SHOWN = 3
+private const val SHOWN_PER_FRIEND = 3
 
-internal fun friendLines(a: FriendActivity): List<FriendLine> = (a.live + a.recent).take(FRIEND_LINES).map { e ->
-    FriendLine(
-        key = "${e.action}:${e.friendId}:${e.collectionId ?: e.title}",
-        friend = e.friendName,
-        text = friendLine(e),
-        whenSaid = ago(e.at, AgoStyle.Short).takeIf { e.action != FriendAction.watching },
-        collectionId = e.collectionId?.toString(),
-    )
-}
+/** Web `friendRows`: a line each, who plays now first. */
+internal fun friendLines(a: FriendActivity): List<FriendLine> =
+    (a.live + a.recent).groupBy { it.friendId }.values.take(FRIENDS_SHOWN).map { events ->
+        val shown = events.take(SHOWN_PER_FRIEND)
+        val latest = shown.first()
+        FriendLine(
+            key = latest.friendId.toString(),
+            friend = latest.friendName,
+            text = friendLine(shown),
+            whenSaid = ago(latest.at, AgoStyle.Short).takeIf { latest.action != FriendAction.watching },
+            collectionId = shown.firstNotNullOfOrNull { it.collectionId }?.toString(),
+        )
+    }
 
 /** The home's words from what it read. Pure: the unit tests feed it. */
 internal fun homeUi(d: HomeData): HomeUiState {

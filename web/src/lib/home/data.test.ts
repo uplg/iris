@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
-import { downloadsByCollection, friendLine, noteDue, rightNow, secondsLeft } from './data.ts';
+import { downloadsByCollection, friendRows, noteDue, rightNow, secondsLeft } from './data.ts';
 
 describe('home words', () => {
 	it('"Right now": only what is downloading, in words', () => {
@@ -18,10 +18,31 @@ describe('home words', () => {
 		expect(rightNow({ downloading: 0, downloading_pct: 0, new_episodes: 0, seeding: 0 })).toEqual([]);
 	});
 
-	it('what a friend does, in a sentence', () => {
-		const e = { friend_id: 'f', friend_name: 'Muriel', title: 'Severance', at: '2026-10-05T20:00:00Z' };
-		expect(friendLine({ ...e, action: 'watching', season: 2, episode: 4 })).toBe('Muriel is watching Severance · S2:E4');
-		expect(friendLine({ ...e, action: 'added' })).toBe('Muriel added Severance');
+	describe('friends, a line each', () => {
+		const at = '2026-10-05T20:00:00Z';
+		const muriel = { friend_id: 'f', friend_name: 'Muriel', at };
+		const news = (title: string, action: 'watched' | 'added' = 'watched') => ({ ...muriel, action, title });
+
+		it('a friend and their latest three, a verb repeated once', () => {
+			const [row, ...others] = friendRows({
+				live: [{ ...muriel, action: 'watching', title: 'Severance', season: 2, episode: 4 }],
+				recent: [news('Dune'), news('Alien'), news('Arcane', 'added')]
+			});
+			expect(others).toEqual([]);
+			expect(row.at).toBeNull();
+			expect(row.items.map((i) => [i.verb, i.title])).toEqual([
+				['is watching', 'Severance · S2:E4'],
+				['watched', 'Dune'],
+				[null, 'Alien']
+			]);
+		});
+
+		it('three friends at most, when said from their latest', () => {
+			const someone = (id: string) => ({ ...news('Dune'), friend_id: id, friend_name: id });
+			const rows = friendRows({ live: [], recent: ['a', 'b', 'a', 'c', 'd'].map(someone) });
+			expect(rows.map((r) => r.name)).toEqual(['a', 'b', 'c']);
+			expect(rows[0].at).toBe(at);
+		});
 	});
 
 	it('the update sentence: after an update only, and only when the release has one', () => {

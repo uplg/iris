@@ -175,9 +175,8 @@ class HomeScreenshots {
                 heroPending = false,
                 rightNow = Loadable.Ready(listOf("2 friend requests")),
                 friends = listOf(
-                    FriendLine("a", "Muriel", "Muriel is watching Severance · S2:E4", null, "c1"),
+                    FriendLine("a", "Muriel", "Muriel is watching Severance · S2:E4, watched The Bear · S3:E1, Shōgun · S1:E7", null, "c1"),
                     FriendLine("b", "Vincent", "Vincent added Dune: Part Two", "2 Oct", "c2"),
-                    FriendLine("c", "Muriel", "Muriel watched The Bear · S3:E1", "1 Oct", "c3"),
                 ),
             ),
         )
