@@ -468,6 +468,8 @@ pub(crate) struct HomeSummary {
     /// Deprecated: always `0` (the watchlist cards count their own).
     #[schema(deprecated)]
     new_episodes: i64,
+    /// Friend requests waiting for this profile's answer.
+    friend_requests: Option<i64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -484,8 +486,9 @@ pub(crate) struct DiskSpace {
 )]
 pub(crate) async fn summary(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
 ) -> ApiResult<Json<HomeSummary>> {
+    let friend_requests = iris_db::friends::incoming_count(state.db(), user.id).await?;
     let torrents = state.engine().list();
     let active: Vec<_> = torrents
         .iter()
@@ -508,6 +511,7 @@ pub(crate) async fn summary(
         downloading_eta_seconds,
         seeding: 0,
         new_episodes: 0,
+        friend_requests: Some(friend_requests),
     }))
 }
 

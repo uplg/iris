@@ -508,6 +508,7 @@ pub async fn merge_into(
          WHERE collection_id = ?1",
         "UPDATE OR IGNORE cw_dismissed SET collection_id = ?2 WHERE collection_id = ?1",
         "UPDATE OR IGNORE ghost_dismissed SET collection_id = ?2 WHERE collection_id = ?1",
+        "UPDATE OR IGNORE friends_hidden SET collection_id = ?2 WHERE collection_id = ?1",
     ] {
         sqlx::query(sql)
             .bind(loser.id)

@@ -2325,6 +2325,260 @@
         }
       }
     },
+    "/api/me/friends": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_overview",
+        "responses": {
+          "200": {
+            "description": "Friends, requests and what is shared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendsOverview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/friends/activity": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_activity",
+        "responses": {
+          "200": {
+            "description": "What friends watch and add",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FriendActivity"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/friends/hidden": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_hide",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The release's whole title is kept from friends"
+          },
+          "404": {
+            "description": "No such release"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_unhide",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnhideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Friends can see it again"
+          }
+        }
+      }
+    },
+    "/api/me/friends/search": {
+      "get": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Part of a display name, two characters at least.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profiles to ask, by name; never an email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PersonView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/friends/sharing": {
+      "put": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_set_sharing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved"
+          }
+        }
+      }
+    },
+    "/api/me/friends/{id}": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_ask",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile to ask",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Asked; when they had asked first, you are friends"
+          },
+          "404": {
+            "description": "No such profile"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The friend, or who was asked",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Friendship ended or request taken back"
+          },
+          "404": {
+            "description": "Nothing to remove"
+          }
+        }
+      }
+    },
+    "/api/me/friends/{id}/accept": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_accept",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Who asked",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "You are friends"
+          },
+          "404": {
+            "description": "No such request"
+          }
+        }
+      }
+    },
+    "/api/me/friends/{id}/decline": {
+      "post": {
+        "tags": [
+          "friends"
+        ],
+        "operationId": "friends_decline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Who asked",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Declined; they are not told"
+          },
+          "404": {
+            "description": "No such request"
+          }
+        }
+      }
+    },
     "/api/me/gone/dismiss": {
       "post": {
         "tags": [
@@ -5947,6 +6201,129 @@
           }
         }
       },
+      "FriendAction": {
+        "type": "string",
+        "enum": [
+          "watching",
+          "watched",
+          "added"
+        ]
+      },
+      "FriendActivity": {
+        "type": "object",
+        "required": [
+          "live",
+          "recent"
+        ],
+        "properties": {
+          "live": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FriendEvent"
+            },
+            "description": "What friends are playing this minute."
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FriendEvent"
+            },
+            "description": "What they watched and added lately, newest first."
+          }
+        }
+      },
+      "FriendEvent": {
+        "type": "object",
+        "required": [
+          "friend_id",
+          "friend_name",
+          "action",
+          "title",
+          "at"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/FriendAction"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "friend_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "friend_name": {
+            "type": "string"
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "FriendsOverview": {
+        "type": "object",
+        "required": [
+          "friends",
+          "incoming",
+          "outgoing",
+          "share_watching",
+          "hidden"
+        ],
+        "properties": {
+          "friends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonView"
+            }
+          },
+          "hidden": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HiddenTitleView"
+            }
+          },
+          "incoming": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonView"
+            },
+            "description": "Requests waiting for this profile's answer."
+          },
+          "outgoing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonView"
+            },
+            "description": "Requests this profile sent, still unanswered as far as it can tell."
+          },
+          "share_watching": {
+            "type": "boolean",
+            "description": "Whether friends see what this profile watches."
+          }
+        }
+      },
       "GcReport": {
         "type": "object",
         "required": [
@@ -6223,6 +6600,41 @@
           "hlg"
         ]
       },
+      "HiddenTitleView": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "HideRequest": {
+        "type": "object",
+        "required": [
+          "infohash"
+        ],
+        "properties": {
+          "infohash": {
+            "type": "string"
+          }
+        }
+      },
       "HistoryItem": {
         "type": "object",
         "description": "One row of the caller's full watch history (in-progress AND completed),\nincluding items whose source torrent has since been deleted\n(disk-reclaim GC, admin cleanup) — unlike [`ContinueWatchingItem`], an\nentry never just vanishes; `deleted` flags it instead so the client can\nshow \"no longer available\" rather than a dead resume link.",
@@ -6394,6 +6806,14 @@
             "type": "number",
             "format": "double",
             "description": "Overall progress of those downloads, by bytes (0–100)."
+          },
+          "friend_requests": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Friend requests waiting for this profile's answer."
           },
           "new_episodes": {
             "type": "integer",
@@ -7541,6 +7961,22 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonView": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           },
           "name": {
             "type": "string"
@@ -8756,6 +9192,17 @@
           }
         }
       },
+      "SharingRequest": {
+        "type": "object",
+        "required": [
+          "share_watching"
+        ],
+        "properties": {
+          "share_watching": {
+            "type": "boolean"
+          }
+        }
+      },
       "Shelf": {
         "type": "object",
         "required": [
@@ -9778,6 +10225,24 @@
           }
         ]
       },
+      "UnhideRequest": {
+        "type": "object",
+        "properties": {
+          "collection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "infohash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdatePlaybackPrefs": {
         "type": "object",
         "properties": {
@@ -10555,6 +11020,10 @@
     {
       "name": "admin",
       "description": "Admin-only: invitations, users, storage / GC, remux cache, presence, diagnostics, SéléoTV shares."
+    },
+    {
+      "name": "friends",
+      "description": "Friends between profiles, and what they share."
     },
     {
       "name": "health",

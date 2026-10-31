@@ -39,6 +39,7 @@ pub mod collections;
 pub mod device_codes;
 pub mod episode_files;
 pub mod follows;
+pub mod friends;
 pub mod invitations;
 pub mod migrate;
 pub mod passkeys;

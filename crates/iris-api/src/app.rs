@@ -63,6 +63,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/devices", routes::devices::me_router())
         .nest("/passkeys", routes::passkeys::me_router())
         .nest("/follows", routes::follows::router())
+        .nest("/friends", routes::friends::router())
         .nest("/preferences", routes::preferences::router())
         .nest(
             "/playback-preferences",

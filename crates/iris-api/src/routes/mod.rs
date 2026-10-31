@@ -5,6 +5,7 @@ pub mod discover;
 pub mod extract;
 pub mod follows;
 pub mod foryou;
+pub mod friends;
 pub mod health;
 pub mod library;
 pub mod live_tv;
