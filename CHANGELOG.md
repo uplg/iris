@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-31
+
+> Profiles for shared accounts, friends, and a little mascot for everyone.
+
 ### Added
 
 - **What changed, in a sentence**: after an update the home says it once, on
@@ -1457,7 +1461,8 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.6.4...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.7.0...HEAD
+[1.7.0]: https://github.com/uplg/iris/compare/1.6.4...1.7.0
 [1.6.4]: https://github.com/uplg/iris/compare/1.6.3...1.6.4
 [1.6.3]: https://github.com/uplg/iris/compare/1.6.2...1.6.3
 [1.6.2]: https://github.com/uplg/iris/compare/1.6.1...1.6.2
