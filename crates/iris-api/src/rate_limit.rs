@@ -1,26 +1,24 @@
-//! Per-IP rate limiting for the auth surface, behind a Cloudflare tunnel.
+//! Per-IP rate limiting for the auth surface, behind a reverse proxy.
 //!
-//! Wraps [`tower_governor`] with a Cloudflare-aware [`KeyExtractor`]:
-//! the tunnel terminates locally (peer IP = loopback for every request),
-//! so we cannot use `PeerIpKeyExtractor` / `SmartIpKeyExtractor`. Instead
-//! we trust the `CF-Connecting-IP` header — Cloudflare sets it to the
-//! real client IP on every request, and because the only path into the
-//! origin is through the tunnel, an attacker cannot spoof it without
-//! first bypassing Cloudflare.
+//! Wraps [`tower_governor`] with a [`KeyExtractor`] that reads the proxy's
+//! word for the client: the proxy runs on the host (peer IP = the same local
+//! address for every request), so we cannot use `PeerIpKeyExtractor` /
+//! `SmartIpKeyExtractor`. Instead we trust the `CF-Connecting-IP` header. The
+//! proxy must set it to the client's address on every request, replacing
+//! whatever the client sent (`docs/DEPLOYMENT.md` §4), and because the HTTP
+//! port is published on loopback only, an attacker cannot forge it without
+//! first getting past the proxy.
 //!
-//! Normal traffic — including a LAN Android TV reaching Iris through the
-//! Cloudflare URL — always carries `CF-Connecting-IP`, set to the client's
-//! public IP. A household sits behind one NAT, so that is a single shared key
-//! for every device in the home; the per-lane bucket sizing in `app.rs`
-//! accounts for that aggregate.
+//! Normal traffic, including a LAN Android TV reaching Iris through the public
+//! URL, always carries the header, set to the client's public IP. A household
+//! sits behind one NAT, so that is a single shared key for every device in the
+//! home; the per-lane bucket sizing in `app.rs` accounts for that aggregate.
 //!
-//! Requests arriving WITHOUT `CF-Connecting-IP` only happen on direct origin
-//! access (dev, or something bypassing the tunnel). Those are keyed on the
-//! real peer socket IP so each direct caller gets its own bucket instead of
-//! all of them collapsing onto one shared key. A tunnelled header-strip
-//! attempt still cannot earn fresh quota: its socket IP is the tunnel's
-//! loopback, so all such requests share the loopback bucket. Connect-info is
-//! absent only if the server is served without
+//! Requests arriving WITHOUT the header only happen on direct origin access
+//! (dev), or behind a proxy that does not set it. They are keyed on the real
+//! peer socket IP, so each direct caller gets its own bucket; behind such a
+//! proxy every client shares the proxy's bucket, which throttles rather than
+//! opens. Connect-info is absent only if the server is served without
 //! `into_make_service_with_connect_info`; we fall back to loopback then.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -109,7 +107,7 @@ impl KeyExtractor for CloudflareIpKeyExtractor {
 }
 
 /// The client a request comes from, as the module docs describe: the
-/// `CF-Connecting-IP` set by the tunnel, else the peer socket, else loopback;
+/// `CF-Connecting-IP` set by the proxy, else the peer socket, else loopback;
 /// folded by [`address_key`].
 pub fn client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> IpAddr {
     address_key(raw_client_ip(headers, extensions))
@@ -132,10 +130,9 @@ fn raw_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> Ip
     {
         return ip;
     }
-    // No CF header => the request didn't come through the tunnel. Key on
-    // the real peer socket IP so each LAN device gets its own bucket
-    // (see module docs). Tunnelled traffic always carries the CF header
-    // and is handled above; everything reaching here is a direct peer.
+    // No header => the request didn't come through a proxy that sets it. Key
+    // on the real peer socket IP so each direct caller gets its own bucket
+    // (see module docs).
     if let Some(ConnectInfo(addr)) = extensions.get::<ConnectInfo<SocketAddr>>() {
         return addr.ip();
     }

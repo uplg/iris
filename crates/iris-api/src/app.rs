@@ -19,11 +19,11 @@ use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
     // TWO rate-limit lanes on `/api/auth/*`, keyed per client IP
-    // (`CF-Connecting-IP`; peer socket IP only for non-tunnelled/dev access —
+    // (`CF-Connecting-IP`; peer socket IP only for direct/dev access —
     // see `rate_limit::CloudflareIpKeyExtractor`).
     //
     // NOTE on the key: every device in a household reaches Iris through the
-    // same Cloudflare URL, so `CF-Connecting-IP` is the household's single
+    // same public URL, so `CF-Connecting-IP` is the household's single
     // public (NAT) IP — ONE bucket shared by every browser, phone and TV in
     // the home. That makes the split below the real lever, not the key:
     //

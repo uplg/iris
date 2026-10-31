@@ -410,7 +410,7 @@ fn build_cookie(
         .http_only(true)
         .same_site(SameSite::Lax)
         // `Secure` derived from the public URL scheme (config: auth.cookie_secure):
-        // on behind the TLS tunnel, off for http://localhost dev so login works.
+        // on behind the TLS proxy, off for http://localhost dev so login works.
         .secure(secure)
         .path(path)
         // Max-Age, not an absolute Expires: a client whose clock runs behind
