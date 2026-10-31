@@ -3,9 +3,13 @@
 	// destinations move to a bottom bar (at most five). Session, display settings and the
 	// less frequent places (history, admin) live in one panel, from the person's name.
 	import { Popover } from 'bits-ui';
+	import { createQuery } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { session } from '#lib/session.svelte.ts';
 	import { pending } from '#lib/gesture.svelte.ts';
+	import { read } from '#lib/queries.ts';
+	import { queryClient } from '#lib/query.ts';
+	import { chosen } from '#lib/profiles/chosen.svelte.ts';
 	import { ui, type Theme } from '#lib/ui.svelte.ts';
 	import Brand from './Brand.svelte';
 	import Icon, { type IconName } from './Icon.svelte';
@@ -25,6 +29,10 @@
 	];
 	const name = $derived(session.user?.display_name ?? '');
 	let open = $state(false);
+	const profiles = createQuery(
+		() => read.profiles(),
+		() => queryClient
+	);
 </script>
 
 {#snippet nav(cls: string)}
@@ -52,6 +60,15 @@
 				<Popover.Content class="panel" sideOffset={6} align="end" role="dialog" aria-labelledby="session-title">
 					<h2 id="session-title" class="who-title">{name}</h2>
 					<ToggleGroup type="single" label="Theme" options={THEMES} value={ui.theme} onchange={(t) => ui.setTheme(t)} />
+					{#if (profiles.data?.length ?? 0) > 1}
+						<button
+							class="btn"
+							onclick={() => {
+								open = false;
+								chosen.set(false);
+							}}><Icon name="users" />Switch profile</button
+						>
+					{/if}
 					<div class="row">
 						<a class="btn" href="/history" onclick={() => (open = false)}><Icon name="history" />History</a>
 						{#if session.user?.is_admin}

@@ -15,6 +15,7 @@
 	import PasskeyList from './PasskeyList.svelte';
 	import PasswordForm from './PasswordForm.svelte';
 	import Playback from './Playback.svelte';
+	import Profiles from './Profiles.svelte';
 	import Recommendations from './Recommendations.svelte';
 
 	const THEMES: { value: Theme; label: string }[] = [
@@ -35,8 +36,11 @@
 
 <div class="sections">
 	<Identity />
-	<PasskeyList />
-	<PasswordForm />
+	<Profiles />
+	{#if !session.user?.account_id}
+		<PasskeyList />
+		<PasswordForm />
+	{/if}
 	<Devices />
 	<Playback />
 	<Recommendations />

@@ -12,7 +12,8 @@
 
 	const g = new Gesture();
 	const user = $derived(session.user);
-	const fromEmail = $derived(user?.email.split('@')[0]?.split('.')[0] ?? '');
+	const main = $derived(!user?.account_id);
+	const fromEmail = $derived(main ? (user?.email.split('@')[0]?.split('.')[0] ?? '') : '');
 
 	/** Saved, then read back: the header and every « added by » show the server's name. */
 	async function rename(name: string) {
@@ -31,14 +32,14 @@
 {#if user}
 	<Group id="you-title" title="You">
 		<RenameField label="Display name" value={user.display_name} save={rename} said={(name) => `Display name changed to ${name}.`} />
-		<p class="hint">Shown to the household, as in “added by”. Your email stays private.</p>
+		<p class="hint">Shown to the household, as in “added by”.{main ? ' Your email stays private.' : ''}</p>
 		{#if fromEmail && fromEmail !== user.display_name}
 			<div>
 				<button class="btn ghost" {...pending(g.is('email'))} onclick={useEmail}>Use “{fromEmail}” from your email</button>
 			</div>
 		{/if}
 		<dl class="facts">
-			<StatusRow label="Email" value={user.email} />
+			{#if main}<StatusRow label="Email" value={user.email} />{/if}
 			<StatusRow label="Role" value={user.is_admin ? 'Admin' : 'Member'} />
 		</dl>
 	</Group>

@@ -13,6 +13,7 @@
 	import SignIn from '#lib/components/SignIn.svelte';
 	import Toasts from '#lib/components/Toasts.svelte';
 	import Outdated from '#lib/components/Outdated.svelte';
+	import ProfileGate from '#lib/profiles/ProfileGate.svelte';
 	import { harmlessReload, outdated } from '#lib/update.svelte.ts';
 
 	let { children } = $props();
@@ -87,7 +88,9 @@
 			<SignIn />
 		{:else}
 			<!-- another account: every view starts over, nothing kept from the last one -->
-			{#key session.user?.id}{@render children()}{/key}
+			{#key session.user?.id}
+				{#if session.user}<ProfileGate>{@render children()}</ProfileGate>{:else}{@render children()}{/if}
+			{/key}
 		{/if}
 	</main>
 	<Toasts />

@@ -10,6 +10,7 @@ declare const __IRIS_WEB_VERSION__: string;
  *  hand-written until its endpoints are annotated in later waves. */
 export type User = components['schemas']['UserResponse'];
 export type ReleaseNote = components['schemas']['ReleaseNote'];
+export type ProfileView = components['schemas']['ProfileView'];
 
 /** The longest name the server accepts (display names, passkey names), in bytes. */
 export const MAX_NAME = 64;
@@ -483,6 +484,13 @@ export type ForYouResponse = components['schemas']['ForYou'];
 export type MoodTile = components['schemas']['MoodTile'];
 export type MoodBoard = components['schemas']['MoodBoard'];
 export type MoodResults = components['schemas']['MoodResults'];
+export const profiles = {
+	list: () => api.get<ProfileView[]>('/me/profiles'),
+	create: (name: string) => api.post<ProfileView[]>('/me/profiles', { name }),
+	remove: (id: string) => api.delete<void>(`/me/profiles/${seg(id)}`),
+	switchTo: (profile_id: string) => api.post<User>('/auth/switch-profile', { profile_id })
+};
+
 export const releaseNote = () => api.get<ReleaseNote>('/release-note');
 
 export const me = {

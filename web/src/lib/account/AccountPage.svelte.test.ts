@@ -33,6 +33,7 @@ function site(more: Record<string, unknown> = {}) {
 	return stubApi({
 		'GET /me/passkeys': [iphone, mac],
 		'GET /me/devices': [],
+		'GET /me/profiles': [{ id: 'u1', name: 'Léonard', main: true, current: true }],
 		'GET /me/playback-preferences': { audio_language: 'fre', subtitle_language: 'off' },
 		'GET /me/preferences': { languages: ['french'], genres: [], include_anime: false, onboarding_completed: true },
 		'GET /genres': { genres: [{ id: 18, name: 'Drama' }] },
@@ -42,6 +43,41 @@ function site(more: Record<string, unknown> = {}) {
 }
 const region = (name: string) => page.getByRole('region', { name });
 const keyRows = () => region('Passkeys').getByRole('listitem');
+
+describe('profiles', () => {
+	beforeEach(() => {
+		session.signedIn(leonard);
+		route.url = new URL('http://iris.test/account');
+	});
+
+	it('adds one, says who is in use, and asks before removing', async () => {
+		const muriel = { id: 'u9', name: 'Muriel', main: false, current: false };
+		const api = site({
+			'GET /me/profiles': [{ id: 'u1', name: 'Léonard', main: true, current: true }, muriel],
+			'POST /me/profiles': [{ id: 'u1', name: 'Léonard', main: true, current: true }, muriel],
+			'DELETE /me/profiles/u9': noContent
+		});
+		render(AccountPage);
+		const section = region('Profiles');
+		await expect.element(section.getByText('Main profile · In use')).toBeVisible();
+		await section.getByLabelText('New profile').fill('Muriel');
+		await section.getByRole('button', { name: 'Add' }).click();
+		await expect.poll(() => api.sent('POST', '/me/profiles')[0]?.body).toEqual({ name: 'Muriel' });
+		await section.getByRole('button', { name: 'Remove the profile Muriel' }).click();
+		await page.getByRole('button', { name: 'Remove the profile', exact: true }).click();
+		await expect.poll(() => api.sent('DELETE', '/me/profiles/u9')).toHaveLength(1);
+	});
+
+	it('a profile has no password or passkeys of its own', async () => {
+		site();
+		session.signedIn({ ...leonard, id: 'u9', account_id: 'u1' });
+		render(AccountPage);
+		await expect.element(region('Profiles')).toBeVisible();
+		await expect.element(region('Passkeys')).not.toBeInTheDocument();
+		await expect.element(region('Password')).not.toBeInTheDocument();
+		await expect.element(page.getByText('leonard.k@example.com')).not.toBeInTheDocument();
+	});
+});
 
 describe('account page', () => {
 	beforeEach(() => {
