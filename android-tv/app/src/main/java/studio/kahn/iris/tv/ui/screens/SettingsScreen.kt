@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.Pill
 import java.time.ZonedDateTime
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.focusGroup
@@ -406,7 +407,13 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
             onPick = actions.onSaveSubtitles,
             onDismiss = actions.onCloseDialog,
         )
-        SettingsDialog.AddProfile -> NameDialog("Profiles", "A new profile", "Name", "Add the profile", state, Busy.PROFILE, actions.onAddProfile, actions.onCloseDialog)
+        SettingsDialog.AddProfile -> {
+            var copy by remember { mutableStateOf(false) }
+            val main = state.profiles.valueOrNull?.firstOrNull { it.main }?.name
+            NameDialog("Profiles", "A new profile", "Name", "Add the profile", state, Busy.PROFILE, { actions.onAddProfile(it, copy) }, actions.onCloseDialog) {
+                if (main != null) Pill("Start with $main’s history and watchlist", selected = copy, onClick = { copy = !copy })
+            }
+        }
         SettingsDialog.FindFriend -> NameDialog("Friends", "Find someone", "Their name", "Find", state, Busy.FRIENDS, actions.onFindFriends, actions.onCloseDialog)
         is SettingsDialog.RemoveProfile -> ConfirmDialog(
             eyebrow = "Profiles",
@@ -457,6 +464,7 @@ private fun NameDialog(
     busy: String,
     onConfirm: (String) -> Unit,
     onCancel: () -> Unit,
+    extra: @Composable () -> Unit = {},
 ) {
     var name by remember { mutableStateOf("") }
     val first = remember { FocusRequester() }
@@ -480,6 +488,7 @@ private fun NameDialog(
                 .fillMaxWidth()
                 .focusRequester(first),
         )
+        extra()
         state.dialogError?.let { StatusLine(it.text, tone = StatusTone.Down) }
     }
 }

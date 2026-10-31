@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.ConfirmDialog
 import studio.kahn.iris.tv.ui.components.ActionStyle
 import studio.kahn.iris.tv.ui.components.ActionSize
 import studio.kahn.iris.tv.ui.components.ActionButton
@@ -79,6 +80,7 @@ data class HistoryActions(
     val onPlay: (infohash: String, fileIdx: Int) -> Unit = { _, _ -> },
     val onRestore: (HistoryLine) -> Unit = {},
     val onHide: (HistoryGroupUi) -> Unit = {},
+    val onRemove: (HistoryGroupUi) -> Unit = {},
     val onOpenTitle: (collectionId: String) -> Unit = {},
     val onRetry: () -> Unit = {},
     val onBack: () -> Unit = {},
@@ -113,6 +115,7 @@ fun HistoryScreen(
             onPlay = onPickFile,
             onRestore = vm::restore,
             onHide = vm::hide,
+            onRemove = vm::remove,
             onOpenTitle = onOpenCollection,
             onRetry = vm::retry,
             onBack = onBack,
@@ -261,13 +264,36 @@ private fun HistoryGroupRow(
                     LineCard(group, line, busy, actions, Modifier.padding(start = IrisSpace.s6).focusReturn(keys, "line:${line.key}"))
                 }
             }
-            ActionButton(
-                "Hide from friends",
-                { actions.onHide(group) },
-                style = ActionStyle.Secondary,
-                size = ActionSize.Small,
-                busy = "hide:${group.key}" in busy,
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+                ActionButton(
+                    "Hide from friends",
+                    { actions.onHide(group) },
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Small,
+                    busy = "hide:${group.key}" in busy,
+                )
+                var asking by remember { mutableStateOf(false) }
+                ActionButton(
+                    "Remove",
+                    { asking = true },
+                    style = ActionStyle.Secondary,
+                    size = ActionSize.Small,
+                    busy = "remove:${group.key}" in busy,
+                )
+                if (asking) {
+                    ConfirmDialog(
+                        eyebrow = "Watch history",
+                        title = "Remove ${group.title} from your history?",
+                        body = "Your progress on it goes, and it leaves Continue watching. The title stays in the library.",
+                        confirmLabel = "Remove from history",
+                        onConfirm = {
+                            asking = false
+                            actions.onRemove(group)
+                        },
+                        onCancel = { asking = false },
+                    )
+                }
+            }
         }
     }
 }

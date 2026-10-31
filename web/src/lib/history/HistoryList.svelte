@@ -4,6 +4,7 @@
 	// in words. What is gone from disk says so and, when its release is known, can be
 	// downloaded again (`onrestore`). Long histories stay light: rows out of view are not laid
 	// out (content-visibility), yet all are in the page for find-in-page and screen readers.
+	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import Meter from '#lib/components/Meter.svelte';
 	import { pending, Gesture } from '#lib/gesture.svelte.ts';
 	import Icon from '#lib/components/Icon.svelte';
@@ -21,10 +22,12 @@
 		onrestore?: (it: Item) => Promise<unknown>;
 		/** Keep a title from friends; without it the list only reads. */
 		onhide?: (it: Item) => Promise<unknown>;
+		/** Take a title out of this history; without it the list only reads. */
+		onremove?: (items: readonly Item[]) => Promise<unknown>;
 		/** Titles lead to their collection page. */
 		collections?: boolean;
 	}
-	let { groups, onrestore, onhide, collections = true }: Props = $props();
+	let { groups, onrestore, onhide, onremove, collections = true }: Props = $props();
 	const g = new Gesture();
 
 	const label = (group: Group, it: Item) => (group.solo ? group.title : (whatWatched(it) ?? it.torrent_name));
@@ -90,19 +93,43 @@
 					</ul>
 				</div>
 			{/if}
-			{#if onhide}
-				<button
-					class="btn ghost"
-					aria-label="Hide {group.title} from friends"
-					{...pending(g.is(`hide:${group.key}`))}
-					onclick={() => g.run(() => onhide(group.items[0]), undefined, `hide:${group.key}`)}>Hide from friends</button
-				>
+			{#if onhide || onremove}
+				<div class="actions">
+					{#if onhide}
+						<button
+							class="btn ghost"
+							aria-label="Hide {group.title} from friends"
+							{...pending(g.is(`hide:${group.key}`))}
+							onclick={() => g.run(() => onhide(group.items[0]), undefined, `hide:${group.key}`)}>Hide from friends</button
+						>
+					{/if}
+					{#if onremove}
+						<ConfirmDialog
+							ghost
+							danger
+							label="Remove"
+							ariaLabel="Remove {group.title} from your history"
+							title="Remove {group.title} from your history?"
+							description="Your progress on it goes, and it leaves Continue watching. The title stays in the library."
+							action="Remove from history"
+							busy={g.is(`remove:${group.key}`)}
+							onconfirm={() => g.run(() => onremove(group.items), undefined, `remove:${group.key}`)}
+						/>
+					{/if}
+				</div>
 			{/if}
 		</li>
 	{/each}
 </ul>
 
 <style>
+	.actions {
+		display: flex;
+		flex: none;
+		flex-wrap: wrap;
+		justify-content: end;
+		gap: var(--s-1);
+	}
 	.history {
 		display: grid;
 		max-width: var(--measure-wide);

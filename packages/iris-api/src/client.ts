@@ -491,7 +491,7 @@ export type MoodBoard = components['schemas']['MoodBoard'];
 export type MoodResults = components['schemas']['MoodResults'];
 export const profiles = {
 	list: () => api.get<ProfileView[]>('/me/profiles'),
-	create: (name: string) => api.post<ProfileView[]>('/me/profiles', { name }),
+	create: (name: string, copy_history: boolean) => api.post<ProfileView[]>('/me/profiles', { name, copy_history }),
 	remove: (id: string) => api.delete<void>(`/me/profiles/${seg(id)}`),
 	switchTo: (profile_id: string) => api.post<User>('/auth/switch-profile', { profile_id })
 };

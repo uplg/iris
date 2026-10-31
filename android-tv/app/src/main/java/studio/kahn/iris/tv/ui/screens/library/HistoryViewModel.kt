@@ -91,6 +91,13 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
         play.value = null
     }
 
+    fun remove(group: HistoryGroupUi) {
+        actions.runSaying("remove:${group.key}", onSuccess = history::poke) {
+            group.lines.forEach { container.api().removeProgress(it.infohash, it.fileIdx) }
+            "${group.title} left your history."
+        }
+    }
+
     fun hide(group: HistoryGroupUi) {
         actions.runSaying("hide:${group.key}") {
             container.api().hideFromFriends(HideRequest(infohash = group.lines.first().infohash))

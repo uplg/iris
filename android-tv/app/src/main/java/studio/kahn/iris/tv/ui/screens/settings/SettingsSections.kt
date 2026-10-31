@@ -91,7 +91,7 @@ class SettingsActions(
     val onPair: (code: String, label: String) -> Unit = { _, _ -> },
     val onStopWaiting: () -> Unit = {},
     val onRevoke: (DeviceView) -> Unit = {},
-    val onAddProfile: (String) -> Unit = {},
+    val onAddProfile: (String, Boolean) -> Unit = { _, _ -> },
     val onSwitchProfile: (ProfileView) -> Unit = {},
     val onRemoveProfile: (ProfileView) -> Unit = {},
     val onFindFriends: (String) -> Unit = {},

@@ -106,7 +106,11 @@ describe('profiles', () => {
 		await expect.element(section.getByText('Main profile · In use')).toBeVisible();
 		await section.getByLabelText('New profile').fill('Muriel');
 		await section.getByRole('button', { name: 'Add' }).click();
-		await expect.poll(() => api.sent('POST', '/me/profiles')[0]?.body).toEqual({ name: 'Muriel' });
+		await expect.poll(() => api.sent('POST', '/me/profiles')[0]?.body).toEqual({ name: 'Muriel', copy_history: false });
+		await section.getByLabelText('New profile').fill('Lyros');
+		await section.getByLabelText('Start with Léonard’s history and watchlist').click();
+		await section.getByRole('button', { name: 'Add' }).click();
+		await expect.poll(() => api.sent('POST', '/me/profiles')[1]?.body).toEqual({ name: 'Lyros', copy_history: true });
 		await section.getByRole('button', { name: 'Remove the profile Muriel' }).click();
 		await page.getByRole('button', { name: 'Remove the profile', exact: true }).click();
 		await expect.poll(() => api.sent('DELETE', '/me/profiles/u9')).toHaveLength(1);

@@ -6,7 +6,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { plural } from '@iris/api/format';
 	import { goto } from '$app/navigation';
-	import { friends, me } from '@iris/api/client';
+	import { friends, me, progress } from '@iris/api/client';
 	import { fetchAgainOrSearch } from '#lib/regrab.ts';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS } from '#lib/queries.ts';
@@ -36,6 +36,11 @@
 		if (res) await goto(`/watch/${it.infohash}/${it.file_idx}`);
 	}
 
+	async function remove(items: readonly Item[]) {
+		await Promise.all(items.map((it) => progress.remove(it.infohash, it.file_idx)));
+		await Promise.all([history.refetch(), queryClient.invalidateQueries({ queryKey: KEYS.continueWatching })]);
+	}
+
 	async function hide(it: Item) {
 		await friends.hide(it.infohash);
 		ui.toast(`${it.collection_title ?? it.torrent_name} is hidden from friends.`);
@@ -52,5 +57,5 @@
 	emptyText="Nothing watched yet."
 	emptyHint="What you play shows here, with where you stopped."
 >
-	<HistoryList {groups} onrestore={restore} onhide={hide} />
+	<HistoryList {groups} onrestore={restore} onhide={hide} onremove={remove} />
 </Loaded>

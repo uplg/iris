@@ -106,6 +106,11 @@ class SettingsScreenshots {
     }
 
     @Test
+    fun addProfile() = shots.snap("settings_profiles_add") {
+        Settings(ready.copy(profiles = Loadable.Ready(family), dialog = SettingsDialog.AddProfile), SettingsSection.Profiles)
+    }
+
+    @Test
     fun friends() = shots.snapEverySize("settings_friends") {
         Settings(ready.copy(friends = Loadable.Ready(friends), found = listOf(PersonView(UUID(0, 12), "Vincent"))), SettingsSection.Friends)
     }

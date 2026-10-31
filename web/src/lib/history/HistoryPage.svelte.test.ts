@@ -33,6 +33,18 @@ describe('history page', () => {
 		await expect.element(page.getByText('Nothing watched yet.')).toBeVisible();
 	});
 
+	it('removes a title from the history after asking', async () => {
+		const api = stubApi(
+			{ 'GET /me/history?limit=200': [gone], 'DELETE /torrents/m1/files/2/progress': () => new Response(null, { status: 204 }) },
+			{ poster_path: null }
+		);
+		await render(HistoryPage);
+		await page.getByRole('button', { name: 'Remove Dune from your history' }).click();
+		expect(api.sent('DELETE', '/torrents/m1/files/2/progress')).toHaveLength(0);
+		await page.getByRole('button', { name: 'Remove from history' }).click();
+		await expect.poll(() => api.sent('DELETE', '/torrents/m1/files/2/progress')).toHaveLength(1);
+	});
+
 	it('downloads a gone release again, then plays it where it stopped', async () => {
 		const api = stubApi({ 'GET /me/history?limit=200': [gone], 'POST /torrents/m1/regrab': { infohash: 'm1' } }, { poster_path: null });
 		await render(HistoryPage);
