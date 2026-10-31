@@ -2,8 +2,8 @@
 
 Target: a Debian 13 (Trixie) box running rootless Docker, e.g. an OVH KS-5
 (Xeon E3-1270v6, 32 GB, 2x450 GB NVMe in software RAID — `/dev/md3` mounted
-at `/`, ≈ 820 GB usable). This guide assumes that machine and a
-Cloudflare-tunnelled public URL.
+at `/`, ≈ 820 GB usable). This guide assumes that machine and a reverse
+proxy on the host for the public URL.
 
 If you're on a different host: skip the OVH-specific bits, but the rootless
 Docker / systemd-user / data-root sections still apply unchanged.
@@ -56,13 +56,10 @@ OVH's per-IP "Network Firewall" (Manager → Bare Metal → IP → Firewall) is
 the anti-DDoS that's always on doesn't block ordinary inbound traffic. If
 you have enabled it, add `45100/tcp` and `45100/udp` accept rules.
 
-The HTTP port stays unexposed — Cloudflare tunnel handles ingress, no
-inbound 80/443 needed. `docker-compose.yml` publishes no HTTP port at all:
-cloudflared reaches `iris:8080` over the compose network. Don't add one —
+The HTTP port stays off the internet: `docker-compose.yml` publishes it on
+`127.0.0.1` only, for the reverse proxy of §4. Don't widen that bind —
 Docker-published ports bypass the host firewall, and a request reaching the
 origin directly could forge `CF-Connecting-IP` past the auth rate limits.
-To reach the stack from the server itself, `just dev` loads
-`docker-compose.dev.yml`, which binds the port on `127.0.0.1` only.
 
 ---
 
@@ -85,7 +82,7 @@ IRIS_JWT_SECRET=<48-byte base64>
 IRIS_AUTH__BOOTSTRAP_ADMIN__EMAIL=you@example.com
 IRIS_AUTH__BOOTSTRAP_ADMIN__PASSWORD=<long random>
 
-# Public URL — must match the Cloudflare tunnel hostname exactly. JWT issuer
+# Public URL — must match the reverse proxy's hostname exactly. JWT issuer
 # claims and the device pairing verification URL are derived from this.
 IRIS_SERVER__PUBLIC_URL=https://iris.example.com
 
@@ -93,9 +90,6 @@ IRIS_SERVER__PUBLIC_URL=https://iris.example.com
 # changing it here also changes the published port and the firewall rule
 # you opened above.
 IRIS_TORRENT_PORT=45100
-
-# Cloudflare tunnel token — see §4.
-CLOUDFLARE_TUNNEL_TOKEN=<paste>
 
 # TMDB API key — free, used for poster/backdrop/title metadata. Without it
 # the search and library work but show no posters.
@@ -164,30 +158,32 @@ docker run --rm -v iris-data:/data alpine tar -czC / data > iris-data.tgz
 
 ---
 
-## 4. Cloudflare tunnel
+## 4. Reverse proxy
 
-1. <https://one.dash.cloudflare.com/> → **Networks → Tunnels → Create
-   tunnel** → "Cloudflared" → name it `iris`.
-2. Skip the "install on this machine" step; copy just the **tunnel token**
-   into `.env` as `CLOUDFLARE_TUNNEL_TOKEN`.
-3. **Public Hostname** tab → add an entry pointing your hostname
-   (e.g. `iris.example.com`) at **Service: `http://iris:8080`**.
-   `iris` here is the compose service name, resolved over the
-   compose-internal network — *not* `localhost` (a frequent mistake that
-   surfaces as a 502 from Cloudflare).
-4. Cloudflare will create the DNS CNAME for you.
+Iris listens on `127.0.0.1:8450` (`IRIS_HTTP_PORT`). Run a proxy on the host
+that terminates TLS for your hostname, sets `CF-Connecting-IP` to the client's
+address and buffers nothing. With Caddy:
 
-The compose file forces HTTP/2 transport (`--protocol http2`):
-QUIC over UDP/7844 outbound is silently dropped by some ISPs and was the
-cause of `failed to dial to edge with quic: timeout` loops in development.
+```caddyfile
+iris.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8450 {
+		header_up CF-Connecting-IP {remote_host}
+		flush_interval -1
+	}
+}
+```
+
+That header is what the auth rate limits key on, whatever the proxy: without
+it every client shares one bucket. Setting it also replaces any value a client
+sent, so it cannot be forged.
 
 ---
 
 ## 5. First boot
 
 ```bash
-# Compose v2 with both profiles: API + tunnel.
-docker compose --profile cloudflared up -d --build
+docker compose up -d --build
 
 # Watch the bootstrap migration apply (0001..0005) and the bootstrap
 # admin get created.
@@ -226,8 +222,8 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/srv/iris
-ExecStart=/usr/bin/docker compose --profile cloudflared up -d
-ExecStop=/usr/bin/docker compose --profile cloudflared down
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
 
 [Install]
 WantedBy=default.target
@@ -249,7 +245,7 @@ Reboot once to verify. The unit comes up before any login because
 ```bash
 cd /srv/iris
 git pull
-make deploy ARGS="--profile cloudflared"   # rebuilds iris:dev, stamps the build with the commit
+make deploy   # rebuilds iris:dev, stamps the build with the commit
 ```
 
 `make deploy` injects `IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD)` as a
@@ -262,7 +258,7 @@ can't read the sha itself — it has to come from the host like this.
 No `make`? The raw equivalent is:
 
 ```bash
-IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD) docker compose --profile cloudflared up -d --build
+IRIS_WEB_BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
 
 Plain `docker compose up -d --build` (no build arg) still works — Vite then
@@ -369,12 +365,10 @@ database file.
 
 | Symptom | Where to look |
 |---|---|
-| 502 from Cloudflare | The tunnel's "Public Hostname" service must be `http://iris:8080`, not `localhost:8080`. |
-| `failed to dial to edge with quic: timeout` | Confirm `--protocol http2` is in the compose file. (Some hosts still QUIC-handshake even with the flag — `TUNNEL_TRANSPORT_PROTOCOL=http2` env var is the belt for the suspenders.) |
 | Torrents never connect to peers | First verify reachability from outside: `nmap -Pn -p 45100 <ip>`. If the port is filtered, check (in this order): the iris container is publishing it (`docker compose ps`), no host-level firewall is blocking (`sudo nft list ruleset`, `sudo ufw status` if installed), and finally OVH's per-IP Network Firewall in the manager (off by default — only relevant if you opted in). |
 | `admin` login fails on first boot | The bootstrap block is a no-op if any user exists. Check `docker compose exec iris sqlite3 /data/iris.db 'select email from users;'` — you may have an orphaned account from a prior install. |
 | `Field 'X' is required …` JSON errors | Wire format drift. Pin the iris image and the Android APK to the same git SHA. |
-| Downloads slow despite a 1 Gbps line | rootless slirp4netns caps around 600 Mbps. If you genuinely saturate that, switch the iris service to `network_mode: host` (you'll then need to point Cloudflare's "Public Hostname" service at `http://localhost:8080` instead of `http://iris:8080`). |
+| Downloads slow despite a 1 Gbps line | rootless slirp4netns caps around 600 Mbps. If you genuinely saturate that, switch the iris service to `network_mode: host`. |
 
 ---
 

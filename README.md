@@ -44,19 +44,19 @@ phones and tablets, touch included.
 
 ## Serve it
 
-Docker on any always-on box. The bundled compose file publishes no HTTP
-port: a Cloudflare tunnel (or the Caddy profile) reaches the server.
+Docker on any always-on box. The bundled compose file publishes HTTP on
+loopback only: a reverse proxy on the host reaches the server.
 
 ```console
 $ cp .env.example .env              # JWT secret, public URL, tracker keys, TMDB key
 $ cp config/config.toml.example config/config.toml
 $ cp config/providers.toml.example config/providers.toml
-$ just deploy                       # docker compose --profile cloudflared up --build -d
+$ just deploy                       # docker compose up --build -d
 ```
 
 Sign in with the bootstrap admin from `.env`, make an invitation in
 Admin, open it to create your account. The full walkthrough (rootless
-Docker, the BitTorrent port, the tunnel, storage limits, upgrades) is
+Docker, the BitTorrent port, the proxy, storage limits, upgrades) is
 in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## From source
