@@ -28,10 +28,16 @@ private fun episodeOf(path: String): SceneMark? = sceneMark(path)?.takeIf { it.e
 
 private val SAMPLE = Regex("""\bsample\b""")
 
-/** SCENE samples are videos never to play by default (the backend's `is_main_video_file`). */
+/** SCENE samples are videos never to play by default (the backend's `is_main_video`). */
 fun isSample(path: String): Boolean {
     val p = path.lowercase()
     return "/sample/" in p || ".sample." in p || SAMPLE.containsMatchIn(p)
+}
+
+/** The videos of a torrent one picks from (web `mainVideos`): no sample, unless it holds nothing else. */
+fun mainVideos(files: List<FileEntry>): List<FileEntry> {
+    val videos = files.filter { isVideoPath(it.path) }
+    return videos.filter { !isSample(it.path) }.ifEmpty { videos }
 }
 
 /** Each file's episode is read once, not on every comparison (a 100-file pack on a slow box). */

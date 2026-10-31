@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { AvailableEpisodeEntry, CollectionDetail, CollectionEpisodeEntry, GoneEpisodeEntry } from '@iris/api/client';
+import type { AvailableEpisodeEntry, CollectionDetail, CollectionEpisodeEntry, GoneEpisodeEntry, TorrentView } from '@iris/api/client';
 import {
 	audioChip,
 	episodesOf,
+	firstPlayable,
 	firstSeason,
+	mainVideo,
 	mergeEpisodes,
 	mergeEpisodesAbsolute,
 	nameLanguage,
@@ -11,6 +13,7 @@ import {
 	seasonHolds,
 	seasonsOf
 } from './merge.ts';
+import { mainVideos } from '#lib/release/files.ts';
 
 const disk = (season: number, episode: number, language: string, over: Partial<CollectionEpisodeEntry> = {}): CollectionEpisodeEntry => ({
 	season,
@@ -122,5 +125,47 @@ describe('a title’s rows, merged once', () => {
 		expect(episodesOf(title({}))[0]).toMatchObject({ season: 1, episode: 2, absolute: null });
 		expect(episodesOf(title({ numbering: 'absolute' }))[0]).toMatchObject({ absolute: 14 });
 		expect(episodesOf(title({ kind: 'movie' }))).toEqual([]);
+	});
+});
+
+describe('a release’s main video', () => {
+	const t = (paths: [string, number][]) =>
+		({ files: paths.map(([path, size_bytes], index) => ({ index, path, size_bytes })) }) as unknown as TorrentView;
+
+	it('leaves the sample out, wherever it sorts', () => {
+		const files = t([
+			['Sample/show.s01e01-grp.sample.mkv', 900],
+			['show.s01e01-grp.nfo', 1],
+			['show.s01e01-grp.mkv', 100]
+		]).files;
+		expect(mainVideos(files).map((f) => f.index)).toEqual([2]);
+		expect(
+			mainVideo(
+				t([
+					['Sample/film.sample.mkv', 900],
+					['film.mkv', 100]
+				])
+			)?.index
+		).toBe(1);
+	});
+
+	it('keeps a video whose title says sample when it is all there is', () => {
+		expect(mainVideos(t([['The Sample (2024).mkv', 100]]).files).map((f) => f.index)).toEqual([0]);
+	});
+
+	it('starts a title with no episodes on its main video, not its first', () => {
+		const c = {
+			episodes: [],
+			torrents: [
+				{
+					...t([
+						['Sample/film.sample.mkv', 10],
+						['film.mkv', 100]
+					]),
+					infohash: 'x'
+				}
+			]
+		};
+		expect(firstPlayable(c as unknown as CollectionDetail)).toEqual({ infohash: 'x', idx: 1 });
 	});
 });

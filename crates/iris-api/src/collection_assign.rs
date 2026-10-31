@@ -397,10 +397,25 @@ async fn resolve_collection(
 /// Only `scene_parse` rows are rewritten (see
 /// [`episode_files::correct_scene_parsed`]); user-/tmdb-derived rows
 /// are left alone. Idempotent and effectively free once converged.
+///
+/// A claim on a file that isn't a main video goes, tmdb-derived included:
+/// a grab once took a release's sample or `.nfo` for its episode. Not when
+/// the torrent has no main video at all (a title with `sample` in its name),
+/// where that file is the episode.
 async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(usize, String)]) {
+    let has_main_video = files.iter().any(|(_, p)| iris_torrent::is_main_video(p));
     let mut fixed = 0u32;
     for (idx, path) in files {
         if !iris_torrent::is_main_video(path) {
+            if has_main_video {
+                match episode_files::delete_derived_for_file(pool, infohash, *idx as i64).await {
+                    Ok(true) => fixed += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, infohash, "episode reconcile: delete failed");
+                    }
+                }
+            }
             continue;
         }
         let leaf = path.rsplit('/').next().unwrap_or(path);
@@ -428,7 +443,7 @@ async fn reconcile_scene_episodes(pool: &SqlitePool, infohash: &str, files: &[(u
         tracing::info!(
             infohash,
             fixed,
-            "scene episode rows re-derived after parser change",
+            "scene episode rows re-derived after parser change or a sample claim",
         );
     }
 }
@@ -1305,6 +1320,87 @@ mod tests {
             .await
             .unwrap();
         t.infohash
+    }
+
+    #[tokio::test]
+    async fn the_reconcile_drops_claims_on_a_sample_but_keeps_a_manual_one() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let show = collections::find_or_create(&pool, "show", "Show", Kind::Tv, false)
+            .await
+            .unwrap();
+        let infohash = attach(&pool, show.id, "Show.S01E01.720p.WEB.h264-GRP").await;
+        for (file_idx, derived_from) in [
+            (0, episode_files::DerivedFrom::TmdbMatch),
+            (1, episode_files::DerivedFrom::Manual),
+            (2, episode_files::DerivedFrom::SceneParse),
+        ] {
+            episode_files::upsert(
+                &pool,
+                episode_files::UpsertEpisodeFile {
+                    collection_id: show.id,
+                    season: 1,
+                    episode: 1,
+                    infohash: infohash.clone(),
+                    file_idx,
+                    derived_from,
+                    absolute_episode: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let files = [
+            (
+                0,
+                "Sample/show.s01e01.720p.web.h264-grp.sample.mkv".to_owned(),
+            ),
+            (
+                1,
+                "Sample/show.s01e01.720p.web.h264-grp-sample.mkv".to_owned(),
+            ),
+            (2, "show.s01e01.720p.web.h264-grp.mkv".to_owned()),
+        ];
+        reconcile_scene_episodes(&pool, &infohash, &files).await;
+        let mut left: Vec<i64> = episode_files::list_for_collection(&pool, show.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_idx)
+            .collect();
+        left.sort_unstable();
+        assert_eq!(left, [1, 2]);
+    }
+
+    #[tokio::test]
+    async fn the_reconcile_keeps_the_claim_when_nothing_else_is_a_main_video() {
+        let pool = iris_db::test_support::migrated_pool().await;
+        let show = collections::find_or_create(&pool, "the sample", "The Sample", Kind::Tv, false)
+            .await
+            .unwrap();
+        let infohash = attach(&pool, show.id, "The Sample S01E01 720p").await;
+        episode_files::upsert(
+            &pool,
+            episode_files::UpsertEpisodeFile {
+                collection_id: show.id,
+                season: 1,
+                episode: 1,
+                infohash: infohash.clone(),
+                file_idx: 0,
+                derived_from: episode_files::DerivedFrom::TmdbMatch,
+                absolute_episode: None,
+            },
+        )
+        .await
+        .unwrap();
+        reconcile_scene_episodes(&pool, &infohash, &[(0, "The Sample S01E01.mkv".to_owned())])
+            .await;
+        assert_eq!(
+            episode_files::list_for_collection(&pool, show.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

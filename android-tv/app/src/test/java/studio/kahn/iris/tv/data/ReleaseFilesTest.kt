@@ -35,6 +35,18 @@ class ReleaseFilesTest {
     }
 
     @Test
+    fun onePicksAmongMainVideosUnlessOnlySamplesExist() {
+        fun e(index: Int, path: String) = FileEntry(index = index, path = path, sizeBytes = 1)
+        val release = listOf(
+            e(0, "Sample/show.s01e01.720p-grp.sample.mkv"),
+            e(1, "show.s01e01.720p-grp.nfo"),
+            e(2, "show.s01e01.720p-grp.mkv"),
+        )
+        assertEquals(listOf(2), mainVideos(release).map { it.index })
+        assertEquals(listOf(0), mainVideos(listOf(e(0, "The Sample (2024).mkv"))).map { it.index })
+    }
+
+    @Test
     fun aMoviePlaysItsBiggestVideo() {
         val files = listOf(f(0, "Movie/extras.mkv", 10), f(1, "Movie/movie.mkv", 1_000), f(2, "Movie/movie.srt", 5, video = false))
         assertEquals(1, autoFile(files))

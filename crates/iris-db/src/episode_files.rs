@@ -291,6 +291,25 @@ pub async fn delete_for_infohash(pool: &SqlitePool, infohash: &str) -> Result<u6
     Ok(res.rows_affected())
 }
 
+/// Drop the claims derived on one file (a sample or an `.nfo` a grab once
+/// took for the episode). `manual` rows are explicit truth and stay. Returns
+/// `true` when a row went.
+pub async fn delete_derived_for_file(
+    pool: &SqlitePool,
+    infohash: &str,
+    file_idx: i64,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query(
+        "DELETE FROM episode_files \
+          WHERE infohash = ?1 AND file_idx = ?2 AND derived_from <> 'manual'",
+    )
+    .bind(infohash)
+    .bind(file_idx)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
 /// Remove one specific claim. Used by the grab-path self-heal when a row's
 /// `(season, episode)` provably contradicts the SCENE-parsed name of the
 /// file it points at (a season pack once mis-ingested as a singleton mapped

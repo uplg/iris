@@ -16,7 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.SubtitlePick
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.mainVideos
 import studio.kahn.iris.tv.ui.components.LockLandscape
 import studio.kahn.iris.tv.ui.components.OnOutputLost
 import studio.kahn.iris.tv.ui.components.PlayerStage
@@ -135,7 +135,7 @@ private fun GettingReadyLayer(
         gone = probe == ProbePhase.Gone,
         regrabFailed = regrabFailed,
         busy = busy,
-        note = t?.takeIf { !header.isMovie && !it.finished && it.files.count { f -> isVideoPath(f.path) } > 1 }
+        note = t?.takeIf { !header.isMovie && !it.finished && mainVideos(it.files).size > 1 }
             ?.let { "The rest of the season keeps downloading in the background." },
     )
     GettingReadyContent(

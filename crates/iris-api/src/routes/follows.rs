@@ -1480,17 +1480,21 @@ fn parsed_matches_episode(p: &iris_media::filename::Parsed, season: i64, episode
 
 /// Find the file inside a snapshot whose SCENE-parsed leaf name
 /// designates the requested (S, E). Multi-disc layouts mean position
-/// can't be trusted — only the parsed name counts.
+/// can't be trusted — only the parsed name counts. A sample and an `.nfo`
+/// carry the episode's marker too, and sort ahead of it in a SCENE torrent.
 fn find_leaf_for_episode(
     files: &[iris_torrent::FileEntry],
     season: i64,
     episode: i64,
 ) -> Option<i64> {
-    files.iter().find_map(|f| {
-        let leaf = f.path.rsplit('/').next().unwrap_or(&f.path);
-        let parsed = iris_media::filename::parse(leaf)?;
-        parsed_matches_episode(&parsed, season, episode).then_some(f.index as i64)
-    })
+    files
+        .iter()
+        .filter(|f| iris_torrent::is_main_video(&f.path))
+        .find_map(|f| {
+            let leaf = f.path.rsplit('/').next().unwrap_or(&f.path);
+            let parsed = iris_media::filename::parse(leaf)?;
+            parsed_matches_episode(&parsed, season, episode).then_some(f.index as i64)
+        })
 }
 
 fn pick_largest_video_file(files: &[iris_torrent::FileEntry]) -> i64 {
@@ -2350,6 +2354,24 @@ mod tests {
 
     fn parsed(title: &str) -> iris_media::filename::Parsed {
         iris_media::filename::parse(title).expect("title must parse")
+    }
+
+    #[test]
+    fn an_episode_is_never_found_in_its_sample_or_nfo() {
+        let entry = |index, path: &str| iris_torrent::FileEntry {
+            index,
+            path: path.into(),
+            size_bytes: 1,
+        };
+        let files = [
+            entry(
+                0,
+                "Sample/over.the.garden.wall.s01e01.720p.web.h264-skyfire.sample.mkv",
+            ),
+            entry(1, "over.the.garden.wall.s01e01.720p.web.h264-skyfire.nfo"),
+            entry(2, "over.the.garden.wall.s01e01.720p.web.h264-skyfire.mkv"),
+        ];
+        assert_eq!(find_leaf_for_episode(&files, 1, 1), Some(2));
     }
 
     #[test]

@@ -20,7 +20,7 @@ import studio.kahn.iris.tv.ui.state.BusyActions
 import studio.kahn.iris.tv.data.FileProgressEntry
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.TorrentView
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.mainVideos
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
@@ -134,7 +134,7 @@ private fun page(t: TorrentView, progress: List<FileProgressEntry>, m: MediaMeta
         kind = if (t.kind == studio.kahn.iris.tv.data.MediaKind.tv) "Series" else "Movie",
         posterUrl = tmdbPosterUrl(m?.posterPath, "w342"),
         row = releaseRow(t, title, m?.posterPath, null, Instant.now()).copy(playIdx = null),
-        files = t.files.filter { isVideoPath(it.path) }.sortedBy { it.path }.map { f ->
+        files = mainVideos(t.files).sortedBy { it.path }.map { f ->
             val w = byIdx[f.index]?.toWatch() ?: WatchState(null, false)
             ReleaseFile(f.index, f.path.substringAfterLast('/'), fileFacts(f.sizeBytes, w), w.resumable, w.done)
         },

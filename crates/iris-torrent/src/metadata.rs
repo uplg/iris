@@ -69,21 +69,35 @@ pub fn is_video_path(path: &str) -> bool {
         .is_some_and(|e| VIDEO_EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// A video worth playing: not a sample (`Sample/`, `.sample.`).
-#[must_use]
-pub fn is_main_video(path: &str) -> bool {
+/// `sample` as a word anywhere in the path, the web and TV `isSample`. Paths
+/// are relative to the torrent root, so a top-level `Sample/` has no slash
+/// before it.
+fn is_sample(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    !lower.contains("/sample/") && !lower.contains(".sample.") && is_video_path(&lower)
+    let bytes = lower.as_bytes();
+    let apart = |b: Option<&u8>| !b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+    lower.match_indices("sample").any(|(at, word)| {
+        apart(at.checked_sub(1).and_then(|i| bytes.get(i))) && apart(bytes.get(at + word.len()))
+    })
 }
 
-/// The file a movie plays: its largest main video.
+/// A video worth playing: not a sample.
+#[must_use]
+pub fn is_main_video(path: &str) -> bool {
+    is_video_path(path) && !is_sample(path)
+}
+
+/// The file a movie plays: its largest main video, else its largest video
+/// (a title with `sample` in its name holds nothing else).
 #[must_use]
 pub fn main_video_index(files: &[crate::FileEntry]) -> Option<usize> {
-    files
-        .iter()
-        .filter(|f| is_main_video(&f.path))
-        .max_by_key(|f| f.size_bytes)
-        .map(|f| f.index)
+    let largest = |main: bool| {
+        files
+            .iter()
+            .filter(|f| is_video_path(&f.path) && (!main || is_main_video(&f.path)))
+            .max_by_key(|f| f.size_bytes)
+    };
+    largest(true).or_else(|| largest(false)).map(|f| f.index)
 }
 
 /// `.rar`/`.zip`/`.7z` plus the classic split-volume tails: `.r00`…`.r99`
@@ -263,5 +277,40 @@ mod tests {
             entry(1, "Movie-GRP/Sample/movie-sample.mkv", 50_000_000),
         ]));
         assert!(super::is_streamable(&[entry(0, "Movie.2024.mkv", 1)]));
+    }
+
+    #[test]
+    fn a_sample_is_never_the_main_video_wherever_it_sits() {
+        for path in [
+            "Sample/show.s01e01.720p-grp.sample.mkv",
+            "Sample/show.s01e01.720p-grp-sample.mkv",
+            "Sample/grp-show.mkv",
+            "Show-GRP/Sample/grp-show.mkv",
+            "grp-sample.mkv",
+        ] {
+            assert!(!super::is_main_video(path), "{path}");
+        }
+        assert!(super::is_main_video("show.s01e01.720p-grp.mkv"));
+        assert!(super::is_main_video("Free.Samples.2012.1080p.mkv"));
+        assert!(!super::is_main_video("show.s01e01.720p-grp.nfo"));
+    }
+
+    #[test]
+    fn the_main_video_falls_back_on_the_largest_video_only_when_nothing_else_exists() {
+        let entry = |index, path: &str, size_bytes| crate::FileEntry {
+            index,
+            path: path.into(),
+            size_bytes,
+        };
+        let film = [
+            entry(0, "Sample/film.sample.mkv", 900),
+            entry(1, "film.mkv", 100),
+        ];
+        assert_eq!(super::main_video_index(&film), Some(1));
+        let only = [
+            entry(0, "The Sample (2024).nfo", 1_000),
+            entry(1, "The Sample (2024).mkv", 100),
+        ];
+        assert_eq!(super::main_video_index(&only), Some(1));
     }
 }

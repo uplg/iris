@@ -36,7 +36,7 @@ import studio.kahn.iris.tv.data.PlayStatus
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.bestEffort
 import studio.kahn.iris.tv.data.irisError
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.mainVideos
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.SLOW_MS
@@ -164,7 +164,7 @@ class WatchViewModel(
                 isTvCollection = c != null && c.kind == MediaKind.tv,
                 episodes = c?.episodes.orEmpty(),
                 available = c?.availableEpisodes.orEmpty(),
-                videoFiles = view?.files.orEmpty().filter { isVideoPath(it.path) },
+                videoFiles = mainVideos(view?.files.orEmpty()),
                 progressByFile = p,
                 names = c?.episodeInfo.orEmpty()
                     .mapNotNull { info -> info.name?.takeIf(String::isNotBlank)?.let { (info.season to info.episode) to it } }

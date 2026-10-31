@@ -1,8 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.library
 
 import studio.kahn.iris.tv.ui.format.ratioWords
-import studio.kahn.iris.tv.data.asReleaseFile
-import studio.kahn.iris.tv.data.playableFiles
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -31,7 +29,7 @@ import studio.kahn.iris.tv.data.DismissGoneRequest
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.mainVideos
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.state.Loadable
 import studio.kahn.iris.tv.ui.state.STOP_TIMEOUT_MS
@@ -390,9 +388,9 @@ fun releaseRow(
     watched: Map<Int, ContinueWatchingItem>?,
     now: Instant,
 ): ReleaseRow {
-    val videos = t.files.filter { isVideoPath(it.path) }
+    val videos = mainVideos(t.files)
     // Played straight from its row when one file is worth playing ([autoFile]'s pool).
-    val single = playableFiles(t.files.map { it.asReleaseFile() }).singleOrNull()
+    val single = videos.singleOrNull()
     val pct = t.progressPct.coerceIn(0.0, 100.0)
     val bar = !t.finished && pct < 100
     return ReleaseRow(

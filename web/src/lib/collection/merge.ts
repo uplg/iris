@@ -11,7 +11,8 @@ import type {
 	SeasonPackEntry,
 	TorrentView
 } from '@iris/api/client';
-import { episodeCode, isVideo, languageLabel, plural } from '@iris/api/format';
+import { episodeCode, languageLabel, plural } from '@iris/api/format';
+import { mainVideos } from '#lib/release/files.ts';
 import { isResumable } from '#lib/watched.ts';
 
 export type Downloaded = {
@@ -262,11 +263,11 @@ export function qualityWords(name: string): string | null {
 
 /** The file a release plays: its biggest video. */
 export function mainVideo(t: TorrentView) {
-	return t.files.filter((f) => isVideo(f.path)).toSorted((a, b) => b.size_bytes - a.size_bytes)[0];
+	return mainVideos(t.files).toSorted((a, b) => b.size_bytes - a.size_bytes)[0];
 }
 
 /** Where « Play » starts with no resume point: the first episode on disk by (season, episode),
- * never `files[0]` (a pack's sample); a movie, or a pack never split: its first video. */
+ * never `files[0]` (a pack's sample); a movie, or a pack never split: its main video. */
 export function firstPlayable(
 	c: CollectionDetail
 ): { infohash: string; idx: number; season?: number; episode?: number; absolute?: number | null } | null {
@@ -280,7 +281,7 @@ export function firstPlayable(
 			absolute: owned[0].absolute_episode
 		};
 	for (const t of c.torrents) {
-		const f = t.files.find((x) => isVideo(x.path));
+		const f = mainVideo(t);
 		if (f) return { infohash: t.infohash, idx: f.index };
 	}
 	return null;

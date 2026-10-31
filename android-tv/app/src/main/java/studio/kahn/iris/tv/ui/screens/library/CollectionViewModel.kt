@@ -33,7 +33,7 @@ import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PlaybackPrefsResponse
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
-import studio.kahn.iris.tv.data.isVideoPath
+import studio.kahn.iris.tv.data.mainVideos
 import studio.kahn.iris.tv.data.tmdbBackdropUrl
 import studio.kahn.iris.tv.data.tmdbPosterUrl
 import studio.kahn.iris.tv.ui.screens.player.LanguageChoices
@@ -442,7 +442,7 @@ fun collectionPage(
             )
         },
         files = c.torrents.flatMap { t ->
-            t.files.filter { isVideoPath(it.path) }.map { f ->
+            mainVideos(t.files).map { f ->
                 FileUi(
                     key = "${t.infohash}:${f.index}",
                     infohash = t.infohash,

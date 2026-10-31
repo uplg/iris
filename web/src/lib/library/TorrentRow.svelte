@@ -4,7 +4,7 @@
 	// admin, share a movie with SéléoTV. Delete is for an admin or whoever added it; anyone else
 	// sees it, not operable, and why.
 	import { tmdbImage, torrents, type CollectionListItem, type ContinueWatchingItem, type TorrentView } from '@iris/api/client';
-	import { formatSize, isVideo, percent, ago } from '@iris/api/format';
+	import { formatSize, percent, ago } from '@iris/api/format';
 	import { ui } from '#lib/ui.svelte.ts';
 	import { Gesture, unavailable } from '#lib/gesture.svelte.ts';
 	import Poster from '#lib/components/Poster.svelte';
@@ -19,6 +19,7 @@
 	import FileList from './FileList.svelte';
 	import SeleoShare from '#lib/seleo/SeleoShare.svelte';
 	import { mainVideo } from '#lib/collection/merge.ts';
+	import { mainVideos } from '#lib/release/files.ts';
 
 	interface Props {
 		t: TorrentView;
@@ -33,7 +34,7 @@
 	const id = $props.id();
 	const g = new Gesture();
 
-	const videos = $derived(t.files.filter((f) => isVideo(f.path)));
+	const videos = $derived(mainVideos(t.files));
 	const status = $derived(releaseStatus(t));
 	const pct = $derived(Math.min(100, Math.max(0, t.progress_pct)));
 	const showBar = $derived(isFetching(t));

@@ -2,17 +2,24 @@
 // file a grab plays when nobody chose (episode 1 of a pack, else the biggest video).
 
 import type { FilePreview } from '@iris/api/client';
-import { sceneEpisode } from '@iris/api/format';
+import { isVideo, sceneEpisode } from '@iris/api/format';
 
 const episodeOf = (path: string) => {
 	const m = sceneEpisode(path);
 	return m && m.episode > 0 ? m : null;
 };
 
-/** SCENE samples are videos never to play by default (the backend's `is_main_video_file`). */
+/** SCENE samples are videos never to play by default (the backend's `is_main_video`). */
 export function isSample(path: string): boolean {
 	const p = path.toLowerCase();
 	return p.includes('/sample/') || p.includes('.sample.') || /\bsample\b/.test(p);
+}
+
+/** The videos of a release one picks from: no sample, unless it holds nothing else. */
+export function mainVideos<T extends { path: string }>(files: readonly T[]): T[] {
+	const videos = files.filter((f) => isVideo(f.path));
+	const main = videos.filter((f) => !isSample(f.path));
+	return main.length ? main : videos;
 }
 
 export function sortFiles(files: readonly FilePreview[]): FilePreview[] {
