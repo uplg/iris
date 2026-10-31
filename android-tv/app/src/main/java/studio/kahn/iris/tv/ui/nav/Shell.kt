@@ -112,6 +112,8 @@ private enum class ShellSlot { Backdrop, Header, Content }
 @Stable
 class ShellBackdropHolder {
     var content by mutableStateOf<(@Composable () -> Unit)?>(null)
+    /** What the header sits on; null when the backdrop draws nothing behind it. */
+    var header by mutableStateOf<HeaderBackdrop?>(null)
 }
 
 val LocalShellBackdrop = staticCompositionLocalOf<ShellBackdropHolder?> { null }
@@ -176,6 +178,7 @@ fun TopLevelShell(
     val header = remember { FocusRequester() }
     var headerFocused by remember { mutableStateOf(false) }
     val back = shellBack(tab, headerFocused)
+    val backdrop = remember { ShellBackdropHolder() }
     BackHandler(enabled = back != ShellBack.Leave) {
         when (back) {
             ShellBack.ToHeader -> header.requestFocus()
@@ -202,10 +205,10 @@ fun TopLevelShell(
                 accountName = accountName,
                 onAccount = onAccount,
                 updateAvailable = updateAvailable,
+                backdrop = backdrop.header,
             )
         }
     }
-    val backdrop = remember { ShellBackdropHolder() }
     CompositionLocalProvider(LocalShellHeader provides header, LocalShellBackdrop provides backdrop.takeIf { headerOverContent }) {
         if (headerOverContent) {
             // Drawn bottom to top: the content's backdrop, the header, the content (its dialogs

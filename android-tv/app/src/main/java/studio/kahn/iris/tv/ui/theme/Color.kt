@@ -39,6 +39,13 @@ object IrisColor {
     /** The fallback tile behind a poster or still with no artwork, and its title. */
     val art = Color(0xFF24323F)
     val artInk = Color(0xFFF2F0EA)
+
+    /** A person's mascot: its tiles (web `--mascot-*`) and the blush of the Iris mark. */
+    val mascots = listOf(
+        Color(0xFF0E5E68), Color(0xFF5B3A6E), Color(0xFF9A4A36), Color(0xFF2F6B3C),
+        Color(0xFF34508C), Color(0xFF8A6A1F), Color(0xFF8E3F5C), Color(0xFF4A5666),
+    )
+    val mascotBlush = Color(0xD9E6A49A)
     /** A provider tag laid over artwork. */
     val artScrim = Color(0xC70E1218)
 

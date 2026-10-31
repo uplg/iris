@@ -232,6 +232,30 @@ it), the worst case is the user gets a "Up to date" message and
 needs to manually hit Download. `just apk-push` is that script; don't
 upload the files by hand.
 
+### Profiles and friends
+
+A profile is a `users` row with `account_id` set, so every per-user table works
+unchanged; never add a `profile_id`. Sign-in and the admin list see accounts
+only (`account_id IS NULL`). Switching (`POST /api/auth/switch-profile`, under
+`/api/auth` for the refresh cookie's path) opens a session on the other row. What
+touches an account touches its profiles: `users::set_password`, `users::delete`,
+`SessionCuts::forget` (clears everyone), the device list. Friendships hang on
+profiles. What a profile adds is visible to friends; what it watches, live
+included, only with `share_watching`, and `friends_hidden` beats both. A declined
+request keeps its row: the asker still reads it as pending.
+
+A person's mascot comes from their name alone: the Iris mark's grammar (no mouth),
+its table and hash in `packages/iris-api/src/mascot.ts` and again in the TV's
+`ui/components/Mascot.kt`. Changing one means changing both, and the test vectors
+they share.
+
+### The update sentence
+
+A release that users should hear about gets one `> sentence` right under its
+`## [x.y.z]` heading in `CHANGELOG.md`, in English. The server embeds it at
+build time (`routes/release_note.rs`) and the web and TV homes say it once. No
+quote line, nothing said: fine for a quiet patch.
+
 ### Versioning & client gate
 
 **All three components** carry the same semver-aligned version

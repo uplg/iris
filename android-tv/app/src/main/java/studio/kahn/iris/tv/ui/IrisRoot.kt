@@ -187,6 +187,7 @@ fun IrisRoot(
                     },
                     onOpenLibrary = { navController.openTab(TopTab.Library) },
                     onOpenDiscover = { navController.openTab(TopTab.Discover) },
+                    onAccountChanged = shell::refresh,
                 )
             }
             section<Routes.LiveTv>(TopTab.LiveTv, shellHost) {

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **What changed, in a sentence**: after an update the home says it once, on
+  the web and the TV. The sentence is a `> quote` line right under the version
+  heading here; a release without one says nothing.
+- **Profiles**: a shared account holds up to six profiles, each with its own
+  history, watchlist and preferences. An account with several asks who is
+  watching, on the web and the TV. The password and passkeys stay on the main
+  profile; a password change ends the sessions of every profile.
+- **Friends**: found by name, never by email, and asked; declining tells the
+  other person nothing. Home says what friends play now and watched or added
+  lately. What a profile watches reaches friends only once it shares it, and a
+  title can be hidden from them.
+- **Mascots**: everyone gets a small Iris TV picked from their name, the same on
+  the web and the TV: who's watching, the header, friends, profiles.
+
+### Fixed
+
+- **TV header**: the logo, the tabs and the account's name each pick their ink
+  from the luminance of what is behind them, the still's fade included, with
+  the same pass as the channel logos.
+
 ## [1.6.4] - 2026-10-31
 
 ### Added

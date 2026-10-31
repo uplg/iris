@@ -1,5 +1,17 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.ui.screens.home.heroBackdrop
+import studio.kahn.iris.tv.ui.screens.home.HERO_ART_WIDTH
+import studio.kahn.iris.tv.ui.screens.home.FADE_LEFT
+import studio.kahn.iris.tv.ui.nav.HeaderBackdrop
+import androidx.compose.ui.graphics.Brush
+import studio.kahn.iris.tv.ui.nav.ShellBackdrop
+import studio.kahn.iris.tv.ui.nav.LocalShellBackdrop
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -64,5 +76,45 @@ class ShellScreenshots {
         TopLevelShell(TopTab.Library, "Leonard", updateAvailable = true, onSelect = {}, onAccount = {}) {}
     }
 
+    /** The header over [still]: the whole screen, or where the hero's still really sits, faded. */
+    @Composable
+    private fun OverStill(still: Color, backdrop: HeaderBackdrop?, hero: Boolean = false) {
+        TopLevelShell(TopTab.Home, "Uplg", onSelect = {}, onAccount = {}, headerOverContent = true) {
+            ShellBackdrop {
+                if (hero) {
+                    Box(Modifier.size(IrisLayout.current.width * HERO_ART_WIDTH, IrisLayout.current.height).background(still)) {
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .background(Brush.horizontalGradient(0f to IrisColor.ground, FADE_LEFT to IrisColor.ground.copy(alpha = 0f))),
+                        )
+                    }
+                } else {
+                    Box(Modifier.size(IrisLayout.current.width, IrisLayout.current.height).background(still))
+                }
+            }
+            val holder = LocalShellBackdrop.current
+            SideEffect { holder?.header = backdrop }
+        }
+    }
+
+    private fun all(luminance: Double) = HeaderBackdrop(List(48) { luminance })
+
+    @Test
+    fun headerBeforeOnALightStill() = shots.snap("shell_header_over_light_before") { OverStill(LIGHT_STILL, null) }
+
+    @Test
+    fun headerOnALightStill() = shots.snap("shell_header_over_light") { OverStill(LIGHT_STILL, all(0.8)) }
+
+    @Test
+    fun headerOnAMidStill() = shots.snap("shell_header_over_mid") { OverStill(MID_STILL, all(0.12)) }
+
+    // Where the hero's still really sits: the logo stays on the ground, the name goes dark.
+    @Test
+    fun headerOnAHeroStill() = shots.snap("shell_header_over_hero") { OverStill(LIGHT_STILL, heroBackdrop { _, _ -> 0.8 }, hero = true) }
+
     private val outdated = UpdateState(installed = "1.5.0", latest = AppUpdater.VersionStatus.UpdateAvailable("1.6.0"))
 }
+
+private val LIGHT_STILL = Color(0xFFF2E8D5)
+private val MID_STILL = Color(0xFF5B6B78)

@@ -126,7 +126,9 @@ pub async fn list_devices_for_user(
     sqlx::query_as::<_, RefreshToken>(
         "SELECT jti, user_id, issued_at, expires_at, revoked_at, device_label, device_kind \
          FROM refresh_tokens \
-         WHERE user_id = ?1 AND revoked_at IS NULL AND device_kind IS NOT NULL \
+         WHERE user_id IN (SELECT id FROM users WHERE COALESCE(account_id, id) = \
+             (SELECT COALESCE(account_id, id) FROM users WHERE id = ?1)) \
+           AND revoked_at IS NULL AND device_kind IS NOT NULL \
            AND expires_at > ?2 \
          ORDER BY issued_at DESC",
     )
@@ -136,8 +138,20 @@ pub async fn list_devices_for_user(
     .await
 }
 
+/// A session's device label and kind, to carry over when the session changes
+/// profile.
+pub async fn device_of(
+    pool: &SqlitePool,
+    jti: Uuid,
+) -> Result<Option<(Option<String>, Option<String>)>, sqlx::Error> {
+    sqlx::query_as("SELECT device_label, device_kind FROM refresh_tokens WHERE jti = ?1")
+        .bind(jti)
+        .fetch_optional(pool)
+        .await
+}
+
 /// End the session `jti` belongs to, every token of its family, when it is
-/// one of `user_id`'s. `false`: no such session for this user.
+/// held on `user_id`'s account, whichever profile. `false`: no such session.
 pub async fn revoke_for_user(
     pool: &SqlitePool,
     user_id: UserId,
@@ -146,9 +160,11 @@ pub async fn revoke_for_user(
     let user: Uuid = user_id.into();
     let res = sqlx::query(
         "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
-         WHERE user_id = ?3 AND family_id = \
+         WHERE family_id = \
            (SELECT family_id FROM refresh_tokens \
-            WHERE jti = ?2 AND user_id = ?3 AND revoked_at IS NULL)",
+            WHERE jti = ?2 AND revoked_at IS NULL AND user_id IN \
+              (SELECT id FROM users WHERE COALESCE(account_id, id) = \
+                 (SELECT COALESCE(account_id, id) FROM users WHERE id = ?3)))",
     )
     .bind(Utc::now())
     .bind(jti)

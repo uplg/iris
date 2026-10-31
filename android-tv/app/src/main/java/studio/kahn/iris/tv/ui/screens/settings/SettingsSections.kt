@@ -1,5 +1,10 @@
 package studio.kahn.iris.tv.ui.screens.settings
 
+import studio.kahn.iris.tv.ui.components.Mascot
+import studio.kahn.iris.tv.data.ProfileView
+import studio.kahn.iris.tv.data.PersonView
+import studio.kahn.iris.tv.data.HiddenTitleView
+import androidx.compose.foundation.layout.RowScope
 import android.os.Build
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -86,6 +91,17 @@ class SettingsActions(
     val onPair: (code: String, label: String) -> Unit = { _, _ -> },
     val onStopWaiting: () -> Unit = {},
     val onRevoke: (DeviceView) -> Unit = {},
+    val onAddProfile: (String) -> Unit = {},
+    val onSwitchProfile: (ProfileView) -> Unit = {},
+    val onRemoveProfile: (ProfileView) -> Unit = {},
+    val onFindFriends: (String) -> Unit = {},
+    val onAskFriend: (PersonView) -> Unit = {},
+    val onAcceptFriend: (PersonView) -> Unit = {},
+    val onDeclineFriend: (PersonView) -> Unit = {},
+    val onRemoveFriend: (PersonView) -> Unit = {},
+    val onTakeBack: (PersonView) -> Unit = {},
+    val onShare: (Boolean) -> Unit = {},
+    val onShowToFriends: (HiddenTitleView) -> Unit = {},
     val onChangePassword: (current: String, next: String) -> Unit = { _, _ -> },
     val onSignOut: () -> Unit = {},
     val onInterfaceSize: (InterfaceSize) -> Unit = {},
@@ -118,6 +134,8 @@ fun SettingsSectionContent(
 ) {
     when (section) {
         SettingsSection.You -> YouSection(state, actions)
+        SettingsSection.Profiles -> ProfilesSection(state, actions)
+        SettingsSection.Friends -> FriendsSection(state, actions)
         SettingsSection.Playback -> PlaybackSection(state, actions)
         SettingsSection.Recommendations -> RecommendationsSection(state, actions)
         SettingsSection.Devices -> DevicesSection(state, actions, now)
@@ -148,7 +166,8 @@ private fun YouSection(state: SettingsUiState, actions: SettingsActions) {
     SettingsGroup("You", "Shown to the household, as in “added by”. Your email stays private.") {
         Loaded(state.account, actions.onRetry) { user ->
             SettingRow("Display name", user.displayName, onClick = { actions.onOpen(SettingsDialog.Rename) })
-            val fromEmail = nameFromEmail(user.email)
+            val main = user.accountId == null
+            val fromEmail = if (main) nameFromEmail(user.email) else ""
             if (fromEmail.isNotEmpty() && fromEmail != user.displayName) {
                 ActionButton(
                     "Use “$fromEmail” from your email",
@@ -160,9 +179,85 @@ private fun YouSection(state: SettingsUiState, actions: SettingsActions) {
             }
             NoticeLine(state.outcome.notice(SettingsSection.You))
             Column {
-                FactRow("Email", user.email)
+                if (main) FactRow("Email", user.email)
                 FactRow("Role", if (user.isAdmin) "Admin" else "Member")
             }
+        }
+    }
+}
+
+@Composable
+private fun ProfilesSection(state: SettingsUiState, actions: SettingsActions) {
+    SettingsGroup("Profiles", "For people sharing this account: each profile keeps its own history, watchlist and preferences.") {
+        ActionButton("Add a profile", { actions.onOpen(SettingsDialog.AddProfile) }, style = ActionStyle.Secondary)
+        NoticeLine(state.outcome.notice(SettingsSection.Profiles))
+        Loaded(state.profiles, actions.onRetry) { profiles ->
+            profiles.forEach { p ->
+                val words = listOfNotNull("Main profile".takeIf { p.main }, "In use".takeIf { p.current }).joinToString(" · ")
+                PersonRow(p.name, words.ifEmpty { null }) {
+                    if (!p.current) {
+                        ActionButton("Switch", { actions.onSwitchProfile(p) }, style = ActionStyle.Secondary, size = ActionSize.Small, busy = state.busy == Busy.PROFILE)
+                    }
+                    if (!p.main && !p.current) {
+                        ActionButton("Remove", { actions.onOpen(SettingsDialog.RemoveProfile(p)) }, style = ActionStyle.Secondary, size = ActionSize.Small)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A person or a title, and what can be done about it. */
+@Composable
+private fun PersonRow(name: String, facts: String? = null, person: Boolean = true, actions: @Composable RowScope.() -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s4), verticalAlignment = Alignment.CenterVertically) {
+        if (person) Mascot(name, IrisSize.control)
+        Column(Modifier.weight(1f)) {
+            Text(name, style = IrisType.body, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            facts?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+        }
+        actions()
+    }
+}
+
+@Composable
+private fun FriendsSection(state: SettingsUiState, actions: SettingsActions) {
+    val small: @Composable (String, Boolean, () -> Unit) -> Unit = { words, primary, onClick ->
+        ActionButton(
+            words,
+            onClick,
+            style = if (primary) ActionStyle.Primary else ActionStyle.Secondary,
+            size = ActionSize.Small,
+            busy = state.busy == Busy.FRIENDS,
+        )
+    }
+    SettingsGroup("Friends", "Friends see what you add to the library. What you watch stays private until you share it below.") {
+        ActionButton("Find someone by name", { actions.onOpen(SettingsDialog.FindFriend) }, style = ActionStyle.Secondary)
+        NoticeLine(state.outcome.notice(SettingsSection.Friends))
+        state.found?.let { found ->
+            if (found.isEmpty()) Text("Nobody new by that name.", style = IrisType.body, color = IrisColor.inkMuted)
+            found.forEach { p -> PersonRow(p.name) { small("Ask", true) { actions.onAskFriend(p) } } }
+        }
+        Loaded(state.friends, actions.onRetry) { friends ->
+            if (friends.incoming.isNotEmpty()) ChoiceLabel("Asked you", "Declining tells them nothing.")
+            friends.incoming.forEach { p ->
+                PersonRow(p.name) {
+                    small("Accept", true) { actions.onAcceptFriend(p) }
+                    small("Decline", false) { actions.onDeclineFriend(p) }
+                }
+            }
+            friends.friends.forEach { p ->
+                PersonRow(p.name) { small("Remove", false) { actions.onOpen(SettingsDialog.RemoveFriend(p)) } }
+            }
+            if (friends.outgoing.isNotEmpty()) ChoiceLabel("Waiting for an answer", "They can still say yes.")
+            friends.outgoing.forEach { p -> PersonRow(p.name) { small("Take back", false) { actions.onTakeBack(p) } } }
+            ChoiceLabel("What you watch", "Your friends only see it once you share it.")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+                Pill("Keep it private", selected = !friends.shareWatching, onClick = { actions.onShare(false) })
+                Pill("Share with friends", selected = friends.shareWatching, onClick = { actions.onShare(true) })
+            }
+            if (friends.hidden.isNotEmpty()) ChoiceLabel("Hidden from friends", "Neither what you watch of these nor what you add.")
+            friends.hidden.forEach { h -> PersonRow(h.title, person = false) { small("Show again", false) { actions.onShowToFriends(h) } } }
         }
     }
 }

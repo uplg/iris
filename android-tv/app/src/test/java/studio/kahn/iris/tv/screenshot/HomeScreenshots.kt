@@ -1,5 +1,9 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.ui.screens.home.WhoIsWatching
+import studio.kahn.iris.tv.ui.screens.home.FriendLine
+import studio.kahn.iris.tv.data.ProfileView
+import java.util.UUID
 import studio.kahn.iris.tv.data.InterfaceSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
@@ -155,6 +159,40 @@ class HomeScreenshots {
     @Test
     fun homeLongTitle() = shots.snapEverySize("home_long_title") {
         Home(home.copy(hero = hero.copy(title = "May I Help You and the Sisters of the Long Night", meta = "Season 1 · Episode 3 · 41 min left")))
+    }
+
+    @Test
+    fun homeReleaseNote() = shots.snapEverySize("home_release_note") {
+        Home(home.copy(releaseNote = Notice("Updated to 1.7.0 · Profiles for shared accounts, and friends on the home.")))
+    }
+
+    @Test
+    fun homeFriends() = shots.snap("home_friends") {
+        Home(
+            home.copy(
+                hero = null,
+                heroPending = false,
+                rightNow = Loadable.Ready(listOf("2 friend requests")),
+                friends = listOf(
+                    FriendLine("a", "Muriel", "Muriel is watching Severance · S2:E4", null, "c1"),
+                    FriendLine("b", "Vincent", "Vincent added Dune: Part Two", "2 Oct", "c2"),
+                    FriendLine("c", "Muriel", "Muriel watched The Bear · S3:E1", "1 Oct", "c3"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun whoIsWatching() = shots.snapEverySize("home_who_is_watching") {
+        WhoIsWatching(
+            listOf(
+                ProfileView(current = true, id = UUID(0, 1), main = true, name = "Vincent"),
+                ProfileView(current = false, id = UUID(0, 2), main = false, name = "Muriel"),
+                ProfileView(current = false, id = UUID(0, 3), main = false, name = "Les enfants"),
+            ),
+            notice = null,
+            onPick = {},
+        )
     }
 
     @Test

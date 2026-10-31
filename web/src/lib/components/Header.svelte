@@ -3,13 +3,21 @@
 	// destinations move to a bottom bar (at most five). Session, display settings and the
 	// less frequent places (history, admin) live in one panel, from the person's name.
 	import { Popover } from 'bits-ui';
+	import { createQuery } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
+	import { plural } from '@iris/api/format';
 	import { session } from '#lib/session.svelte.ts';
 	import { pending } from '#lib/gesture.svelte.ts';
+	import { read } from '#lib/queries.ts';
+	import { queryClient } from '#lib/query.ts';
+	import { chosen } from '#lib/profiles/chosen.svelte.ts';
 	import { ui, type Theme } from '#lib/ui.svelte.ts';
 	import Brand from './Brand.svelte';
 	import Icon, { type IconName } from './Icon.svelte';
+	import Mascot from './Mascot.svelte';
 	import ToggleGroup from './ToggleGroup.svelte';
+
+	const AVATAR = 28;
 
 	const views: { href: string; label: string; icon: IconName; match: (p: string) => boolean }[] = [
 		{ href: '/', label: 'Home', icon: 'house', match: (p) => p === '/' },
@@ -25,6 +33,15 @@
 	];
 	const name = $derived(session.user?.display_name ?? '');
 	let open = $state(false);
+	const profiles = createQuery(
+		() => read.profiles(),
+		() => queryClient
+	);
+	const summary = createQuery(
+		() => read.summary(),
+		() => queryClient
+	);
+	const asked = $derived(summary.data?.friend_requests ?? 0);
 </script>
 
 {#snippet nav(cls: string)}
@@ -44,14 +61,32 @@
 		{@render nav('views')}
 		<div class="grow"></div>
 		<Popover.Root bind:open>
-			<Popover.Trigger class="btn ghost who" aria-label="{name}: account, theme, sign out">
-				<span class="initial" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
+			<Popover.Trigger
+				class="btn ghost who"
+				aria-label="{name}: account, theme, sign out{asked ? `, ${plural(asked, 'friend request')}` : ''}"
+			>
+				<Mascot {name} size={AVATAR} />
 				<span class="who-name">{name}</span>
+				{#if asked}<span class="asked" aria-hidden="true">{asked}</span>{/if}
 			</Popover.Trigger>
 			<Popover.Portal>
 				<Popover.Content class="panel" sideOffset={6} align="end" role="dialog" aria-labelledby="session-title">
 					<h2 id="session-title" class="who-title">{name}</h2>
 					<ToggleGroup type="single" label="Theme" options={THEMES} value={ui.theme} onchange={(t) => ui.setTheme(t)} />
+					{#if (profiles.data?.length ?? 0) > 1}
+						<button
+							class="btn"
+							onclick={() => {
+								open = false;
+								chosen.set(false);
+							}}><Icon name="users" />Switch profile</button
+						>
+					{/if}
+					{#if asked}
+						<a class="btn" href="/account#friends-title" onclick={() => (open = false)}
+							><Icon name="users" />{plural(asked, 'friend request')}</a
+						>
+					{/if}
 					<div class="row">
 						<a class="btn" href="/history" onclick={() => (open = false)}><Icon name="history" />History</a>
 						{#if session.user?.is_admin}
@@ -117,14 +152,14 @@
 	:global(.who) {
 		gap: var(--s-2);
 	}
-	.initial {
+	.asked {
 		display: inline-grid;
 		place-items: center;
-		width: var(--avatar);
+		min-width: var(--avatar);
 		height: var(--avatar);
-		border-radius: 50%;
-		background: var(--accent-wash);
-		color: var(--accent);
+		border-radius: var(--radius-pill);
+		background: var(--accent);
+		color: var(--ground);
 		font: var(--t-meta);
 	}
 	:global(.panel .who-title) {

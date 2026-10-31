@@ -11,10 +11,12 @@
 	import PageHead from '#lib/components/PageHead.svelte';
 	import ToggleGroup from '#lib/components/ToggleGroup.svelte';
 	import Devices from './Devices.svelte';
+	import Friends from './Friends.svelte';
 	import Identity from './Identity.svelte';
 	import PasskeyList from './PasskeyList.svelte';
 	import PasswordForm from './PasswordForm.svelte';
 	import Playback from './Playback.svelte';
+	import Profiles from './Profiles.svelte';
 	import Recommendations from './Recommendations.svelte';
 
 	const THEMES: { value: Theme; label: string }[] = [
@@ -35,8 +37,12 @@
 
 <div class="sections">
 	<Identity />
-	<PasskeyList />
-	<PasswordForm />
+	<Profiles />
+	<Friends />
+	{#if !session.user?.account_id}
+		<PasskeyList />
+		<PasswordForm />
+	{/if}
 	<Devices />
 	<Playback />
 	<Recommendations />

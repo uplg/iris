@@ -1,5 +1,21 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.screens.home.heroBackdrop
+import studio.kahn.iris.tv.ui.screens.home.HERO_ART_WIDTH
+import studio.kahn.iris.tv.ui.screens.home.HERO_ART_HEIGHT
+import studio.kahn.iris.tv.ui.screens.home.FADE_LEFT
+import studio.kahn.iris.tv.ui.screens.home.FADE_BOTTOM
+import studio.kahn.iris.tv.ui.nav.HeaderBackdrop
+import studio.kahn.iris.tv.ui.components.Mascot
+import studio.kahn.iris.tv.ui.screens.home.WhoIsWatching
+import studio.kahn.iris.tv.ui.screens.home.FriendLine
+import studio.kahn.iris.tv.ui.nav.LocalShellBackdrop
+import studio.kahn.iris.tv.ui.components.RowCard
+import java.util.concurrent.ConcurrentHashMap
+import coil3.toBitmap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -55,6 +71,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import studio.kahn.iris.tv.data.AppContainer
 import studio.kahn.iris.tv.data.AppUpdater
 import studio.kahn.iris.tv.data.UpdateNotice
@@ -115,6 +132,7 @@ fun HomeScreen(
     onOpenSearch: (query: String?) -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenDiscover: () -> Unit,
+    onAccountChanged: () -> Unit = {},
 ) {
     val vm = irisViewModel(container) { c, _ -> HomeViewModel(c) }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -126,6 +144,7 @@ fun HomeScreen(
                 is HomeEvent.OpenCollection -> onOpenCollection(event.id)
                 is HomeEvent.Search -> onOpenSearch(event.query)
                 HomeEvent.OpenLibrary -> onOpenLibrary()
+                HomeEvent.ProfileChanged -> onAccountChanged()
             }
         }
     }
@@ -136,6 +155,8 @@ fun HomeScreen(
             state = state,
             update = updateNotice(updates),
             updateActions = updateActions,
+            onCloseReleaseNote = vm::closeReleaseNote,
+            onOpenFriendTitle = onOpenCollection,
             onHeroAction = vm::onHeroAction,
             onCardAction = vm::onCardAction,
             onRetry = vm::retry,
@@ -146,6 +167,7 @@ fun HomeScreen(
         state.onboarding?.let { prefs ->
             OnboardingSheet(container, prefs, onClosed = vm::onboardingClosed)
         }
+        state.whoIsWatching?.let { WhoIsWatching(it, state.notice, vm::enterProfile) }
     }
 }
 
@@ -160,6 +182,8 @@ fun HomeContent(
     onOpenSearch: () -> Unit,
     update: UpdateNotice? = null,
     updateActions: UpdateActions = UpdateActions(),
+    onCloseReleaseNote: () -> Unit = {},
+    onOpenFriendTitle: (String) -> Unit = {},
 ) {
     val layout = IrisLayout.current
     val header = LocalShellHeader.current
@@ -170,11 +194,11 @@ fun HomeContent(
     // A card focused during this visit before the hero came (the platform's default focus lands
     // on the first focusable) is not a card left: only a return goes back to one.
     val returning = remember { focus.returns.last != null }
-    val heroIndex by rememberUpdatedState(if (update != null) 1 else 0)
+    val heroIndex by rememberUpdatedState(listOfNotNull(update, state.releaseNote).size)
 
     // The first focus: back on this screen the card left, else the hero's main action, else the
     // menu once the home knows it has no hero. The onboarding sheet closing puts it back too.
-    val sheetOpen = state.onboarding != null
+    val sheetOpen = state.onboarding != null || state.whoIsWatching != null
     var sheetWasOpen by remember { mutableStateOf(false) }
     LaunchedEffect(sheetOpen) {
         if (sheetOpen) {
@@ -236,6 +260,16 @@ fun HomeContent(
                         UpdateBanner(update, updateActions, Modifier.padding(horizontal = layout.safeHorizontal))
                     }
                 }
+                state.releaseNote?.let { note ->
+                    item(key = "release-note", contentType = "update") {
+                        NoticeLine(
+                            note,
+                            Modifier.padding(horizontal = layout.safeHorizontal),
+                            onClose = onCloseReleaseNote,
+                            takeFocus = false,
+                        )
+                    }
+                }
                 if (hero != null) {
                     item(key = HERO_KEY, contentType = "hero") {
                         Hero(hero, state.busy, heroFocus, onHeroAction, Modifier.padding(horizontal = layout.safeHorizontal))
@@ -253,6 +287,11 @@ fun HomeContent(
                     )
                 }
                 item(key = "now", contentType = "now") { RightNow(state.rightNow) }
+                if (state.friends.isNotEmpty()) {
+                    item(key = "friends", contentType = "friends") {
+                        FriendsActivity(state.friends, onOpenFriendTitle, Modifier.padding(horizontal = layout.safeHorizontal))
+                    }
+                }
                 item(key = "watchlist", contentType = "row") {
                     HomeRow(
                         title = "Your watchlist",
@@ -319,8 +358,6 @@ fun HomeContent(
 private const val HERO_KEY = "hero"
 
 // The board's hero still: 1100 x 620 of 1920 x 1080, in the top right corner.
-private const val HERO_ART_WIDTH = 1100f / 1920f
-private const val HERO_ART_HEIGHT = 620f / 1080f
 
 /**
  * The hero's still in the screen's top right corner, under the header, fading into the
@@ -330,6 +367,11 @@ private const val HERO_ART_HEIGHT = 620f / 1080f
  */
 @Composable
 private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, modifier: Modifier = Modifier) {
+    val holder = LocalShellBackdrop.current
+    var header by remember(url) { mutableStateOf(url?.let(heroHeaderCache::get)) }
+    val shown by remember(list) { derivedStateOf { list.layoutInfo.visibleItemsInfo.any { it.key == HERO_KEY } } }
+    LaunchedEffect(holder, header, shown) { holder?.header = header.takeIf { shown } }
+    DisposableEffect(holder) { onDispose { holder?.header = null } }
     Box(
         modifier
             .size(width, height)
@@ -346,7 +388,12 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
             val density = LocalDensity.current
             val request = remember(url, width, height, density) {
                 with(density) {
-                    ImageRequest.Builder(context).data(url).size(width.roundToPx(), height.roundToPx()).build()
+                    // Software only while the luminance pass still has to read the pixels (2 GB boxes).
+                    ImageRequest.Builder(context)
+                        .data(url)
+                        .size(width.roundToPx(), height.roundToPx())
+                        .allowHardware(heroHeaderCache.containsKey(url))
+                        .build()
                 }
             }
             AsyncImage(
@@ -354,6 +401,11 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize(),
+                onSuccess = { state ->
+                    header = heroHeaderCache.getOrPut(url) {
+                        runCatching { heroBackdrop(state.result.image.toBitmap()) }.getOrDefault(HeaderBackdrop(emptyList()))
+                    }
+                },
             )
         }
         Box(
@@ -369,8 +421,9 @@ private fun HeroArt(url: String?, width: Dp, height: Dp, list: LazyListState, mo
     }
 }
 
-private const val FADE_LEFT = 0.45f
-private const val FADE_BOTTOM = 0.6f
+/** One luminance pass per still: the home recomposes all the time. */
+private val heroHeaderCache = ConcurrentHashMap<String, HeaderBackdrop>()
+
 
 @Composable
 private fun Hero(
@@ -436,6 +489,21 @@ private fun Hero(
 }
 
 private val COMPACT_HEIGHT = 480.dp
+
+/** What friends do, who plays now first; a line with a title opens it (web `FriendsActivity`). */
+@Composable
+private fun FriendsActivity(lines: List<FriendLine>, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(IrisSpace.s2)) {
+        Eyebrow("Friends")
+        lines.forEach { line ->
+            RowCard(onClick = { line.collectionId?.let(onOpen) }, enabled = line.collectionId != null) { _ ->
+                Mascot(line.friend, IrisSize.avatar)
+                Text(line.text, style = IrisType.body, color = IrisColor.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                line.whenSaid?.let { Text(it, style = IrisType.meta, color = IrisColor.inkMuted) }
+            }
+        }
+    }
+}
 
 /** "Right now": what is downloading, in a few words; nothing when nothing is (web `RightNow`). */
 @Composable

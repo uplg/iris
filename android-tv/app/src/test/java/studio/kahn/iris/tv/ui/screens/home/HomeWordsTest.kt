@@ -7,8 +7,11 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DiskSpace
+import studio.kahn.iris.tv.data.FriendAction
+import studio.kahn.iris.tv.data.FriendEvent
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
+import studio.kahn.iris.tv.data.ReleaseNote
 import studio.kahn.iris.tv.data.TorrentState
 import studio.kahn.iris.tv.data.TorrentView
 
@@ -23,6 +26,35 @@ class HomeWordsTest {
         )
         assertEquals(listOf("1 download · 10%"), rightNow(HomeSummary(1, 10.0, 1, 1)))
         assertEquals(emptyList<String>(), rightNow(HomeSummary(0, 0.0, 0, 0)))
+    }
+
+    @Test
+    fun friendInASentence() {
+        val e = FriendEvent(
+            action = FriendAction.watching,
+            at = OffsetDateTime.parse("2026-10-05T20:00:00Z"),
+            friendId = UUID.randomUUID(),
+            friendName = "Muriel",
+            title = "Severance",
+            season = 2,
+            episode = 4,
+        )
+        assertEquals("Muriel is watching Severance · S2:E4", friendLine(e))
+        assertEquals("Muriel added Severance", friendLine(e.copy(action = FriendAction.added, season = null, episode = null)))
+    }
+
+    @Test
+    fun friendRequestsAreSaid() {
+        assertEquals(listOf("2 friend requests"), rightNow(HomeSummary(0, 0.0, 0, 0, friendRequests = 2)))
+    }
+
+    @Test
+    fun updateSentenceAfterAnUpdateOnly() {
+        val release = ReleaseNote(version = "2.0.0", note = "Two more trackers.")
+        assertEquals("Two more trackers.", noteDue(release, "1.9.0"))
+        assertNull(noteDue(release, "2.0.0"))
+        assertNull(noteDue(release, null))
+        assertNull(noteDue(ReleaseNote(version = "2.0.0"), "1.9.0"))
     }
 
     @Test

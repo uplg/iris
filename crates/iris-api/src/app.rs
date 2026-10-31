@@ -19,11 +19,11 @@ use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
     // TWO rate-limit lanes on `/api/auth/*`, keyed per client IP
-    // (`CF-Connecting-IP`; peer socket IP only for non-tunnelled/dev access —
+    // (`CF-Connecting-IP`; peer socket IP only for direct/dev access —
     // see `rate_limit::CloudflareIpKeyExtractor`).
     //
     // NOTE on the key: every device in a household reaches Iris through the
-    // same Cloudflare URL, so `CF-Connecting-IP` is the household's single
+    // same public URL, so `CF-Connecting-IP` is the household's single
     // public (NAT) IP — ONE bucket shared by every browser, phone and TV in
     // the home. That makes the split below the real lever, not the key:
     //
@@ -63,6 +63,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/devices", routes::devices::me_router())
         .nest("/passkeys", routes::passkeys::me_router())
         .nest("/follows", routes::follows::router())
+        .nest("/friends", routes::friends::router())
         .nest("/preferences", routes::preferences::router())
         .nest(
             "/playback-preferences",
@@ -97,6 +98,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/torrents", torrents)
         .nest("/providers", routes::providers::router())
         .nest("/metadata", routes::metadata::router())
+        .route("/release-note", get(routes::release_note::get))
         .layer(axum::middleware::from_fn(client_version_layer));
     let api = Router::new()
         .route("/health", get(routes::health::get))

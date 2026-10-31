@@ -132,6 +132,17 @@ fun SettingsScreen(
             onPair = vm::pair,
             onStopWaiting = vm::stopWaiting,
             onRevoke = vm::revoke,
+            onAddProfile = vm::addProfile,
+            onSwitchProfile = vm::switchProfile,
+            onRemoveProfile = vm::removeProfile,
+            onFindFriends = vm::findFriends,
+            onAskFriend = vm::askFriend,
+            onAcceptFriend = vm::acceptFriend,
+            onDeclineFriend = vm::declineFriend,
+            onRemoveFriend = vm::removeFriend,
+            onTakeBack = vm::takeBack,
+            onShare = vm::setSharing,
+            onShowToFriends = vm::showToFriends,
             onChangePassword = vm::changePassword,
             onSignOut = vm::signOut,
             onInterfaceSize = vm::setInterfaceSize,
@@ -198,7 +209,7 @@ fun SettingsContent(
                         .padding(IrisSpace.s1),
                     verticalArrangement = Arrangement.spacedBy(IrisSpace.s1),
                 ) {
-                    SettingsSection.entries.forEach { s ->
+                    state.sections.forEach { s ->
                         RailItem(
                             if (s == SettingsSection.App && update.available != null) "App update · new" else s.label,
                             selected = s == section,
@@ -250,7 +261,7 @@ private fun PageHead(state: SettingsUiState, actions: SettingsActions) {
             Text("Settings", style = IrisType.page, color = IrisColor.ink)
             val user = state.account.valueOrNull
             if (user != null) {
-                Text("${user.displayName} · ${user.email}", style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1)
+                Text(if (user.accountId == null) "${user.displayName} · ${user.email}" else user.displayName, style = IrisType.meta, color = IrisColor.inkMuted, maxLines = 1)
             }
         }
         ActionButton("Watch history", actions.onOpenHistory, style = ActionStyle.Secondary, size = ActionSize.Small)
@@ -395,6 +406,24 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
             onPick = actions.onSaveSubtitles,
             onDismiss = actions.onCloseDialog,
         )
+        SettingsDialog.AddProfile -> NameDialog("Profiles", "A new profile", "Name", "Add the profile", state, Busy.PROFILE, actions.onAddProfile, actions.onCloseDialog)
+        SettingsDialog.FindFriend -> NameDialog("Friends", "Find someone", "Their name", "Find", state, Busy.FRIENDS, actions.onFindFriends, actions.onCloseDialog)
+        is SettingsDialog.RemoveProfile -> ConfirmDialog(
+            eyebrow = "Profiles",
+            title = "Remove ${dialog.profile.name}?",
+            body = "Its history, watchlist and preferences go. What it added stays in the library.",
+            confirmLabel = "Remove the profile",
+            onConfirm = { actions.onRemoveProfile(dialog.profile) },
+            onCancel = actions.onCloseDialog,
+        )
+        is SettingsDialog.RemoveFriend -> ConfirmDialog(
+            eyebrow = "Friends",
+            title = "Remove ${dialog.person.name}?",
+            body = "You stop seeing each other’s activity. They are not told.",
+            confirmLabel = "Remove the friend",
+            onConfirm = { actions.onRemoveFriend(dialog.person) },
+            onCancel = actions.onCloseDialog,
+        )
         is SettingsDialog.Revoke -> ConfirmDialog(
             eyebrow = "Devices",
             title = "Sign out ${dialog.device.name()}?",
@@ -414,6 +443,44 @@ private fun SettingsDialogs(state: SettingsUiState, actions: SettingsActions) {
             },
             onCancel = actions.onCloseDialog,
         )
+    }
+}
+
+/** One name to enter: a new profile, someone to find. */
+@Composable
+private fun NameDialog(
+    eyebrow: String,
+    title: String,
+    label: String,
+    confirm: String,
+    state: SettingsUiState,
+    busy: String,
+    onConfirm: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    val first = remember { FocusRequester() }
+    FormDialog(
+        eyebrow = eyebrow,
+        title = title,
+        confirmLabel = confirm,
+        onConfirm = { onConfirm(name) },
+        onCancel = onCancel,
+        firstFocus = first,
+        busy = state.busy == busy,
+        busyText = "Saving…",
+    ) {
+        TextInput(
+            name,
+            { name = it },
+            label = label,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { onConfirm(name) }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(first),
+        )
+        state.dialogError?.let { StatusLine(it.text, tone = StatusTone.Down) }
     }
 }
 

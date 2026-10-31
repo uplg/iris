@@ -19,10 +19,12 @@
 		groups: readonly Group[];
 		/** Download a gone release again; without it the list only reads (an admin's view). */
 		onrestore?: (it: Item) => Promise<unknown>;
+		/** Keep a title from friends; without it the list only reads. */
+		onhide?: (it: Item) => Promise<unknown>;
 		/** Titles lead to their collection page. */
 		collections?: boolean;
 	}
-	let { groups, onrestore, collections = true }: Props = $props();
+	let { groups, onrestore, onhide, collections = true }: Props = $props();
 	const g = new Gesture();
 
 	const label = (group: Group, it: Item) => (group.solo ? group.title : (whatWatched(it) ?? it.torrent_name));
@@ -87,6 +89,14 @@
 						{/each}
 					</ul>
 				</div>
+			{/if}
+			{#if onhide}
+				<button
+					class="btn ghost"
+					aria-label="Hide {group.title} from friends"
+					{...pending(g.is(`hide:${group.key}`))}
+					onclick={() => g.run(() => onhide(group.items[0]), undefined, `hide:${group.key}`)}>Hide from friends</button
+				>
 			{/if}
 		</li>
 	{/each}

@@ -2,6 +2,7 @@
 
 import { Session, type SessionState } from '@iris/api/session';
 import { Gesture } from '#lib/gesture.svelte.ts';
+import { chosen } from '#lib/profiles/chosen.svelte.ts';
 import { queryClient } from '#lib/query.ts';
 import { rememberSearch } from '#lib/search/cache.ts';
 
@@ -22,6 +23,7 @@ class SessionView {
 		this.#core.subscribe((s) => {
 			// a household browser: the next person must never read, or save over, the last one's answers
 			if (accountChanged(this.state, s)) forgetAccount();
+			if (s.status === 'signed_out') chosen.set(false);
 			this.state = s;
 		});
 	}

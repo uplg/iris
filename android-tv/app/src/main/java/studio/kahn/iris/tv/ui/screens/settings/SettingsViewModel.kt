@@ -1,5 +1,14 @@
 package studio.kahn.iris.tv.ui.screens.settings
 
+import studio.kahn.iris.tv.data.UnhideRequest
+import studio.kahn.iris.tv.data.SwitchProfileRequest
+import studio.kahn.iris.tv.data.SharingRequest
+import studio.kahn.iris.tv.data.ProfileView
+import studio.kahn.iris.tv.data.ProfileChoice
+import studio.kahn.iris.tv.data.PersonView
+import studio.kahn.iris.tv.data.HiddenTitleView
+import studio.kahn.iris.tv.data.FriendsOverview
+import studio.kahn.iris.tv.data.CreateProfileRequest
 import studio.kahn.iris.tv.ui.format.languagesPhrase
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
@@ -39,6 +48,8 @@ import studio.kahn.iris.tv.ui.components.Notice
 /** The parts of Settings, in rail order. */
 enum class SettingsSection(val label: String) {
     You("You"),
+    Profiles("Profiles"),
+    Friends("Friends"),
     Playback("Playback"),
     Recommendations("Recommendations"),
     Devices("Devices"),
@@ -75,6 +86,10 @@ sealed interface SettingsDialog {
     data object Audio : SettingsDialog
     data object Subtitles : SettingsDialog
     data class Revoke(val device: DeviceView) : SettingsDialog
+    data object AddProfile : SettingsDialog
+    data class RemoveProfile(val profile: ProfileView) : SettingsDialog
+    data object FindFriend : SettingsDialog
+    data class RemoveFriend(val person: PersonView) : SettingsDialog
     /** Another server means signing out here and pairing there. */
     data object ChangeServer : SettingsDialog
 }
@@ -103,6 +118,10 @@ data class SettingsUiState(
     val draft: Picks? = null,
     val devices: Loadable<List<DeviceView>> = Loadable.Loading,
     val passkeys: Loadable<List<PasskeyView>> = Loadable.Loading,
+    val profiles: Loadable<List<ProfileView>> = Loadable.Loading,
+    val friends: Loadable<FriendsOverview> = Loadable.Loading,
+    /** The last search for someone to ask; null before any. */
+    val found: List<PersonView>? = null,
     val dialog: SettingsDialog? = null,
     val dialogError: DialogError? = null,
     /** The action running ([Busy]), its control shows it. */
@@ -116,6 +135,12 @@ data class SettingsUiState(
     /** How big the interface draws on this device. */
     val interfaceSize: InterfaceSize = InterfaceSize.Default,
 ) {
+    /** The sections of this profile: the password and passkeys stay with the main one. */
+    val sections: List<SettingsSection>
+        get() = SettingsSection.entries.filter {
+            account.valueOrNull?.accountId == null || (it != SettingsSection.Passkeys && it != SettingsSection.Password)
+        }
+
     val recoDirty: Boolean
         get() = draft != null && reco.valueOrNull?.let { Picks.of(it.saved) } != draft
 }
@@ -130,6 +155,8 @@ object Busy {
     const val PAIR = "pair"
     const val PASSWORD = "password"
     const val SIGN_OUT = "sign-out"
+    const val PROFILE = "profile"
+    const val FRIENDS = "friends"
     fun revoke(device: DeviceView) = "revoke:${device.jti}"
 }
 
@@ -175,6 +202,8 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             launch { readPlayback() }
             launch { readReco() }
             launch { readDevices() }
+            launch { readProfiles() }
+            launch { readFriends() }
             launch {
                 val next = load(mutable.value.passkeys) { absentAs(emptyList()) { api().listPasskeys() } }
                 mutable.update { it.copy(passkeys = next) }
@@ -195,6 +224,16 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     private suspend fun readDevices() {
         val next = load(mutable.value.devices) { api().listDevices() }
         mutable.update { it.copy(devices = next) }
+    }
+
+    private suspend fun readProfiles() {
+        val next = load(mutable.value.profiles) { api().profiles() }
+        mutable.update { it.copy(profiles = next) }
+    }
+
+    private suspend fun readFriends() {
+        val next = load(mutable.value.friends) { api().friends() }
+        mutable.update { it.copy(friends = next) }
     }
 
     private suspend fun readReco() {
@@ -417,12 +456,100 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun addProfile(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) {
+            mutable.update { it.copy(dialogError = DialogError("Enter a name.")) }
+            return
+        }
+        act(Busy.PROFILE, SettingsSection.Profiles, inDialog = true) { api ->
+            val next = api.createProfile(CreateProfileRequest(name = clean))
+            mutable.update { it.copy(profiles = Loadable.Ready(next)) }
+            "Profile $clean added."
+        }
+    }
+
+    fun switchProfile(profile: ProfileView) {
+        act(Busy.PROFILE, SettingsSection.Profiles) { api ->
+            api.switchProfile(SwitchProfileRequest(profileId = profile.id))
+            ProfileChoice.changed()
+            mutable.update { it.copy(nameChanges = it.nameChanges + 1, found = null) }
+            refresh()
+            "On ${profile.name}."
+        }
+    }
+
+    fun removeProfile(profile: ProfileView) {
+        act(Busy.PROFILE, SettingsSection.Profiles, inDialog = true) { api ->
+            api.removeProfile(profile.id.toString())
+            readProfiles()
+            "Profile ${profile.name} removed."
+        }
+    }
+
+    /** Answered, then the friends read again. */
+    private fun friendsAct(inDialog: Boolean = false, block: suspend (IrisApi) -> String) {
+        act(Busy.FRIENDS, SettingsSection.Friends, inDialog = inDialog) { api ->
+            block(api).also { readFriends() }
+        }
+    }
+
+    fun findFriends(name: String) {
+        val clean = name.trim()
+        if (clean.length < 2) {
+            mutable.update { it.copy(dialogError = DialogError("Enter two letters at least.")) }
+            return
+        }
+        act(Busy.FRIENDS, SettingsSection.Friends, inDialog = true) { api ->
+            val found = api.searchFriends(clean)
+            mutable.update { it.copy(found = found) }
+            null
+        }
+    }
+
+    fun askFriend(person: PersonView) = friendsAct { api ->
+        api.askFriend(person.id.toString())
+        mutable.update { s -> s.copy(found = s.found?.filter { it.id != person.id }) }
+        "Request sent to ${person.name}."
+    }
+
+    fun acceptFriend(person: PersonView) = friendsAct { api ->
+        api.acceptFriend(person.id.toString())
+        "You and ${person.name} are friends."
+    }
+
+    fun declineFriend(person: PersonView) = friendsAct { api ->
+        api.declineFriend(person.id.toString())
+        "Request from ${person.name} declined."
+    }
+
+    fun removeFriend(person: PersonView) = friendsAct(inDialog = true) { api ->
+        api.removeFriend(person.id.toString())
+        "${person.name} removed."
+    }
+
+    fun takeBack(person: PersonView) = friendsAct { api ->
+        api.removeFriend(person.id.toString())
+        "Request to ${person.name} taken back."
+    }
+
+    fun setSharing(on: Boolean) = friendsAct { api ->
+        api.setSharing(SharingRequest(shareWatching = on))
+        if (on) "Friends can see what you watch." else "What you watch stays private."
+    }
+
+    fun showToFriends(title: HiddenTitleView) = friendsAct { api ->
+        api.showToFriends(UnhideRequest(collectionId = title.collectionId, infohash = title.infohash))
+        "${title.title} is visible to friends again."
+    }
+
     fun signOut() {
         if (mutable.value.busy != null) return
         mutable.update { it.copy(busy = Busy.SIGN_OUT) }
         viewModelScope.launch {
             // Best effort: the session is forgotten here whether the server heard or not.
             bestEffort { api().logout() }
+            ProfileChoice.forget()
             container.sessionStore.clear()
             mutable.update { it.copy(busy = null, signedOut = true) }
         }

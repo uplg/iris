@@ -9,6 +9,13 @@ declare const __IRIS_WEB_VERSION__: string;
  *  under the existing names so call sites don't change; the rest stays
  *  hand-written until its endpoints are annotated in later waves. */
 export type User = components['schemas']['UserResponse'];
+export type ReleaseNote = components['schemas']['ReleaseNote'];
+export type ProfileView = components['schemas']['ProfileView'];
+export type PersonView = components['schemas']['PersonView'];
+export type HiddenTitleView = components['schemas']['HiddenTitleView'];
+export type FriendsOverview = components['schemas']['FriendsOverview'];
+export type FriendEvent = components['schemas']['FriendEvent'];
+export type FriendActivity = components['schemas']['FriendActivity'];
 
 /** The longest name the server accepts (display names, passkey names), in bytes. */
 export const MAX_NAME = 64;
@@ -482,6 +489,29 @@ export type ForYouResponse = components['schemas']['ForYou'];
 export type MoodTile = components['schemas']['MoodTile'];
 export type MoodBoard = components['schemas']['MoodBoard'];
 export type MoodResults = components['schemas']['MoodResults'];
+export const profiles = {
+	list: () => api.get<ProfileView[]>('/me/profiles'),
+	create: (name: string) => api.post<ProfileView[]>('/me/profiles', { name }),
+	remove: (id: string) => api.delete<void>(`/me/profiles/${seg(id)}`),
+	switchTo: (profile_id: string) => api.post<User>('/auth/switch-profile', { profile_id })
+};
+
+export const friends = {
+	overview: () => api.get<FriendsOverview>('/me/friends'),
+	search: (q: string) => api.get<PersonView[]>(`/me/friends/search?q=${seg(q)}`),
+	activity: () => api.get<FriendActivity>('/me/friends/activity'),
+	ask: (id: string) => api.post<void>(`/me/friends/${seg(id)}`),
+	accept: (id: string) => api.post<void>(`/me/friends/${seg(id)}/accept`),
+	decline: (id: string) => api.post<void>(`/me/friends/${seg(id)}/decline`),
+	remove: (id: string) => api.delete<void>(`/me/friends/${seg(id)}`),
+	setSharing: (share_watching: boolean) => api.put<void>('/me/friends/sharing', { share_watching }),
+	hide: (infohash: string) => api.post<void>('/me/friends/hidden', { infohash }),
+	unhide: (title: Pick<HiddenTitleView, 'collection_id' | 'infohash'>) =>
+		request<void>('DELETE', '/me/friends/hidden', { collection_id: title.collection_id, infohash: title.infohash })
+};
+
+export const releaseNote = () => api.get<ReleaseNote>('/release-note');
+
 export const me = {
 	/** `include_grabbable` opts into synthesised "next episode isn't on
 	 *  disk yet" tiles (`grabbable: true`, empty infohash) — the web bundle

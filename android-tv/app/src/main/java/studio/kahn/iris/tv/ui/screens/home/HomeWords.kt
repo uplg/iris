@@ -2,6 +2,8 @@ package studio.kahn.iris.tv.ui.screens.home
 
 import studio.kahn.iris.tv.ui.format.isResumable
 import studio.kahn.iris.tv.data.ContinueWatchingItem
+import studio.kahn.iris.tv.data.FriendAction
+import studio.kahn.iris.tv.data.FriendEvent
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.ui.format.episodeCode
@@ -23,6 +25,18 @@ fun rightNow(s: HomeSummary): List<String> = buildList {
         val eta = s.downloadingEtaSeconds?.takeIf { it > 0 }?.let { " · ${timeLeft(it.toDouble())}" }.orEmpty()
         add("${plural(s.downloading, "download")} · ${percent(s.downloadingPct)}$eta")
     }
+    s.friendRequests?.takeIf { it > 0 }?.let { add(plural(it, "friend request")) }
+}
+
+/** What a friend does, in a sentence: "Muriel is watching Severance · S2:E4". */
+fun friendLine(e: FriendEvent): String {
+    val does = when (e.action) {
+        FriendAction.watching -> "is watching"
+        FriendAction.added -> "added"
+        else -> "watched"
+    }
+    val code = episodeCode(e.season, e.episode)?.let { " · $it" }.orEmpty()
+    return "${e.friendName} $does ${e.title}$code"
 }
 
 /** What is still downloading in each collection, as a share of its bytes (0 to 100). */

@@ -4,6 +4,7 @@ import { render } from 'vitest-browser-svelte';
 import type { CollectionListItem, ContinueWatchingItem, WatchlistItem } from '@iris/api/client';
 import '../styles/app.css';
 import { stubApi } from '#lib/test/api.ts';
+import { STORAGE } from '#lib/storage.ts';
 import { ui } from '#lib/ui.svelte.ts';
 import Provided from '#lib/home/test/Provided.svelte';
 import Home from './+page.svelte';
@@ -61,6 +62,8 @@ function home(routes: Record<string, unknown> = {}) {
 		'/me/for-you': { shelves: [] },
 		'/library?view=collections': { view: 'collections', items: [] },
 		'/library?view=torrents': { view: 'torrents', items: [] },
+		'/release-note': { version: '1.0.0' },
+		'/me/friends/activity': { live: [], recent: [] },
 		'/me/summary': { downloading: 0, downloading_pct: 0, new_episodes: 0, seeding: 0 },
 		'/me/preferences': { languages: [], genres: [], include_anime: false, onboarding_completed: true },
 		'/discover/featured': { movies: [], series: [] },
@@ -83,6 +86,33 @@ const shelf = (name: string) => page.getByRole('region', { name, exact: true });
 
 describe('home', () => {
 	beforeEach(() => nav.goto.mockClear());
+
+	it('says what friends are doing, who plays now first', async () => {
+		const seen = { friend_id: 'f', friend_name: 'Muriel', at: '2026-10-05T20:00:00Z' };
+		home({
+			'/me/friends/activity': {
+				live: [{ ...seen, action: 'watching', title: 'Severance', collection_id: 'c9', season: 2, episode: 4 }],
+				recent: [{ ...seen, action: 'added', title: 'Dune' }]
+			}
+		});
+		await show();
+		const friends = shelf('Friends');
+		await expect
+			.element(friends.getByRole('link', { name: 'Muriel is watching Severance · S2:E4' }))
+			.toHaveAttribute('href', '/collection/c9');
+		await expect.element(friends.getByText('Muriel added Dune')).toBeVisible();
+	});
+
+	it('says what changed once, after an update, until closed', async () => {
+		localStorage.setItem(STORAGE.releaseSeen, '"1.9.0"');
+		home({ '/release-note': { version: '2.0.0', note: 'Two more trackers.' } });
+		await show();
+		await expect.element(page.getByText('Updated to 2.0.0 · Two more trackers.')).toBeVisible();
+		await page.getByRole('button', { name: 'Close' }).click();
+		await expect.element(page.getByText('Updated to 2.0.0 · Two more trackers.')).not.toBeInTheDocument();
+		expect(localStorage.getItem(STORAGE.releaseSeen)).toBe('"2.0.0"');
+		localStorage.removeItem(STORAGE.releaseSeen);
+	});
 
 	it('resumes the last thing: where it stopped, what is left, the languages it will play with', async () => {
 		home({ '/me/continue-watching?include_grabbable=true': [tile()] });

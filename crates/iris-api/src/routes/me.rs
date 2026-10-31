@@ -17,6 +17,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(me))
+        .nest("/profiles", crate::routes::profiles::router())
         .route("/continue-watching", get(continue_watching))
         .route(
             "/continue-watching/dismiss",
@@ -65,6 +66,7 @@ pub(crate) async fn change_password(
     user: AuthUser,
     Json(body): Json<ChangePasswordRequest>,
 ) -> ApiResult<(axum_extra::extract::CookieJar, axum::http::StatusCode)> {
+    crate::routes::profiles::the_account(&state, &user).await?;
     crate::passwords::check_policy(&body.new_password)?;
     let current = iris_db::users::get_password_hash(state.db(), user.id)
         .await?
@@ -83,7 +85,7 @@ pub(crate) async fn change_password(
     let passkeys = iris_db::users::set_password(state.db(), user.id, &new_hash)
         .await?
         .ok_or(ApiError::Unauthorized)?;
-    state.session_cuts().forget(user.id);
+    state.session_cuts().forget();
     let id = Uuid::from(user.id).to_string();
     super::audit(
         &state,
@@ -466,6 +468,8 @@ pub(crate) struct HomeSummary {
     /// Deprecated: always `0` (the watchlist cards count their own).
     #[schema(deprecated)]
     new_episodes: i64,
+    /// Friend requests waiting for this profile's answer.
+    friend_requests: Option<i64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -482,8 +486,9 @@ pub(crate) struct DiskSpace {
 )]
 pub(crate) async fn summary(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
 ) -> ApiResult<Json<HomeSummary>> {
+    let friend_requests = iris_db::friends::incoming_count(state.db(), user.id).await?;
     let torrents = state.engine().list();
     let active: Vec<_> = torrents
         .iter()
@@ -506,6 +511,7 @@ pub(crate) async fn summary(
         downloading_eta_seconds,
         seeding: 0,
         new_episodes: 0,
+        friend_requests: Some(friend_requests),
     }))
 }
 

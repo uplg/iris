@@ -1,5 +1,9 @@
 package studio.kahn.iris.tv.screenshot
 
+import studio.kahn.iris.tv.data.ProfileView
+import studio.kahn.iris.tv.data.PersonView
+import studio.kahn.iris.tv.data.HiddenTitleView
+import studio.kahn.iris.tv.data.FriendsOverview
 import studio.kahn.iris.tv.data.InterfaceSize
 import androidx.compose.runtime.Composable
 import java.io.File
@@ -77,12 +81,33 @@ class SettingsScreenshots {
         devices = Loadable.Ready(devices),
         passkeys = Loadable.Ready(passkeys),
     )
+    private val family = listOf(
+        ProfileView(current = true, id = UUID(0, 1), main = true, name = "Vincent"),
+        ProfileView(current = false, id = UUID(0, 7), main = false, name = "Muriel"),
+    )
+    private val friends = FriendsOverview(
+        friends = listOf(PersonView(UUID(0, 8), "Camille"), PersonView(UUID(0, 9), "Théo")),
+        hidden = listOf(HiddenTitleView("Love Island")),
+        incoming = listOf(PersonView(UUID(0, 10), "Sarah")),
+        outgoing = listOf(PersonView(UUID(0, 11), "Hugo")),
+        shareWatching = true,
+    )
     private val update = UpdateState(installed = "1.5.0", installedCode = 33, latest = AppUpdater.VersionStatus.UpdateAvailable("1.6.0"), checking = false)
     private val facts = TvFacts("1.5.0 (33) · build 20261006-1400", "Google Chromecast HD", "14 (API 34)")
 
     @Composable
     private fun Settings(state: SettingsUiState = ready, section: SettingsSection, up: UpdateState = update) {
         SettingsContent(state, up, SettingsActions(), initialSection = section, now = now, facts = facts)
+    }
+
+    @Test
+    fun profiles() = shots.snapEverySize("settings_profiles") {
+        Settings(ready.copy(profiles = Loadable.Ready(family)), SettingsSection.Profiles)
+    }
+
+    @Test
+    fun friends() = shots.snapEverySize("settings_friends") {
+        Settings(ready.copy(friends = Loadable.Ready(friends), found = listOf(PersonView(UUID(0, 12), "Vincent"))), SettingsSection.Friends)
     }
 
     @Test

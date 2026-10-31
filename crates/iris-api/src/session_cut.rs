@@ -55,11 +55,12 @@ impl SessionCuts {
         Ok(())
     }
 
-    /// After a committed write to the user's row (cut stamped, account
-    /// deleted): the next request reads it again.
-    pub fn forget(&self, user: UserId) {
+    /// After a committed write to users' rows (cut stamped, account deleted,
+    /// and an account's profiles move with it): the next requests read them
+    /// again.
+    pub fn forget(&self) {
         let mut cuts = self.inner.write().unwrap_or_else(PoisonError::into_inner);
-        cuts.by_user.remove(&user);
+        cuts.by_user.clear();
         cuts.generation += 1;
     }
 }
@@ -80,7 +81,7 @@ mod tests {
         iris_db::users::set_password(&pool, user, "h")
             .await
             .unwrap();
-        cuts.forget(user);
+        cuts.forget();
         assert!(matches!(
             cuts.check(&pool, user, before).await,
             Err(ApiError::Unauthorized)

@@ -1,5 +1,6 @@
 package studio.kahn.iris.tv.ui.screens.library
 
+import studio.kahn.iris.tv.data.HideRequest
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -88,6 +89,13 @@ class HistoryViewModel(private val container: AppContainer) : ViewModel() {
 
     fun consumePlay() {
         play.value = null
+    }
+
+    fun hide(group: HistoryGroupUi) {
+        actions.runSaying("hide:${group.key}") {
+            container.api().hideFromFriends(HideRequest(infohash = group.lines.first().infohash))
+            "${group.title} is hidden from friends."
+        }
     }
 
     fun restore(line: HistoryLine) {

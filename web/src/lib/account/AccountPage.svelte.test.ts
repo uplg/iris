@@ -33,6 +33,8 @@ function site(more: Record<string, unknown> = {}) {
 	return stubApi({
 		'GET /me/passkeys': [iphone, mac],
 		'GET /me/devices': [],
+		'GET /me/friends': { friends: [], incoming: [], outgoing: [], share_watching: false, hidden: [] },
+		'GET /me/profiles': [{ id: 'u1', name: 'Léonard', main: true, current: true }],
 		'GET /me/playback-preferences': { audio_language: 'fre', subtitle_language: 'off' },
 		'GET /me/preferences': { languages: ['french'], genres: [], include_anime: false, onboarding_completed: true },
 		'GET /genres': { genres: [{ id: 18, name: 'Drama' }] },
@@ -42,6 +44,84 @@ function site(more: Record<string, unknown> = {}) {
 }
 const region = (name: string) => page.getByRole('region', { name });
 const keyRows = () => region('Passkeys').getByRole('listitem');
+
+describe('friends', () => {
+	beforeEach(() => {
+		session.signedIn(leonard);
+		route.url = new URL('http://iris.test/account');
+	});
+
+	it('finds by name and asks; answers a request; turns sharing on', async () => {
+		const api = site({
+			'GET /me/friends': { friends: [], incoming: [{ id: 'f1', name: 'Muriel' }], outgoing: [], share_watching: false, hidden: [] },
+			'GET /me/friends/search?q=vin': [{ id: 'f2', name: 'Vincent' }],
+			'POST /me/friends/f2': noContent,
+			'POST /me/friends/f1/accept': noContent,
+			'PUT /me/friends/sharing': noContent
+		});
+		render(AccountPage);
+		const section = region('Friends');
+		await section.getByRole('button', { name: 'Accept' }).click();
+		await expect.poll(() => api.sent('POST', '/me/friends/f1/accept')).toHaveLength(1);
+		await section.getByLabelText('Find someone by name').fill('vin');
+		await section.getByRole('button', { name: 'Find', exact: true }).click();
+		await section.getByRole('button', { name: 'Ask Vincent' }).click();
+		await expect.poll(() => api.sent('POST', '/me/friends/f2')).toHaveLength(1);
+		await section.getByRole('radio', { name: 'Share with friends' }).click();
+		await expect.poll(() => api.sent('PUT', '/me/friends/sharing')[0]?.body).toEqual({ share_watching: true });
+	});
+
+	it('a hidden title can be shown again', async () => {
+		const api = site({
+			'GET /me/friends': {
+				friends: [],
+				incoming: [],
+				outgoing: [],
+				share_watching: true,
+				hidden: [{ collection_id: 'c1', title: 'Dune' }]
+			},
+			'DELETE /me/friends/hidden': noContent
+		});
+		render(AccountPage);
+		await region('Friends').getByRole('button', { name: 'Show Dune to friends again' }).click();
+		await expect.poll(() => api.sent('DELETE', '/me/friends/hidden')[0]?.body).toEqual({ collection_id: 'c1' });
+	});
+});
+
+describe('profiles', () => {
+	beforeEach(() => {
+		session.signedIn(leonard);
+		route.url = new URL('http://iris.test/account');
+	});
+
+	it('adds one, says who is in use, and asks before removing', async () => {
+		const muriel = { id: 'u9', name: 'Muriel', main: false, current: false };
+		const api = site({
+			'GET /me/profiles': [{ id: 'u1', name: 'Léonard', main: true, current: true }, muriel],
+			'POST /me/profiles': [{ id: 'u1', name: 'Léonard', main: true, current: true }, muriel],
+			'DELETE /me/profiles/u9': noContent
+		});
+		render(AccountPage);
+		const section = region('Profiles');
+		await expect.element(section.getByText('Main profile · In use')).toBeVisible();
+		await section.getByLabelText('New profile').fill('Muriel');
+		await section.getByRole('button', { name: 'Add' }).click();
+		await expect.poll(() => api.sent('POST', '/me/profiles')[0]?.body).toEqual({ name: 'Muriel' });
+		await section.getByRole('button', { name: 'Remove the profile Muriel' }).click();
+		await page.getByRole('button', { name: 'Remove the profile', exact: true }).click();
+		await expect.poll(() => api.sent('DELETE', '/me/profiles/u9')).toHaveLength(1);
+	});
+
+	it('a profile has no password or passkeys of its own', async () => {
+		site();
+		session.signedIn({ ...leonard, id: 'u9', account_id: 'u1' });
+		render(AccountPage);
+		await expect.element(region('Profiles')).toBeVisible();
+		await expect.element(region('Passkeys')).not.toBeInTheDocument();
+		await expect.element(region('Password')).not.toBeInTheDocument();
+		await expect.element(page.getByText('leonard.k@example.com')).not.toBeInTheDocument();
+	});
+});
 
 describe('account page', () => {
 	beforeEach(() => {

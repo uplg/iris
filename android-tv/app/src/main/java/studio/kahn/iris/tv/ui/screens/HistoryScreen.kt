@@ -1,5 +1,8 @@
 package studio.kahn.iris.tv.ui.screens
 
+import studio.kahn.iris.tv.ui.components.ActionStyle
+import studio.kahn.iris.tv.ui.components.ActionSize
+import studio.kahn.iris.tv.ui.components.ActionButton
 import studio.kahn.iris.tv.ui.state.SearchInstead
 import studio.kahn.iris.tv.ui.state.SearchInsteadEffect
 import androidx.activity.compose.BackHandler
@@ -75,6 +78,7 @@ import studio.kahn.iris.tv.ui.components.NoticeLine
 data class HistoryActions(
     val onPlay: (infohash: String, fileIdx: Int) -> Unit = { _, _ -> },
     val onRestore: (HistoryLine) -> Unit = {},
+    val onHide: (HistoryGroupUi) -> Unit = {},
     val onOpenTitle: (collectionId: String) -> Unit = {},
     val onRetry: () -> Unit = {},
     val onBack: () -> Unit = {},
@@ -108,6 +112,7 @@ fun HistoryScreen(
         actions = HistoryActions(
             onPlay = onPickFile,
             onRestore = vm::restore,
+            onHide = vm::hide,
             onOpenTitle = onOpenCollection,
             onRetry = vm::retry,
             onBack = onBack,
@@ -256,6 +261,13 @@ private fun HistoryGroupRow(
                     LineCard(group, line, busy, actions, Modifier.padding(start = IrisSpace.s6).focusReturn(keys, "line:${line.key}"))
                 }
             }
+            ActionButton(
+                "Hide from friends",
+                { actions.onHide(group) },
+                style = ActionStyle.Secondary,
+                size = ActionSize.Small,
+                busy = "hide:${group.key}" in busy,
+            )
         }
     }
 }
