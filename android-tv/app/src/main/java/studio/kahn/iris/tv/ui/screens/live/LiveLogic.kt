@@ -3,7 +3,6 @@ package studio.kahn.iris.tv.ui.screens.live
 import android.graphics.Bitmap
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
-import androidx.core.graphics.get
 import androidx.media3.common.PlaybackException
 import java.text.Normalizer
 import java.time.OffsetDateTime
@@ -11,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
 import studio.kahn.iris.tv.data.LiveChannel
 import studio.kahn.iris.tv.data.LiveCountry
 import studio.kahn.iris.tv.data.LiveProgramme
+import studio.kahn.iris.tv.ui.format.meanLuminance
 import studio.kahn.iris.tv.ui.format.plural
 import studio.kahn.iris.tv.ui.theme.IrisColor
 
@@ -190,33 +190,7 @@ enum class LogoTone(val plate: Color) {
 /** One luminance pass per logo: the grid recomposes on every guide refresh. */
 val logoToneCache = ConcurrentHashMap<String, LogoTone>()
 
-/** Mean relative luminance of the opaque pixels, sampled on a 32×32 grid. */
-fun logoTone(bitmap: Bitmap): LogoTone {
-    val stepX = maxOf(1, bitmap.width / 32)
-    val stepY = maxOf(1, bitmap.height / 32)
-    var luma = 0.0
-    var count = 0
-    var y = 0
-    while (y < bitmap.height) {
-        var x = 0
-        while (x < bitmap.width) {
-            val px = bitmap[x, y]
-            if (px ushr 24 and 0xFF > 25) {
-                luma += 0.2126 * linear(px ushr 16 and 0xFF) + 0.7152 * linear(px ushr 8 and 0xFF) +
-                    0.0722 * linear(px and 0xFF)
-                count++
-            }
-            x += stepX
-        }
-        y += stepY
-    }
-    return toneOf(if (count == 0) null else luma / count)
-}
-
-private fun linear(c: Int): Double {
-    val v = c / 255.0
-    return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
-}
+fun logoTone(bitmap: Bitmap): LogoTone = toneOf(meanLuminance(bitmap))
 
 /** Relative luminance of the light and dark plates. */
 private const val LIGHT_PLATE = 0.92

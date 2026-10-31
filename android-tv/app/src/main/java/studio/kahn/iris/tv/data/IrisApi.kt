@@ -3,6 +3,7 @@ package studio.kahn.iris.tv.data
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.HTTP
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
@@ -35,6 +36,50 @@ interface IrisApi {
 
     @POST("api/auth/logout")
     suspend fun logout()
+
+    /** Under `/api/auth`, the only path the refresh cookie goes to: new session cookies on the other profile. */
+    @POST("api/auth/switch-profile")
+    suspend fun switchProfile(@Body body: SwitchProfileRequest): UserResponse
+
+    @GET("api/me/profiles")
+    suspend fun profiles(): List<ProfileView>
+
+    @POST("api/me/profiles")
+    suspend fun createProfile(@Body body: CreateProfileRequest): List<ProfileView>
+
+    @DELETE("api/me/profiles/{id}")
+    suspend fun removeProfile(@Path("id") id: String)
+
+    @GET("api/me/friends")
+    suspend fun friends(): FriendsOverview
+
+    @GET("api/me/friends/search")
+    suspend fun searchFriends(@Query("q") q: String): List<PersonView>
+
+    @GET("api/me/friends/activity")
+    suspend fun friendActivity(): FriendActivity
+
+    @POST("api/me/friends/{id}")
+    suspend fun askFriend(@Path("id") id: String)
+
+    @POST("api/me/friends/{id}/accept")
+    suspend fun acceptFriend(@Path("id") id: String)
+
+    @POST("api/me/friends/{id}/decline")
+    suspend fun declineFriend(@Path("id") id: String)
+
+    /** Ends a friendship, or takes back one's own request. */
+    @DELETE("api/me/friends/{id}")
+    suspend fun removeFriend(@Path("id") id: String)
+
+    @PUT("api/me/friends/sharing")
+    suspend fun setSharing(@Body body: SharingRequest)
+
+    @POST("api/me/friends/hidden")
+    suspend fun hideFromFriends(@Body body: HideRequest)
+
+    @HTTP(method = "DELETE", path = "api/me/friends/hidden", hasBody = true)
+    suspend fun showToFriends(@Body body: UnhideRequest)
 
     @GET("api/me")
     suspend fun me(): UserResponse

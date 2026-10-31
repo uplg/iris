@@ -133,6 +133,8 @@ fun TvHeader(
     modifier: Modifier = Modifier,
     onAccount: (() -> Unit)? = null,
     updateAvailable: Boolean = false,
+    /** The words of the account over what is drawn behind them; null: the usual ones. */
+    accountInk: Color? = null,
 ) {
     val currentTab = remember { FocusRequester() }
     Row(
@@ -169,6 +171,7 @@ fun TvHeader(
                         accountName,
                         focused,
                         updateAvailable,
+                        accountInk,
                         Modifier
                             .padding(start = 3.dp, end = 12.dp)
                             .clearAndSetSemantics {
@@ -181,14 +184,14 @@ fun TvHeader(
                     )
                 }
             } else {
-                Account(accountName, focused = false, update = false)
+                Account(accountName, focused = false, update = false, ink = accountInk)
             }
         }
     }
 }
 
 @Composable
-private fun Account(name: String, focused: Boolean, update: Boolean, modifier: Modifier = Modifier) {
+private fun Account(name: String, focused: Boolean, update: Boolean, ink: Color? = null, modifier: Modifier = Modifier) {
     Row(
         modifier,
         horizontalArrangement = Arrangement.spacedBy(IrisSpace.s2),
@@ -222,7 +225,7 @@ private fun Account(name: String, focused: Boolean, update: Boolean, modifier: M
         Text(
             name,
             style = IrisType.meta,
-            color = if (focused) IrisColor.ground else IrisColor.inkMuted,
+            color = if (focused) IrisColor.ground else ink ?: IrisColor.inkMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -230,7 +233,7 @@ private fun Account(name: String, focused: Boolean, update: Boolean, modifier: M
             Text(
                 "Update",
                 style = IrisType.meta.copy(fontWeight = FontWeight.Bold),
-                color = if (focused) IrisColor.ground else IrisColor.accent,
+                color = if (focused) IrisColor.ground else ink ?: IrisColor.accent,
                 maxLines = 1,
             )
         }

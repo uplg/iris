@@ -232,6 +232,18 @@ it), the worst case is the user gets a "Up to date" message and
 needs to manually hit Download. `just apk-push` is that script; don't
 upload the files by hand.
 
+### Profiles and friends
+
+A profile is a `users` row with `account_id` set, so every per-user table works
+unchanged; never add a `profile_id`. Sign-in and the admin list see accounts
+only (`account_id IS NULL`). Switching (`POST /api/auth/switch-profile`, under
+`/api/auth` for the refresh cookie's path) opens a session on the other row. What
+touches an account touches its profiles: `users::set_password`, `users::delete`,
+`SessionCuts::forget` (clears everyone), the device list. Friendships hang on
+profiles. What a profile adds is visible to friends; what it watches, live
+included, only with `share_watching`, and `friends_hidden` beats both. A declined
+request keeps its row: the asker still reads it as pending.
+
 ### The update sentence
 
 A release that users should hear about gets one `> sentence` right under its

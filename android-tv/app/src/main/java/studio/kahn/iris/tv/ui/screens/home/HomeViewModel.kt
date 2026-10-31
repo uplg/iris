@@ -34,14 +34,19 @@ import studio.kahn.iris.tv.data.ContinueWatchingItem
 import studio.kahn.iris.tv.data.DismissCwRequest
 import studio.kahn.iris.tv.data.DismissRequest
 import studio.kahn.iris.tv.data.FeaturedResponse
+import studio.kahn.iris.tv.data.FriendAction
+import studio.kahn.iris.tv.data.FriendActivity
 import studio.kahn.iris.tv.data.ForYou
 import studio.kahn.iris.tv.data.HomeSummary
 import studio.kahn.iris.tv.data.MediaKind
 import studio.kahn.iris.tv.data.MediaMetadata
 import studio.kahn.iris.tv.data.PreferencesResponse
+import studio.kahn.iris.tv.data.ProfileChoice
+import studio.kahn.iris.tv.data.ProfileView
 import studio.kahn.iris.tv.data.ProgressUpdate
 import studio.kahn.iris.tv.data.ReleaseNote
 import studio.kahn.iris.tv.data.RemoveWatchlistRequest
+import studio.kahn.iris.tv.data.SwitchProfileRequest
 import studio.kahn.iris.tv.data.TorrentView
 import studio.kahn.iris.tv.data.WatchlistItem
 import studio.kahn.iris.tv.ui.components.StatusTone
@@ -50,6 +55,8 @@ import studio.kahn.iris.tv.ui.state.load
 import studio.kahn.iris.tv.ui.state.map
 import studio.kahn.iris.tv.ui.state.toUiError
 import studio.kahn.iris.tv.ui.components.Notice
+import studio.kahn.iris.tv.ui.format.AgoStyle
+import studio.kahn.iris.tv.ui.format.ago
 import studio.kahn.iris.tv.ui.state.FAST_MS
 import studio.kahn.iris.tv.ui.state.SLOW_MS
 import studio.kahn.iris.tv.ui.state.pollWhile
@@ -59,6 +66,7 @@ sealed interface HomeEvent {
     data class Play(val infohash: String, val fileIdx: Int) : HomeEvent
     data class OpenCollection(val id: String) : HomeEvent
     data class Search(val query: String) : HomeEvent
+    data object ProfileChanged : HomeEvent
     data object OpenLibrary : HomeEvent
 }
 
@@ -80,6 +88,9 @@ data class HomeUiState(
     val notice: Notice? = null,
     /** What changed, once after an update. */
     val releaseNote: Notice? = null,
+    val friends: List<FriendLine> = emptyList(),
+    /** Non-null while the account's profiles wait for who is watching. */
+    val whoIsWatching: List<ProfileView>? = null,
     /** Non-null while the first-run preferences sheet is due. */
     val onboarding: PreferencesResponse? = null,
 )
@@ -104,6 +115,8 @@ internal data class HomeData(
     val busy: String? = null,
     val notice: Notice? = null,
     val release: ReleaseNote? = null,
+    val friends: FriendActivity? = null,
+    val profiles: List<ProfileView>? = null,
 )
 
 private const val LIBRARY_ROW = 12
@@ -115,6 +128,21 @@ private fun FeaturedResponse.pick() = movies.firstOrNull() ?: series.firstOrNull
 /** The update sentence still to say to a TV that last saw [seen] (web `noteDue`): none on a first launch, nor once this version was seen. */
 internal fun noteDue(release: ReleaseNote, seen: String?): String? =
     release.note.takeIf { seen != null && seen != release.version }
+
+/** One line of what friends do; [collectionId] null when it leads nowhere. */
+@Immutable
+data class FriendLine(val key: String, val text: String, val whenSaid: String?, val collectionId: String?)
+
+private const val FRIEND_LINES = 6
+
+internal fun friendLines(a: FriendActivity): List<FriendLine> = (a.live + a.recent).take(FRIEND_LINES).map { e ->
+    FriendLine(
+        key = "${e.action}:${e.friendId}:${e.collectionId ?: e.title}",
+        text = friendLine(e),
+        whenSaid = ago(e.at, AgoStyle.Short).takeIf { e.action != FriendAction.watching },
+        collectionId = e.collectionId?.toString(),
+    )
+}
 
 /** The home's words from what it read. Pure: the unit tests feed it. */
 internal fun homeUi(d: HomeData): HomeUiState {
@@ -151,7 +179,9 @@ internal fun homeUi(d: HomeData): HomeUiState {
         busy = d.busy,
         notice = d.notice,
         releaseNote = d.release?.note?.let { Notice("Updated to ${d.release.version} — $it") },
-        onboarding = d.preferences?.takeIf { !it.onboardingCompleted && !d.onboardingClosed },
+        friends = d.friends?.let(::friendLines).orEmpty(),
+        whoIsWatching = d.profiles,
+        onboarding = d.preferences?.takeIf { !it.onboardingCompleted && !d.onboardingClosed && d.profiles == null },
     )
 }
 
@@ -182,6 +212,7 @@ class HomeViewModel(
     private var collectionsReadAt: Long? = null
     private val actions = BusyActions(viewModelScope, oneAtATime = true)
     private var releaseRead = false
+    private var profileChanges = ProfileChoice.changes
 
     init {
         viewModelScope.launch {
@@ -193,6 +224,8 @@ class HomeViewModel(
     suspend fun refreshWhileStarted() {
         // The last action's words belong to the visit they were said in (web notices pass).
         if (data.value.busy == null) actions.say(null)
+        if (profileChanges != ProfileChoice.changes) startOver()
+        readProfiles()
         refreshRows()
         pollWhile({ if (somethingMoves()) FAST_MS else SLOW_MS }) { refreshLive() }
     }
@@ -215,6 +248,37 @@ class HomeViewModel(
         if (force || olderThan(forYouReadAt, FOR_YOU_STALE_MS)) launch { readForYou() }
     }
 
+    /** Another profile: nothing read for the last one stays. */
+    private fun startOver() {
+        profileChanges = ProfileChoice.changes
+        forYouReadAt = null
+        collectionsReadAt = null
+        metaInFlight.clear()
+        data.value = HomeData()
+    }
+
+    private suspend fun readProfiles() {
+        if (ProfileChoice.asked) return
+        val profiles = bestEffort { container.api().profiles() } ?: return
+        if (profiles.size > 1) data.update { it.copy(profiles = profiles) } else ProfileChoice.asked = true
+    }
+
+    fun enterProfile(profile: ProfileView) {
+        act("profile") {
+            if (profile.current) {
+                ProfileChoice.asked = true
+                data.update { it.copy(profiles = null) }
+            } else {
+                container.api().switchProfile(SwitchProfileRequest(profileId = profile.id))
+                ProfileChoice.changed()
+                startOver()
+                eventChannel.send(HomeEvent.ProfileChanged)
+                refreshRows(force = true)
+            }
+            null
+        }
+    }
+
     private suspend fun readReleaseNote() {
         if (releaseRead) return
         releaseRead = true
@@ -232,9 +296,11 @@ class HomeViewModel(
     private suspend fun refreshLive() = coroutineScope {
         val summary = async { load(data.value.summary) { absentAs(null) { container.api().homeSummary() } } }
         val torrents = async { bestEffort { container.api().libraryTorrents().items } }
+        val friends = async { bestEffort { container.api().friendActivity() } }
         val s = summary.await()
         val t = torrents.await()
-        data.update { it.copy(summary = s, torrents = t ?: it.torrents) }
+        val f = friends.await()
+        data.update { it.copy(summary = s, torrents = t ?: it.torrents, friends = f ?: it.friends) }
         val every = if (somethingMoves()) COLLECTIONS_MOVING_MS else COLLECTIONS_IDLE_MS
         if (olderThan(collectionsReadAt, every)) readCollections()
     }

@@ -20,6 +20,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -112,6 +113,8 @@ private enum class ShellSlot { Backdrop, Header, Content }
 @Stable
 class ShellBackdropHolder {
     var content by mutableStateOf<(@Composable () -> Unit)?>(null)
+    /** The header's words that stay legible over the backdrop; null when it draws none. */
+    var ink by mutableStateOf<Color?>(null)
 }
 
 val LocalShellBackdrop = staticCompositionLocalOf<ShellBackdropHolder?> { null }
@@ -176,6 +179,7 @@ fun TopLevelShell(
     val header = remember { FocusRequester() }
     var headerFocused by remember { mutableStateOf(false) }
     val back = shellBack(tab, headerFocused)
+    val backdrop = remember { ShellBackdropHolder() }
     BackHandler(enabled = back != ShellBack.Leave) {
         when (back) {
             ShellBack.ToHeader -> header.requestFocus()
@@ -202,10 +206,10 @@ fun TopLevelShell(
                 accountName = accountName,
                 onAccount = onAccount,
                 updateAvailable = updateAvailable,
+                accountInk = backdrop.ink,
             )
         }
     }
-    val backdrop = remember { ShellBackdropHolder() }
     CompositionLocalProvider(LocalShellHeader provides header, LocalShellBackdrop provides backdrop.takeIf { headerOverContent }) {
         if (headerOverContent) {
             // Drawn bottom to top: the content's backdrop, the header, the content (its dialogs
