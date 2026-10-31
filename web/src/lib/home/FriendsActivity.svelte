@@ -21,8 +21,10 @@
 			{#each lines as e (`${e.action}:${e.friend_id}:${e.collection_id ?? e.title}`)}
 				<li>
 					<Mascot name={e.friend_name} />
-					{#if e.collection_id}<a href="/collection/{e.collection_id}">{friendLine(e)}</a>{:else}<span>{friendLine(e)}</span>{/if}
-					{#if e.action !== 'watching'}<span class="when">{ago(e.at, 'short')}</span>{/if}
+					<span class="line">
+						{#if e.collection_id}<a href="/collection/{e.collection_id}">{friendLine(e)}</a>{:else}<span>{friendLine(e)}</span>{/if}
+						{#if e.action !== 'watching'}<span class="when">{ago(e.at, 'short')}</span>{/if}
+					</span>
 				</li>
 			{/each}
 		</ul>
@@ -36,10 +38,16 @@
 	}
 	li {
 		display: flex;
-		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--s-1) var(--s-3);
+		gap: var(--s-3);
 		min-height: var(--control-h);
+	}
+	.line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0 var(--s-3);
+		min-width: 0;
 	}
 	a {
 		color: var(--ink);
