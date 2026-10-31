@@ -1,6 +1,7 @@
 package studio.kahn.iris.tv.ui.components
 
 import studio.kahn.iris.tv.ui.nav.HeaderBackdrop
+import studio.kahn.iris.tv.ui.nav.HeaderInk
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.boundsInRoot
@@ -101,7 +102,7 @@ fun NavTab(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    ink: Color? = null,
+    ink: HeaderInk? = null,
 ) {
     FocusSurface(
         onClick = onClick,
@@ -113,8 +114,8 @@ fun NavTab(
             },
         shape = IrisShape.pill,
         colors = FocusColors.Quiet.copy(
-            container = if (selected) IrisColor.accentWash else Color.Transparent,
-            content = if (selected) IrisColor.accent else ink ?: IrisColor.inkMuted,
+            container = if (selected) IrisColor.accentWash else ink?.plate ?: Color.Transparent,
+            content = if (selected) IrisColor.accent else ink?.words ?: IrisColor.inkMuted,
         ),
     ) {
         Box(Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
@@ -150,7 +151,12 @@ fun TvHeader(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OverBackdrop(backdrop) { ink, probe -> IrisWordmark(probe, ink = ink ?: IrisColor.ink) }
+        OverBackdrop(backdrop) { ink, probe ->
+            IrisWordmark(
+                probe.then(if (ink != null) Modifier.background(ink.plate, IrisShape.pill) else Modifier),
+                ink = ink?.words ?: IrisColor.ink,
+            )
+        }
         Spacer(Modifier.width(IrisSpace.s6))
         Row(
             Modifier
@@ -178,13 +184,13 @@ fun TvHeader(
                         onClick = onAccount,
                         modifier = probe.heightIn(min = IrisSize.controlSmall),
                         shape = IrisShape.pill,
-                        colors = FocusColors.Quiet.copy(content = IrisColor.inkMuted),
+                        colors = FocusColors.Quiet.copy(container = ink?.plate ?: Color.Transparent, content = IrisColor.inkMuted),
                     ) { focused ->
                         Account(
                             accountName,
                             focused,
                             updateAvailable,
-                            ink,
+                            ink?.words,
                             Modifier
                                 .padding(start = 3.dp, end = 12.dp)
                                 .clearAndSetSemantics {
@@ -197,7 +203,13 @@ fun TvHeader(
                         )
                     }
                 } else {
-                    Account(accountName, focused = false, update = false, ink = ink, modifier = probe)
+                    Account(
+                        accountName,
+                        focused = false,
+                        update = false,
+                        ink = ink?.words,
+                        modifier = probe.then(if (ink != null) Modifier.background(ink.plate, IrisShape.pill) else Modifier),
+                    )
                 }
             }
         }
@@ -206,7 +218,7 @@ fun TvHeader(
 
 /** [content] in the words that read over the part of [backdrop] behind it, told by the probe it wears. */
 @Composable
-private fun OverBackdrop(backdrop: HeaderBackdrop?, content: @Composable (ink: Color?, probe: Modifier) -> Unit) {
+private fun OverBackdrop(backdrop: HeaderBackdrop?, content: @Composable (ink: HeaderInk?, probe: Modifier) -> Unit) {
     var span by remember { mutableStateOf(0f to 0f) }
     val probe = Modifier.onGloballyPositioned { at ->
         val width = at.findRootCoordinates().size.width.toFloat()
