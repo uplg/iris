@@ -22,7 +22,7 @@ services:
       # Serve the bundled React build alongside the API.
       IRIS_SERVER__WEB_DIST: "/srv/iris/web"
       # Public URL — used as the JWT issuer claim. Should be the URL your
-      # users actually hit (e.g. your Cloudflare-tunneled hostname). Pulled
+      # users actually hit (your reverse proxy's hostname). Pulled
       # from .env so changes don't require touching this file.
       IRIS_SERVER__PUBLIC_URL: ${IRIS_SERVER__PUBLIC_URL:-http://localhost:8080}
       # Persist all data into the volume mounted at /data, regardless of the
@@ -34,12 +34,13 @@ services:
     volumes:
       - ./config:/srv/iris/config:ro
       - iris-data:/data
-    # The HTTP port is NOT published: cloudflared (and caddy) reach
-    # `iris:8080` over the compose network, and a published port is open to
-    # the internet (Docker bypasses the host firewall) where anyone could
-    # forge `CF-Connecting-IP` past the auth rate limits. Local access goes
-    # through the dev override (`just dev`, docker-compose.dev.yml).
     ports:
+      # HTTP, on loopback ONLY: the reverse proxy on the host reaches it there.
+      # Published on every interface it would be open to the internet (Docker
+      # bypasses the host firewall), where anyone could forge
+      # `CF-Connecting-IP` past the auth rate limits. The proxy must set that
+      # header to the client's address (docs/DEPLOYMENT.md §4).
+      - "127.0.0.1:${IRIS_HTTP_PORT:-8450}:8080"
       # Pinned BitTorrent listen port — forwarded so inbound peer connections
       # actually reach librqbit (matters for download speed AND ratio on
       # private trackers).
@@ -64,36 +65,6 @@ services:
     depends_on:
       - iris
     profiles: ["proxy"]
-
-  # Named Cloudflare tunnel — gives Iris a stable public URL on a domain you
-  # control, no port-forwarding required. Set up:
-  #   1. https://one.dash.cloudflare.com/ → Networks → Tunnels → "Create"
-  #   2. Copy the tunnel TOKEN into .env as CLOUDFLARE_TUNNEL_TOKEN
-  #   3. In the tunnel's "Public Hostname" tab, add your hostname pointing at
-  #      service "http://iris:8080" (Cloudflare will resolve `iris` over the
-  #      compose network).
-  #   4. Run with: `just deploy` (docker compose --profile cloudflared up -d)
-  #
-  # The `cloudflared` profile keeps this OUT of a plain `docker compose up` /
-  # `just dev`, so local dev never dials the tunnel. The token deliberately
-  # uses `:-` (not `:?`): Compose interpolates the WHOLE file even for
-  # profile-disabled services, so a hard `:?` would break every compose
-  # command on machines without the token in .env. The fail-loudly check
-  # lives in the `just deploy` recipe instead — the only path that enables
-  # the profile.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    # `--protocol http2` forces HTTP/2 instead of QUIC. QUIC uses UDP/7844
-    # outbound which is often dropped by ISPs, NAT or Docker Desktop on
-    # macOS. Symptom: repeated `failed to dial to edge with quic: timeout`.
-    command: tunnel --no-autoupdate --protocol http2 run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
-      TUNNEL_TRANSPORT_PROTOCOL: http2
-    depends_on:
-      - iris
-    profiles: ["cloudflared"]
 
 volumes:
   iris-data:
