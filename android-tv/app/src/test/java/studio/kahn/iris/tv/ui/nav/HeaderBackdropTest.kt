@@ -1,7 +1,9 @@
 package studio.kahn.iris.tv.ui.nav
 
+import androidx.compose.ui.graphics.luminance
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import studio.kahn.iris.tv.ui.screens.home.heroBackdrop
 import studio.kahn.iris.tv.ui.screens.live.LogoTone
@@ -11,7 +13,7 @@ class HeaderBackdropTest {
     fun aBrightStillDarkensOnlyWhatSitsOnIt() {
         val backdrop = heroBackdrop { _, _ -> 0.8 }
         assertNull("the logo sits on the ground", backdrop.inkAt(0.05f, 0.1f))
-        assertEquals("the name sits on the still", LogoTone.Dark.plate, backdrop.inkAt(0.9f, 0.95f))
+        assertEquals("the name sits on the still", LogoTone.Dark.plate, backdrop.inkAt(0.9f, 0.95f)?.words)
     }
 
     @Test
@@ -21,7 +23,7 @@ class HeaderBackdropTest {
 
     @Test
     fun aMidStillTakesTheLightWords() {
-        assertEquals(LogoTone.Light.plate, heroBackdrop { _, _ -> 0.12 }.inkAt(0.9f, 0.95f))
+        assertEquals(LogoTone.Light.plate, heroBackdrop { _, _ -> 0.12 }.inkAt(0.9f, 0.95f)?.words)
     }
 
     @Test
@@ -33,5 +35,13 @@ class HeaderBackdropTest {
     fun anUnreadableStillChangesNothing() {
         assertNull(HeaderBackdrop(emptyList()).inkAt(0f, 1f))
         assertNull(heroBackdrop { _, _ -> null }.inkAt(0.9f, 0.95f))
+    }
+
+    @Test
+    fun overAStillTheWordsHaveAPlate() {
+        val bright = heroBackdrop { _, _ -> 0.8 }.inkAt(0.9f, 0.95f)
+        val mid = heroBackdrop { _, _ -> 0.12 }.inkAt(0.9f, 0.95f)
+        assertTrue(bright!!.plate.luminance() > 0.5f && bright.plate.alpha > 0.7f)
+        assertTrue(mid!!.plate.luminance() < 0.1f && mid.plate.alpha > 0.7f)
     }
 }
