@@ -105,6 +105,8 @@ class HomeModelsTest {
         assertEquals("Because you like Fantasy", m.status)
         assertEquals(CardAction.FindReleases, m.primary)
         assertEquals("In your library", catalogCard(card.copy(alreadyInLibrary = true), "x").status)
+        assertEquals("A mage outlives her friends.", catalogCard(card.copy(overview = " A mage outlives her friends. "), "x").overview)
+        assertEquals(null, catalogCard(card.copy(overview = "  "), "x").overview)
     }
 
     @Test

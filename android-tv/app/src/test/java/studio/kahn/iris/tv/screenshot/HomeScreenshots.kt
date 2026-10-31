@@ -25,6 +25,7 @@ import studio.kahn.iris.tv.ui.screens.DiscoverContent
 import studio.kahn.iris.tv.ui.screens.HomeContent
 import studio.kahn.iris.tv.ui.screens.OnboardingContent
 import studio.kahn.iris.tv.ui.screens.home.CardAction
+import studio.kahn.iris.tv.ui.screens.home.CardSynopsis
 import studio.kahn.iris.tv.ui.components.ActionSheet
 import studio.kahn.iris.tv.ui.screens.home.CardModel
 import studio.kahn.iris.tv.ui.screens.home.DiscoverUiState
@@ -238,6 +239,28 @@ class HomeScreenshots {
                 inFlight = { it == CardAction.MarkWatched },
                 onAction = {},
                 onDismiss = {},
+            )
+        }
+    }
+
+    @Test
+    fun suggestionMenu() = shots.snapEverySize("home_suggestion_menu") {
+        val card = CardModel(
+            key = "fy:trending:1",
+            title = "Severance",
+            art = null,
+            meta = "Series · 2022",
+            overview = "Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives. ".repeat(6),
+        )
+        Home(home) {
+            ActionSheet(
+                title = card.title,
+                eyebrow = "Trending this week",
+                actions = listOf(CardAction.FindReleases, CardAction.NotInterested),
+                label = { it.label },
+                onAction = {},
+                onDismiss = {},
+                details = { CardSynopsis(card) },
             )
         }
     }

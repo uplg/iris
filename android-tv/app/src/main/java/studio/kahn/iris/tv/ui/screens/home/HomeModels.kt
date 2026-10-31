@@ -55,6 +55,8 @@ data class CardModel(
     val badge: String? = null,
     val primary: CardAction = CardAction.Open,
     val menu: List<CardAction> = emptyList(),
+    /** What the title is about, read in its menu. */
+    val overview: String? = null,
 )
 
 @Immutable
@@ -167,7 +169,7 @@ fun libraryCard(item: CollectionListItem, downloading: Double?): CardModel {
     )
 }
 
-/** A suggested title names a title, not a release: it leads to a search for it. */
+/** A suggested title names a title, not a release: it leads to a search for it. Its synopsis is in its menu. */
 fun catalogCard(card: CatalogCard, prefix: String): CardModel {
     val kind = kindLabel(card.kind, card.isAnime)
     val (status, tone) = when {
@@ -185,6 +187,7 @@ fun catalogCard(card: CatalogCard, prefix: String): CardModel {
         tone = tone,
         primary = CardAction.FindReleases,
         menu = listOf(CardAction.FindReleases, CardAction.NotInterested),
+        overview = card.overview?.takeIf { it.isNotBlank() }?.trim(),
     )
 }
 
