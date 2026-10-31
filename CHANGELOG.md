@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-10-31
+
 ### Added
 
 - **Draupnirr tracker**: francophone general tracker, searched through its
@@ -16,6 +18,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Torznab feed. Release pages come from its JSON API (poster, synopsis,
   MediaInfo, uploader, tags), and a grab still downloads after a server
   restart.
+- **Seeders among connected peers**: the words beside a release that is
+  downloading now count them, on the web and the TV.
+- **`[storage] peer_request_window`** sets how many requests go to one peer at
+  a time.
+
+### Changed
+
+- **Dependencies**: librqbit 9.1 from crates.io, webauthn-rs 0.6 (passkeys no
+  longer use OpenSSL; existing passkeys keep working), SvelteKit 3.1.1,
+  mediabunny 1.65 (patch carried over).
+
+### Fixed
+
+- **A release's sample is no longer played as its episode**: a Grab could
+  return the sample or the `.nfo` of a single-episode release, and later grabs
+  fell back on it. Claims already written are cleaned up at startup.
+- **Samples stay out of the file lists**, web and TV: « 2 video files » is gone
+  for a release with one episode and its sample, and its row plays directly.
+- **The TV no longer says the rest of the season keeps downloading** for a
+  single episode that comes with a sample.
+- **A title with no episodes on disk starts on its main video** on the web, not
+  on its first file.
+- **A rate-limited tracker pauses** for its `Retry-After` (60 s without one,
+  15 minutes at most) instead of being asked again on every search, and the
+  TV-collections scan spaces its searches 10 s apart.
+
+### Security
+
+- **RUSTSEC-2023-0071 is back in the tree and ignored**: webauthn-rs 0.6 brings
+  the `rsa` 0.10 release candidate. The advisory recovers a private key; Iris
+  holds no RSA private key and only verifies RS256 passkey signatures.
 
 ## [1.6.3] - 2026-10-28
 
@@ -1400,7 +1433,9 @@ inside]` over `[type icons (all/movie/series) | one cycling sort pill
 
 - Initial prototype line (`alpha` … `alpha4`): the first end-to-end Iris builds.
 
-[Unreleased]: https://github.com/uplg/iris/compare/1.6.2...HEAD
+[Unreleased]: https://github.com/uplg/iris/compare/1.6.4...HEAD
+[1.6.4]: https://github.com/uplg/iris/compare/1.6.3...1.6.4
+[1.6.3]: https://github.com/uplg/iris/compare/1.6.2...1.6.3
 [1.6.2]: https://github.com/uplg/iris/compare/1.6.1...1.6.2
 [1.6.1]: https://github.com/uplg/iris/compare/1.6.0...1.6.1
 [1.6.0]: https://github.com/uplg/iris/compare/1.5.0...1.6.0
