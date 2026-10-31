@@ -172,6 +172,7 @@ pub(crate) async fn register_start(
     ClientIp(ip): ClientIp,
     user: AuthUser,
 ) -> ApiResult<Json<RegisterOptions>> {
+    crate::routes::profiles::the_account(&state, &user).await?;
     let me = iris_db::users::find_by_id(state.db(), user.id)
         .await?
         .ok_or(ApiError::Unauthorized)?;

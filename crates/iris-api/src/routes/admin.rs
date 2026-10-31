@@ -526,7 +526,7 @@ pub(crate) async fn delete_user(
     if !iris_db::users::delete(state.db(), user_id, admin.0.id).await? {
         return Err(ApiError::NotFound);
     }
-    state.session_cuts().forget(user_id);
+    state.session_cuts().forget();
     super::audit(
         &state,
         admin.0.id,
@@ -573,7 +573,7 @@ pub(crate) async fn reset_user_password(
     let passkeys = iris_db::users::set_password(state.db(), user_id, &hash)
         .await?
         .ok_or(ApiError::NotFound)?;
-    state.session_cuts().forget(user_id);
+    state.session_cuts().forget();
     super::audit(
         &state,
         admin.0.id,

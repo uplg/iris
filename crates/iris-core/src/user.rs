@@ -13,6 +13,16 @@ pub struct User {
     pub display_name: String,
     pub is_admin: bool,
     pub created_at: DateTime<Utc>,
+    /// The account this profile hangs from; `None` for the account itself.
+    #[serde(default)]
+    pub account_id: Option<UserId>,
+}
+
+impl User {
+    /// The account behind this user, itself when it is the account.
+    pub fn account(&self) -> UserId {
+        self.account_id.unwrap_or(self.id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

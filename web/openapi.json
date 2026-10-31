@@ -1058,6 +1058,40 @@
         }
       }
     },
+    "/api/auth/switch-profile": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Under `/api/auth`, the only path the refresh cookie is sent to: the session\nbeing left is ended, and a paired device keeps its label on the new one.",
+        "operationId": "switch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "On the other profile; new session cookies set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile on this account"
+          }
+        }
+      }
+    },
     "/api/discover/featured": {
       "get": {
         "tags": [
@@ -2722,6 +2756,97 @@
           },
           "400": {
             "description": "Unknown language in the request"
+          }
+        }
+      }
+    },
+    "/api/me/profiles": {
+      "get": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "list_profiles",
+        "responses": {
+          "200": {
+            "description": "The account's profiles, itself first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileView"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "create_profile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The account's profiles, the new one included",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or too long a name"
+          },
+          "409": {
+            "description": "The account holds as many profiles as it can"
+          }
+        }
+      }
+    },
+    "/api/me/profiles/{id}": {
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "operationId": "remove_profile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The profile to remove",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Profile removed; what it grabbed stays in the library"
+          },
+          "404": {
+            "description": "No such profile on this account"
+          },
+          "409": {
+            "description": "The main profile, or the one in use"
           }
         }
       }
@@ -5163,6 +5288,17 @@
               "null"
             ],
             "format": "int64"
+          }
+        }
+      },
+      "CreateProfileRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -7700,6 +7836,32 @@
           }
         }
       },
+      "ProfileView": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "main",
+          "current"
+        ],
+        "properties": {
+          "current": {
+            "type": "boolean",
+            "description": "The profile this session is on."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "main": {
+            "type": "boolean",
+            "description": "The account itself: it cannot be removed."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "ProgressUpdate": {
         "type": "object",
         "required": [
@@ -8830,6 +8992,18 @@
           }
         }
       },
+      "SwitchProfileRequest": {
+        "type": "object",
+        "required": [
+          "profile_id"
+        ],
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "TitleCard": {
         "type": "object",
         "description": "One title for the Titles view: what the query could mean on TMDB, and\nwhether the library already holds it.",
@@ -9789,6 +9963,14 @@
           "is_admin"
         ],
         "properties": {
+          "account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The account this profile hangs from; absent on the account itself."
+          },
           "display_name": {
             "type": "string"
           },

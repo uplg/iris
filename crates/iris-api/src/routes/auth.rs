@@ -49,6 +49,7 @@ pub fn session_router() -> Router<AppState> {
     Router::new()
         .route("/refresh", post(refresh))
         .route("/logout", post(logout))
+        .route("/switch-profile", post(crate::routes::profiles::switch))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -64,6 +65,8 @@ pub struct UserResponse {
     pub email: String,
     pub display_name: String,
     pub is_admin: bool,
+    /// The account this profile hangs from; absent on the account itself.
+    pub account_id: Option<Uuid>,
 }
 
 impl From<iris_core::user::User> for UserResponse {
@@ -73,6 +76,7 @@ impl From<iris_core::user::User> for UserResponse {
             email: user.email,
             display_name: user.display_name,
             is_admin: user.is_admin,
+            account_id: user.account_id.map(Uuid::from),
         }
     }
 }

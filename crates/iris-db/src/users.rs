@@ -12,6 +12,7 @@ struct UserRow {
     display_name: String,
     is_admin: bool,
     created_at: DateTime<Utc>,
+    account_id: Option<Uuid>,
 }
 
 impl UserRow {
@@ -23,6 +24,7 @@ impl UserRow {
                 display_name: self.display_name,
                 is_admin: self.is_admin,
                 created_at: self.created_at,
+                account_id: self.account_id.map(UserId::from),
             },
             self.password_hash,
         )
@@ -78,7 +80,54 @@ where
         display_name,
         is_admin: new.is_admin,
         created_at: now,
+        account_id: None,
     })
+}
+
+/// How many profiles an account holds, itself included.
+pub const MAX_PROFILES: usize = 6;
+
+/// A new profile under `account`, `None` once it holds [`MAX_PROFILES`]. Its
+/// email only fills the unique column and its hash verifies nothing: a profile
+/// is entered from its account, never signed in to.
+pub async fn create_profile(
+    pool: &SqlitePool,
+    account: UserId,
+    name: &str,
+) -> Result<Option<User>, sqlx::Error> {
+    let owner: Uuid = account.into();
+    let id = Uuid::new_v4();
+    let now = Utc::now();
+    let email = format!("{id}@profile.invalid");
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let (held,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM users WHERE id = ?1 OR account_id = ?1")
+            .bind(owner)
+            .fetch_one(&mut *tx)
+            .await?;
+    if usize::try_from(held).unwrap_or(usize::MAX) >= MAX_PROFILES {
+        return Ok(None);
+    }
+    sqlx::query(
+        "INSERT INTO users (id, email, password_hash, display_name, is_admin, created_at, account_id) \
+         VALUES (?1, ?2, '!', ?3, 0, ?4, ?5)",
+    )
+    .bind(id)
+    .bind(&email)
+    .bind(name)
+    .bind(now)
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(User {
+        id: UserId::from(id),
+        email,
+        display_name: name.to_owned(),
+        is_admin: false,
+        created_at: now,
+        account_id: Some(account),
+    }))
 }
 
 /// Column list for `SELECT`ing a [`UserRow`]. A macro rather than a
@@ -90,8 +139,23 @@ where
 /// construction.
 macro_rules! user_columns {
     () => {
-        "id, email, password_hash, display_name, is_admin, created_at"
+        "id, email, password_hash, display_name, is_admin, created_at, account_id"
     };
+}
+
+/// The account's profiles, itself first, then by age.
+pub async fn profiles_of(pool: &SqlitePool, account: UserId) -> Result<Vec<User>, sqlx::Error> {
+    let owner: Uuid = account.into();
+    let rows: Vec<UserRow> = sqlx::query_as(concat!(
+        "SELECT ",
+        user_columns!(),
+        " FROM users WHERE id = ?1 OR account_id = ?1 \
+         ORDER BY account_id IS NOT NULL, created_at ASC"
+    ))
+    .bind(owner)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.into_domain().0).collect())
 }
 
 pub async fn find_by_email<'e, E>(
@@ -104,7 +168,7 @@ where
     let row: Option<UserRow> = sqlx::query_as(concat!(
         "SELECT ",
         user_columns!(),
-        " FROM users WHERE email = ?1"
+        " FROM users WHERE email = ?1 AND account_id IS NULL"
     ))
     .bind(email)
     .fetch_optional(executor)
@@ -126,7 +190,7 @@ pub async fn find_by_id(pool: &SqlitePool, id: UserId) -> Result<Option<User>, s
 }
 
 pub async fn count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE account_id IS NULL")
         .fetch_one(pool)
         .await?;
     Ok(n)
@@ -136,7 +200,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
     let rows: Vec<UserRow> = sqlx::query_as(concat!(
         "SELECT ",
         user_columns!(),
-        " FROM users ORDER BY created_at ASC"
+        " FROM users WHERE account_id IS NULL ORDER BY created_at ASC"
     ))
     .fetch_all(pool)
     .await?;
@@ -159,7 +223,8 @@ pub async fn get_password_hash(
 /// under the old one, in one transaction: every session (a just-rotated
 /// one loses its grace window too, and `sessions_valid_after` kills the
 /// access tokens already out) and every passkey, since a stolen session
-/// could have registered its own.
+/// could have registered its own. The account's profiles go through the same
+/// door, so their sessions end with it.
 ///
 /// Returns `None` for an unknown user, else how many passkeys went.
 pub async fn set_password(
@@ -180,9 +245,14 @@ pub async fn set_password(
     if res.rows_affected() != 1 {
         return Ok(None);
     }
+    sqlx::query("UPDATE users SET sessions_valid_after = ?1 WHERE account_id = ?2")
+        .bind(now)
+        .bind(uuid)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "UPDATE refresh_tokens SET revoked_at = COALESCE(revoked_at, ?1), rotated_at = NULL \
-         WHERE user_id = ?2",
+         WHERE user_id IN (SELECT id FROM users WHERE id = ?2 OR account_id = ?2)",
     )
     .bind(now)
     .bind(uuid)
@@ -202,7 +272,8 @@ pub async fn set_password(
 /// and the library is household-shared, so letting the cascade run would
 /// silently evict every release the deleted user ever grabbed. Everything
 /// personal (sessions, watch progress, follows, preferences, dismissals)
-/// cascades away as intended.
+/// cascades away as intended. An account's profiles leave with it, and their
+/// grabs are inherited the same way.
 pub async fn delete(
     pool: &SqlitePool,
     id: UserId,
@@ -211,11 +282,14 @@ pub async fn delete(
     let target: Uuid = id.into();
     let heir: Uuid = reassign_torrents_to.into();
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE torrents SET added_by = ?1 WHERE added_by = ?2")
-        .bind(heir)
-        .bind(target)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE torrents SET added_by = ?1 \
+         WHERE added_by IN (SELECT id FROM users WHERE id = ?2 OR account_id = ?2)",
+    )
+    .bind(heir)
+    .bind(target)
+    .execute(&mut *tx)
+    .await?;
     let res = sqlx::query("DELETE FROM users WHERE id = ?1")
         .bind(target)
         .execute(&mut *tx)
@@ -391,6 +465,95 @@ mod tests {
         let rows = crate::audit::list(&pool, 10, 0).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].actor_display_name, "deleted user");
+    }
+
+    #[tokio::test]
+    async fn a_profile_cannot_be_signed_in_to_and_stays_out_of_the_accounts() {
+        let pool = migrated_pool().await;
+        let account = make_user(&pool, "shared@t.test").await;
+        let profile = create_profile(&pool, account, "Muriel")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(profile.account(), account);
+
+        assert!(
+            find_by_email(&pool, &profile.email)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(count(&pool).await.unwrap(), 1);
+        assert_eq!(list(&pool).await.unwrap().len(), 1);
+        let names: Vec<_> = profiles_of(&pool, account)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|u| u.display_name)
+            .collect();
+        assert_eq!(names, ["shared", "Muriel"]);
+    }
+
+    #[tokio::test]
+    async fn an_account_holds_a_bounded_number_of_profiles() {
+        let pool = migrated_pool().await;
+        let account = make_user(&pool, "shared@t.test").await;
+        for _ in 1..MAX_PROFILES {
+            assert!(create_profile(&pool, account, "p").await.unwrap().is_some());
+        }
+        assert!(create_profile(&pool, account, "p").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_password_change_ends_the_sessions_of_every_profile() {
+        let pool = migrated_pool().await;
+        let account = make_user(&pool, "shared@t.test").await;
+        let profile = create_profile(&pool, account, "Muriel")
+            .await
+            .unwrap()
+            .unwrap();
+        let jti = Uuid::new_v4();
+        crate::refresh_tokens::insert(
+            &pool,
+            jti,
+            profile.id,
+            Utc::now() + chrono::Duration::days(1),
+        )
+        .await
+        .unwrap();
+
+        set_password(&pool, account, "new-hash").await.unwrap();
+
+        assert!(!crate::refresh_tokens::is_active(&pool, jti).await.unwrap());
+        assert!(
+            sessions_valid_after(&pool, profile.id)
+                .await
+                .unwrap()
+                .flatten()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_an_account_keeps_the_grabs_of_its_profiles() {
+        let pool = migrated_pool().await;
+        let admin = make_user(&pool, "admin@t.test").await;
+        let account = make_user(&pool, "shared@t.test").await;
+        let profile = create_profile(&pool, account, "Muriel")
+            .await
+            .unwrap()
+            .unwrap();
+        insert_torrent(&pool, "bbbb", profile.id).await;
+
+        assert!(delete(&pool, account, admin).await.unwrap());
+
+        assert!(find_by_id(&pool, profile.id).await.unwrap().is_none());
+        let (owner,): (Uuid,) =
+            sqlx::query_as("SELECT added_by FROM torrents WHERE infohash = 'bbbb'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(UserId::from(owner), admin);
     }
 
     #[tokio::test]

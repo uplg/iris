@@ -14,6 +14,7 @@ pub mod moods;
 pub mod passkeys;
 pub mod playback_preferences;
 pub mod preferences;
+pub mod profiles;
 pub mod providers;
 pub mod release_note;
 pub mod search;
