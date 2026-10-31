@@ -8659,7 +8659,7 @@
           },
           "version": {
             "type": "string",
-            "description": "The version this server runs."
+            "description": "The version this server runs, or the client's own while it is behind."
           }
         }
       },

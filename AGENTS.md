@@ -254,7 +254,9 @@ they share.
 A release that users should hear about gets one `> sentence` right under its
 `## [x.y.z]` heading in `CHANGELOG.md`, in English. The server embeds it at
 build time (`routes/release_note.rs`) and the web and TV homes say it once. No
-quote line, nothing said: fine for a quiet patch.
+quote line, nothing said: fine for a quiet patch. A client older than the server
+(`X-Iris-Client`) hears nothing yet and reads back its own version, so the
+sentence comes after its update, never beside the TV's update banner.
 
 ### Versioning & client gate
 
