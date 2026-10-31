@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TorrentView } from '@iris/api/client';
-import { downloadsByCollection, noteDue, rightNow, secondsLeft } from './data.ts';
+import { downloadsByCollection, friendLine, noteDue, rightNow, secondsLeft } from './data.ts';
 
 describe('home words', () => {
 	it('"Right now": only what is downloading, in words', () => {
@@ -16,6 +16,12 @@ describe('home words', () => {
 		).toEqual(['2 downloads · 64% · 23 min left']);
 		expect(rightNow({ downloading: 1, downloading_pct: 10, new_episodes: 1, seeding: 1 })).toEqual(['1 download · 10%']);
 		expect(rightNow({ downloading: 0, downloading_pct: 0, new_episodes: 0, seeding: 0 })).toEqual([]);
+	});
+
+	it('what a friend does, in a sentence', () => {
+		const e = { friend_id: 'f', friend_name: 'Muriel', title: 'Severance', at: '2026-10-05T20:00:00Z' };
+		expect(friendLine({ ...e, action: 'watching', season: 2, episode: 4 })).toBe('Muriel is watching Severance · S2:E4');
+		expect(friendLine({ ...e, action: 'added' })).toBe('Muriel added Severance');
 	});
 
 	it('the update sentence: after an update only, and only when the release has one', () => {

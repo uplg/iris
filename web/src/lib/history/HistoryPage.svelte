@@ -6,10 +6,11 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { plural } from '@iris/api/format';
 	import { goto } from '$app/navigation';
-	import { me } from '@iris/api/client';
+	import { friends, me } from '@iris/api/client';
 	import { fetchAgainOrSearch } from '#lib/regrab.ts';
 	import { loadable, queryClient } from '#lib/query.ts';
 	import { KEYS } from '#lib/queries.ts';
+	import { ui } from '#lib/ui.svelte.ts';
 	import PageHead from '#lib/components/PageHead.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
 	import HistoryList from './HistoryList.svelte';
@@ -34,6 +35,12 @@
 		// a refusal went to Search
 		if (res) await goto(`/watch/${it.infohash}/${it.file_idx}`);
 	}
+
+	async function hide(it: Item) {
+		await friends.hide(it.infohash);
+		ui.toast(`${it.collection_title ?? it.torrent_name} is hidden from friends.`);
+		await queryClient.invalidateQueries({ queryKey: KEYS.friends });
+	}
 </script>
 
 <PageHead title="Watch history">
@@ -45,5 +52,5 @@
 	emptyText="Nothing watched yet."
 	emptyHint="What you play shows here, with where you stopped."
 >
-	<HistoryList {groups} onrestore={restore} />
+	<HistoryList {groups} onrestore={restore} onhide={hide} />
 </Loaded>

@@ -5,6 +5,7 @@
 	import { Popover } from 'bits-ui';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
+	import { plural } from '@iris/api/format';
 	import { session } from '#lib/session.svelte.ts';
 	import { pending } from '#lib/gesture.svelte.ts';
 	import { read } from '#lib/queries.ts';
@@ -33,6 +34,11 @@
 		() => read.profiles(),
 		() => queryClient
 	);
+	const summary = createQuery(
+		() => read.summary(),
+		() => queryClient
+	);
+	const asked = $derived(summary.data?.friend_requests ?? 0);
 </script>
 
 {#snippet nav(cls: string)}
@@ -52,9 +58,13 @@
 		{@render nav('views')}
 		<div class="grow"></div>
 		<Popover.Root bind:open>
-			<Popover.Trigger class="btn ghost who" aria-label="{name}: account, theme, sign out">
+			<Popover.Trigger
+				class="btn ghost who"
+				aria-label="{name}: account, theme, sign out{asked ? `, ${plural(asked, 'friend request')}` : ''}"
+			>
 				<span class="initial" aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
 				<span class="who-name">{name}</span>
+				{#if asked}<span class="asked" aria-hidden="true">{asked}</span>{/if}
 			</Popover.Trigger>
 			<Popover.Portal>
 				<Popover.Content class="panel" sideOffset={6} align="end" role="dialog" aria-labelledby="session-title">
@@ -67,6 +77,11 @@
 								open = false;
 								chosen.set(false);
 							}}><Icon name="users" />Switch profile</button
+						>
+					{/if}
+					{#if asked}
+						<a class="btn" href="/account#friends-title" onclick={() => (open = false)}
+							><Icon name="users" />{plural(asked, 'friend request')}</a
 						>
 					{/if}
 					<div class="row">
@@ -142,6 +157,16 @@
 		border-radius: 50%;
 		background: var(--accent-wash);
 		color: var(--accent);
+		font: var(--t-meta);
+	}
+	.asked {
+		display: inline-grid;
+		place-items: center;
+		min-width: var(--avatar);
+		height: var(--avatar);
+		border-radius: var(--radius-pill);
+		background: var(--accent);
+		color: var(--ground);
 		font: var(--t-meta);
 	}
 	:global(.panel .who-title) {

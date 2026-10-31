@@ -6,6 +6,7 @@
 import {
 	discover,
 	follows,
+	friends,
 	library,
 	livetv,
 	me as meApi,
@@ -53,6 +54,8 @@ export const KEYS = {
 	languages: ['languages'],
 	releaseNote: ['release-note'],
 	profiles: ['profiles'],
+	friends: ['friends'],
+	friendActivity: ['friends', 'activity'],
 	playbackPrefsAll: ['playback-prefs'],
 	playbackPrefs: (collectionId: string | null) => ['playback-prefs', collectionId] as const,
 	tmdb: (id: number | null, kind: MediaKind | null) => ['tmdb', id, kind] as const,
@@ -156,6 +159,8 @@ export const read = {
 	preferences: () => ({ queryKey: KEYS.preferences, queryFn: meApi.preferences, staleTime: 5 * 60_000 }),
 	genres: () => ({ queryKey: KEYS.genres, queryFn: discover.genres, staleTime: DAY }),
 	languages: () => ({ queryKey: KEYS.languages, queryFn: discover.languages, staleTime: DAY }),
+	friends: () => ({ queryKey: KEYS.friends, queryFn: friends.overview }),
+	friendActivity: () => ({ queryKey: KEYS.friendActivity, queryFn: friends.activity }),
 	profiles: () => ({ queryKey: KEYS.profiles, queryFn: profiles.list }),
 	releaseNote: () => ({ queryKey: KEYS.releaseNote, queryFn: releaseNote, staleTime: DAY }),
 	/** The account's audio and subtitle choice, or a series' own when it has one. */

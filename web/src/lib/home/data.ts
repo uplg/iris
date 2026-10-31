@@ -1,8 +1,8 @@
 // The words the home and discover screens say about what they read: the "Right now" facts,
 // the downloads per collection, a title's kind, said once.
 
-import type { ContinueWatchingItem, HomeSummary, ReleaseNote, TorrentView } from '@iris/api/client';
-import { percent, plural, timeLeft } from '@iris/api/format';
+import type { ContinueWatchingItem, FriendEvent, HomeSummary, ReleaseNote, TorrentView } from '@iris/api/client';
+import { episodeCode, percent, plural, timeLeft } from '@iris/api/format';
 import { isFetching } from '#lib/torrent.ts';
 
 const known = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
@@ -15,6 +15,14 @@ export function rightNow(s: HomeSummary): string[] {
 		facts.push(`${plural(s.downloading, 'download')} · ${percent(s.downloading_pct)}${eta}`);
 	}
 	return facts;
+}
+
+const DOES: Record<FriendEvent['action'], string> = { watching: 'is watching', watched: 'watched', added: 'added' };
+
+/** What a friend does, in a sentence: « Muriel is watching Severance · S2:E4 ». */
+export function friendLine(e: FriendEvent): string {
+	const code = episodeCode(e.season, e.episode);
+	return `${e.friend_name} ${DOES[e.action]} ${e.title}${code ? ` · ${code}` : ''}`;
 }
 
 /** The update sentence still to say to a browser that last saw `seen`: none on a first visit,

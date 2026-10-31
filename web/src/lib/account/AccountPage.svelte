@@ -11,6 +11,7 @@
 	import PageHead from '#lib/components/PageHead.svelte';
 	import ToggleGroup from '#lib/components/ToggleGroup.svelte';
 	import Devices from './Devices.svelte';
+	import Friends from './Friends.svelte';
 	import Identity from './Identity.svelte';
 	import PasskeyList from './PasskeyList.svelte';
 	import PasswordForm from './PasswordForm.svelte';
@@ -37,6 +38,7 @@
 <div class="sections">
 	<Identity />
 	<Profiles />
+	<Friends />
 	{#if !session.user?.account_id}
 		<PasskeyList />
 		<PasswordForm />
