@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **iPad on Dolby audio**: a release with AC-3 / E-AC-3 audio (most WEB HEVC
-  MULTi rips) no longer has Safari decode and re-encode the sound before the
-  picture can start; Safari plays Dolby itself, so the track goes through as it
-  is. An iPad sat on a black « Buffering » on such an episode.
+- **HEVC releases that keep their parameter sets in the stream** (some WEB
+  rips, TFA's among them) play in the browser again: Safari sat on a black
+  « Buffering » with no error, and Firefox / Zen on macOS fell back to the slow
+  WASM transcode and buffered in a loop. The player now builds the missing
+  codec header from the first keyframe.
+- **Dolby audio on Safari**: AC-3 / E-AC-3 goes through as it is, since Safari
+  plays it itself, instead of being decoded and re-encoded in the page.
 
 ## [1.7.1] - 2026-10-31
 

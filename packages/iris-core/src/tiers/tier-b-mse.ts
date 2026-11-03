@@ -35,7 +35,7 @@ import {
 
 import { hevcMseNeedsIdrStart, isFirefox, isMobileLike, msePlaysAudio } from '../caps';
 import { pickAudioEncoder, transcodeSampleSource, type AudioEncoderChoice } from '../decode/audio-plan';
-import { HevcCraSplicer, descriptionBytes, splicePacket } from '../decode/hevc-cra-splice';
+import { HevcCraSplicer, completeHvcc, descriptionBytes, splicePacket } from '../decode/hevc-cra-splice';
 import { ensureLibavAudioDecoderRegistered } from '../decode/libav-audio-decoder';
 import { libavCanDecode } from '../decode/libav-codecs';
 import {
@@ -935,8 +935,14 @@ export const mountTierB: EngineMount = async (opts) => {
 		const videoP = (async () => {
 			const startPacket = videoStartPacket;
 			if (!startPacket) return;
-			const decoderConfig = await videoTrack.getDecoderConfig();
+			const sourceConfig = await videoTrack.getDecoderConfig();
 			if (stale()) return;
+			// A bare hvcC (parameter sets in-band only) gets them from this run's keyframe:
+			// the `hvc1` sample entry we write needs them, and so does the splicer.
+			const decoderConfig =
+				sourceVideoCodec === 'hevc' && sourceConfig?.description
+					? { ...sourceConfig, description: completeHvcc(descriptionBytes(sourceConfig.description), startPacket.data) }
+					: sourceConfig;
 			let firstMeta = true;
 			// Gecko 154+ on macOS opens a coded frame group only on an IDR, and an
 			// open-GOP HEVC rip has one, at t=0. The splicer relabels the CRA this

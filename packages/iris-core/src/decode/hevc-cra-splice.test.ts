@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escapeRbsp, HevcSpliceUnsupported, NEEDS_WHOLE_NAL, patchNalPrefix, unescapeRbsp } from './hevc-cra-splice';
+import { completeHvcc, escapeRbsp, HevcSpliceUnsupported, NEEDS_WHOLE_NAL, patchNalPrefix, unescapeRbsp } from './hevc-cra-splice';
 
 /** Deterministic pseudo-random bytes, zero-heavy so emulation prevention happens a lot. */
 function rbspBytes(seed: number, length: number): Uint8Array {
@@ -84,5 +84,63 @@ describe('patchNalPrefix', () => {
 				throw new Error('broken');
 			})
 		).toThrow('broken');
+	});
+});
+
+describe('completeHvcc', () => {
+	// NAL headers: type << 1, then nuh_temporal_id_plus1 = 1
+	const vps = Uint8Array.of(32 << 1, 1, 0xaa, 0xbb);
+	const sps = Uint8Array.of(33 << 1, 1, 0xcc);
+	const pps = Uint8Array.of(34 << 1, 1, 0xdd);
+	const slice = Uint8Array.of(21 << 1, 1, 0xee, 0xff);
+	const lengthPrefixed = (...nals: Uint8Array[]) => {
+		const out: number[] = [];
+		for (const nal of nals) out.push(0, 0, nal.length >> 8, nal.length & 0xff, ...nal);
+		return Uint8Array.from(out);
+	};
+	const bare = () => {
+		const h = new Uint8Array(23);
+		h[0] = 1;
+		h[21] = 0xff; // lengthSizeMinusOne = 3
+		return h;
+	};
+
+	it('fills a bare record from the parameter sets the keyframe carries in-band', () => {
+		const hvcc = bare();
+		const out = completeHvcc(hvcc, lengthPrefixed(vps, sps, pps, slice));
+		expect(Array.from(out.subarray(0, 22))).toEqual(Array.from(hvcc.subarray(0, 22)));
+		expect(out[22]).toBe(3);
+		expect(Array.from(out.subarray(23))).toEqual([
+			0x80 | 32,
+			0,
+			1,
+			0,
+			4,
+			...vps,
+			0x80 | 33,
+			0,
+			1,
+			0,
+			3,
+			...sps,
+			0x80 | 34,
+			0,
+			1,
+			0,
+			3,
+			...pps
+		]);
+	});
+
+	it('leaves a record that has its own SPS and PPS alone', () => {
+		const full = completeHvcc(bare(), lengthPrefixed(vps, sps, pps, slice));
+		expect(completeHvcc(full, lengthPrefixed(Uint8Array.of(33 << 1, 1, 0x11), pps, slice))).toBe(full);
+	});
+
+	it('gives the record back unchanged when the keyframe has nothing to offer or does not parse', () => {
+		const hvcc = bare();
+		expect(completeHvcc(hvcc, lengthPrefixed(slice))).toBe(hvcc);
+		expect(completeHvcc(hvcc, Uint8Array.of(0, 0, 0, 99, 1, 2))).toBe(hvcc);
+		expect(completeHvcc(hvcc.subarray(0, 10), lengthPrefixed(vps, sps, pps))).toEqual(hvcc.subarray(0, 10));
 	});
 });

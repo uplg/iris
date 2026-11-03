@@ -960,6 +960,81 @@ export function splicePacket(splicer: HevcCraSplicer, packet: EncodedPacket): En
 	);
 }
 
+/**
+ * The `hvcC` with the parameter sets the keyframe carries in-band, when the record has no SPS
+ * or no PPS of its own. Some WEB rips (TFA's) ship a bare 23-byte header and repeat VPS/SPS/PPS
+ * in the stream. The fMP4 we write says `hvc1`, which means "parameter sets in the sample
+ * entry": WebKit's VideoToolbox can't start without them (black screen, no error, the iPad
+ * « Buffering » report), and the CRA splicer refuses the record. Anything unreadable comes back
+ * unchanged, so a damaged keyframe never makes a working record worse.
+ */
+export function completeHvcc(hvcc: Uint8Array, keyframe: Uint8Array): Uint8Array {
+	if (hvcc.length < 23) return hvcc;
+	const nalLengthSize = ((hvcc[21] as number) & 3) + 1;
+	const arrays: { head: number; nals: Uint8Array[] }[] = [];
+	let p = 23;
+	for (let a = 0; a < (hvcc[22] as number); a += 1) {
+		if (p + 3 > hvcc.length) return hvcc;
+		const head = hvcc[p] as number;
+		const count = ((hvcc[p + 1] as number) << 8) | (hvcc[p + 2] as number);
+		p += 3;
+		const nals: Uint8Array[] = [];
+		for (let i = 0; i < count; i += 1) {
+			if (p + 2 > hvcc.length) return hvcc;
+			const len = ((hvcc[p] as number) << 8) | (hvcc[p + 1] as number);
+			p += 2;
+			if (p + len > hvcc.length) return hvcc;
+			nals.push(hvcc.subarray(p, p + len));
+			p += len;
+		}
+		arrays.push({ head, nals });
+	}
+	const own = (type: number) => arrays.some((a) => (a.head & 0x3f) === type && a.nals.length > 0);
+	if (own(NAL.SPS) && own(NAL.PPS)) return hvcc;
+
+	const inband = new Map<number, Uint8Array[]>();
+	p = 0;
+	while (p + nalLengthSize <= keyframe.length) {
+		let len = 0;
+		for (let i = 0; i < nalLengthSize; i += 1) len = (len << 8) | (keyframe[p + i] as number);
+		p += nalLengthSize;
+		if (len < 2 || p + len > keyframe.length) return hvcc;
+		const nal = keyframe.subarray(p, p + len);
+		const type = nalType(nal);
+		if (type === NAL.VPS || type === NAL.SPS || type === NAL.PPS) inband.set(type, [...(inband.get(type) ?? []), nal]);
+		p += len;
+	}
+	if (!inband.has(NAL.SPS) || !inband.has(NAL.PPS)) return hvcc;
+
+	const parameterSets: number[] = [NAL.VPS, NAL.SPS, NAL.PPS];
+	const merged = [
+		...parameterSets.flatMap((type) => {
+			const nals = inband.get(type) ?? arrays.find((a) => (a.head & 0x3f) === type)?.nals ?? [];
+			// array_completeness = 1: every set of this type is in the record
+			return nals.length > 0 ? [{ head: 0x80 | type, nals }] : [];
+		}),
+		...arrays.filter((a) => !parameterSets.includes(a.head & 0x3f))
+	];
+	const size = 23 + merged.reduce((sum, a) => sum + 3 + a.nals.reduce((s, nal) => s + 2 + nal.length, 0), 0);
+	const out = new Uint8Array(size);
+	out.set(hvcc.subarray(0, 22));
+	out[22] = merged.length;
+	p = 23;
+	for (const a of merged) {
+		out[p] = a.head;
+		out[p + 1] = a.nals.length >> 8;
+		out[p + 2] = a.nals.length & 0xff;
+		p += 3;
+		for (const nal of a.nals) {
+			out[p] = nal.length >> 8;
+			out[p + 1] = nal.length & 0xff;
+			out.set(nal, p + 2);
+			p += 2 + nal.length;
+		}
+	}
+	return out;
+}
+
 /** `VideoDecoderConfig.description` as bytes, whatever buffer shape it came in. */
 export function descriptionBytes(description: AllowSharedBufferSource | undefined): Uint8Array {
 	if (!description) throw new HevcSpliceUnsupported('decoder config carries no hvcC');
