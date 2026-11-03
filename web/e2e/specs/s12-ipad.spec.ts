@@ -81,6 +81,40 @@ test('HEVC (hev1 in the file): Tier B under the hvc1 spelling, not F', { tag: ['
 });
 
 test(
+	'HEVC Main 10 + E-AC-3 5.1 (a WEB MULTi rip): Tier B, Dolby passed through when MSE takes it',
+	{ tag: ['@ipad'] },
+	async ({ page, state, logs }) => {
+		await page.goto('/');
+		const ec3 = await page.evaluate(() => MediaSource.isTypeSupported('audio/mp4; codecs="ec-3"'));
+		console.log(`[measure] iPad WebKit MSE: ec-3=${ec3}`);
+		test.skip(!ec3 && !state.libavIris, 'no E-AC-3 in MSE and no Iris libav.js variant: nothing can play this audio');
+		await page.addInitScript(() => {
+			const native = MediaSource.isTypeSupported.bind(MediaSource);
+			MediaSource.isTypeSupported = (type: string) => !/\bhev1\./.test(type) && native(type);
+		});
+		await openWatch(page, state, 'hevc10Eac3');
+		await tapPlay(page);
+		const rate = await playsAt1x(page);
+		const tier = pickedTier(logs);
+		const reencoded = logs.lines.some((l) => l.includes('AudioEncoder →'));
+		console.log(`[measure] iPad HEVC + E-AC-3: tier ${tier}, ${rate.toFixed(2)}x, audio ${reencoded ? 're-encoded' : 'passed through'}`);
+		expect(tier).toBe('B');
+		expect(reencoded, 'Safari plays E-AC-3 itself: no libav decode + AAC re-encode').toBe(!ec3);
+		expect(rate).toBeGreaterThan(0.85);
+		// mid-file, where every keyframe is a CRA: a resume lands there
+		await revealByTap(page);
+		const box = (await page.getByRole('slider', { name: 'Seek' }).boundingBox())!;
+		await page.touchscreen.tap(box.x + box.width * 0.6, box.y + box.height / 2);
+		await expect.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 30_000 }).toBeGreaterThan(170);
+		const from = (await videoState(page))!.currentTime;
+		await page.waitForTimeout(6000);
+		const after = (await videoState(page))!;
+		expect(after.error).toBeNull();
+		expect(after.currentTime - from).toBeGreaterThan(4);
+	}
+);
+
+test(
 	'touch alone: a tap on hidden controls only shows them; Play, Pause and a seek by tap',
 	{ tag: ['@ipad'] },
 	async ({ page, state }) => {

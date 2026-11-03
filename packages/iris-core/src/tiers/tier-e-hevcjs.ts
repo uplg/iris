@@ -40,7 +40,7 @@ import {
 	EncodedAudioPacketSource
 } from 'mediabunny';
 
-import { isFirefox } from '../caps';
+import { isFirefox, msePlaysAudio } from '../caps';
 import {
 	appendNativeTrack,
 	bindVideoCallbacks,
@@ -250,7 +250,7 @@ export const mountTierE: EngineMount = async (opts) => {
 
 	const chosenAudioIdx = audioTrackIndex ?? defaultAudioIndex(manifest);
 	const chosenAudio = manifest.audio[chosenAudioIdx] ?? null;
-	const audioNeedsTranscode = chosenAudio !== null && chosenAudio !== undefined && !chosenAudio.browser_native;
+	const audioNeedsTranscode = chosenAudio !== null && chosenAudio !== undefined && !msePlaysAudio(chosenAudio);
 	if (audioNeedsTranscode && !libavCanDecode(chosenAudio.codec)) {
 		throw new Error(`Tier E: audio codec ${chosenAudio.codec} not transcodable client-side`);
 	}

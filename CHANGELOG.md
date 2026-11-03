@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **iPad on Dolby audio**: a release with AC-3 / E-AC-3 audio (most WEB HEVC
+  MULTi rips) no longer has Safari decode and re-encode the sound before the
+  picture can start; Safari plays Dolby itself, so the track goes through as it
+  is. An iPad sat on a black « Buffering » on such an episode.
+
 ## [1.7.1] - 2026-10-31
 
 > See what a suggested title is about before you go looking for it.
