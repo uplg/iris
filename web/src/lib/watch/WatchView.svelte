@@ -13,7 +13,7 @@
 	import { afterNavigate, goto } from '$app/navigation';
 	import { follows, library, progress as progressApi, torrents } from '@iris/api/client';
 	import { duration as lengthWords, episodeCode, fileName, formatSize, percent, prettySceneName, speed } from '@iris/api/format';
-	import { hevcMseNeedsIdrStart } from '@iris/core/caps';
+	import { hevcMseNeedsIdrStart, msePlaysAudio } from '@iris/core/caps';
 	import { irisFetch } from '@iris/core/stream-fetch';
 	import { fetchManifest, ManifestNotReadyError, pickTier, postSeekHint, rawStreamUrl, type DecodeTier } from '@iris/core/manifest-client';
 	import Icon from '#lib/components/Icon.svelte';
@@ -149,7 +149,7 @@
 			console.log('[iris-core] tier', final, {
 				container: m.container,
 				video: m.video.map((v) => v.codec_string ?? v.codec),
-				audio: m.audio.map((a) => `${a.codec}${a.browser_native ? '(native)' : ''}`)
+				audio: m.audio.map((a) => `${a.codec}${msePlaysAudio(a) ? '(native)' : ''}`)
 			});
 		})();
 		return () => {

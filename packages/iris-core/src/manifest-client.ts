@@ -10,7 +10,15 @@
 import type { components } from '@iris/api/api-types';
 import { isNotOnDisk } from '@iris/api/refusals';
 import { isHevc } from './codec';
-import { capsHeader, cheapProbeVideoCodec, hevcMseNeedsIdrStart, isMobileLike, mseSupportsType, probeCapabilities } from './caps';
+import {
+	capsHeader,
+	cheapProbeVideoCodec,
+	hevcMseNeedsIdrStart,
+	isMobileLike,
+	msePlaysAudio,
+	mseSupportsType,
+	probeCapabilities
+} from './caps';
 import { libavCanDecode } from './decode/libav-codecs';
 import { irisFetch } from './stream-fetch';
 
@@ -104,11 +112,11 @@ export async function pickTier(manifest: Manifest): Promise<DecodeTier> {
 	const hevcOnlyAsHvc1 = manifest.video.some(
 		(v) => v.codec_string?.startsWith('hev1.') === true && !MediaSource.isTypeSupported(`video/mp4; codecs="${v.codec_string}"`)
 	);
-	const audioNative = manifest.audio.every((a) => a.browser_native);
+	const audioNative = manifest.audio.every(msePlaysAudio);
 	// libav.js + WebCodecs.AudioEncoder lets us transcode AC-3, E-AC-3
 	// and FLAC to AAC client-side at mount time (see Tier B's audio
 	// filter). Tracks outside that set fall to Tier F.
-	const audioTranscodable = manifest.audio.every((a) => a.browser_native || libavCanDecode(a.codec));
+	const audioTranscodable = manifest.audio.every((a) => msePlaysAudio(a) || libavCanDecode(a.codec));
 	if (!audioNative && !audioTranscodable) return 'F';
 
 	// Mobile gate. On phones/tablets we keep the engines whose memory

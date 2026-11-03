@@ -33,7 +33,7 @@ import {
 	type StreamTargetChunk
 } from 'mediabunny';
 
-import { hevcMseNeedsIdrStart, isFirefox, isMobileLike } from '../caps';
+import { hevcMseNeedsIdrStart, isFirefox, isMobileLike, msePlaysAudio } from '../caps';
 import { pickAudioEncoder, transcodeSampleSource, type AudioEncoderChoice } from '../decode/audio-plan';
 import { HevcCraSplicer, descriptionBytes, splicePacket } from '../decode/hevc-cra-splice';
 import { ensureLibavAudioDecoderRegistered } from '../decode/libav-audio-decoder';
@@ -208,7 +208,7 @@ export const mountTierB: EngineMount = async (opts) => {
 
 	const chosenAudioIdx = audioTrackIndex ?? defaultAudioIndex(manifest);
 	const chosenAudio = manifest.audio[chosenAudioIdx];
-	const audioNeedsTranscode = chosenAudio !== null && chosenAudio !== undefined && !chosenAudio.browser_native;
+	const audioNeedsTranscode = chosenAudio !== null && chosenAudio !== undefined && !msePlaysAudio(chosenAudio);
 	if (audioNeedsTranscode && !libavCanDecode(chosenAudio.codec)) {
 		const err = new Error(`Tier B: audio codec ${chosenAudio.codec} not transcodable client-side`);
 		fail(err);

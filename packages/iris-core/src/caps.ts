@@ -69,6 +69,20 @@ export function mseSupportsType(mime: string): boolean {
 	return hvc1 !== mime && MediaSource.isTypeSupported(hvc1);
 }
 
+/**
+ * Whether MSE plays this audio track as it is, so it rides into the fMP4 untouched. The
+ * server's `browser_native` covers the codecs every browser takes (AAC, Opus, MP3); AC-3 and
+ * E-AC-3 are asked of this browser: Safari (macOS and iPadOS) decodes Dolby itself. There the
+ * libav.js decode + AudioEncoder re-encode is pure risk: the video feed waits on the transcoded
+ * audio, and an iPad on a WEB rip's E-AC-3 5.1 sat black on « Buffering » with no error.
+ */
+export function msePlaysAudio(track: { codec: string; codec_string?: string | null; browser_native: boolean }): boolean {
+	if (track.browser_native) return true;
+	if (track.codec !== 'ac3' && track.codec !== 'eac3') return false;
+	if (!track.codec_string || typeof globalThis.MediaSource === 'undefined') return false;
+	return MediaSource.isTypeSupported(`audio/mp4; codecs="${track.codec_string}"`);
+}
+
 let cached: ClientCaps | null = null;
 let cachedHeader: string | null = null;
 

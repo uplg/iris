@@ -6,6 +6,7 @@ export const CATALOG = {
 	h264Mp4: { file: 'Bench.Alpha.2001.360p.WEB.H264.AAC-IRIS.mp4', duration: 60 },
 	h264Mkv: { file: 'Bench.Bravo.2002.360p.WEB.H264.AAC-IRIS.mkv', duration: 90 },
 	hevcEac3: { file: 'Bench.Charlie.2003.720p.WEB.HEVC.EAC3-IRIS.mkv', duration: 60 },
+	hevc10Eac3: { file: 'Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.mkv', duration: 300 },
 	hevcAac: { file: 'Bench.Kilo.2011.720p.WEB.HEVC.AAC-IRIS.mkv', duration: 60 },
 	mono: { file: 'Bench.Delta.2004.360p.WEB.H264.AAC.Mono-IRIS.mp4', duration: 45 },
 	surround: { file: 'Bench.Echo.2005.360p.WEB.H264.AAC5.1-IRIS.mp4', duration: 45 },
