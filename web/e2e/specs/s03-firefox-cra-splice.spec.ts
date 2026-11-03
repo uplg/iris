@@ -43,6 +43,17 @@ test('HEVC open GOP + E-AC-3 5.1: the audio goes through libav.js in its worker'
 	expect(logs.matching(/libav\.js worker unavailable/)).toEqual([]);
 });
 
+test(
+	'HEVC Main 10 with a bare hvcC (parameter sets in-band only): the splice still runs',
+	{ tag: ['@firefox'] },
+	async ({ page, state, logs }) => {
+		test.skip(!state.libavIris, 'the Iris libav.js variant is not built here (Dockerfile libav-builder stage; IRIS_E2E_LIBAV_DIR)');
+		await needsHevc(page);
+		await resumeAndSeek(page, state, logs, 'hevc10Eac3');
+		expect(logs.matching(/hvcC carries no SPS\/PPS/)).toEqual([]);
+	}
+);
+
 test('the libav.js variant probe tells a missing build from a served one', { tag: ['@firefox', '@chrome'] }, async ({ page, state }) => {
 	const res = await page.request.head('/libavjs/libav-6.10.9.0-iris.wasm.mjs');
 	const type = res.headers()['content-type'] ?? '';

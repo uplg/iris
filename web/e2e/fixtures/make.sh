@@ -61,15 +61,20 @@ make Bench.Kilo.2011.720p.WEB.HEVC.AAC-IRIS.mkv $(video 1280x720 60) $(stereo48 
 	-x265-params "log-level=error:keyint=48:min-keyint=48:scenecut=0:open-gop=1:bframes=3" \
 	-metadata:s:a:0 language=eng -c:a aac -b:a 128k -ar 48000
 
-# Scenario 12: what a WEB HEVC MULTi rip looks like on an iPad: 1080p Main 10, open GOP, two
-# E-AC-3 5.1 tracks (French first), 5 min so the window rolls and evicts.
-# shellcheck disable=SC2046
-make Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.mkv $(video 1920x1080 300) \
-	-f lavfi -i "aevalsrc=exprs=${bed}|${bed}|${beep}|0|${bed}|${bed}:s=48000:c=5.1:d=300" \
-	-map 0:v -map 1:a -map 1:a \
-	-c:v libx265 -preset ultrafast -pix_fmt yuv420p10le -tag:v hev1 \
-	-x265-params "log-level=error:keyint=96:min-keyint=96:scenecut=0:open-gop=1:bframes=3" \
-	-metadata:s:a:0 language=fre -metadata:s:a:1 language=eng -c:a eac3 -b:a 640k -ar 48000
+# Scenario 12: what a WEB HEVC MULTi rip (TFA) looks like on an iPad: 1080p Main 10, open GOP,
+# two E-AC-3 5.1 tracks (French first), and a bare hvcC: the parameter sets travel in-band only
+# (repeat-headers), the CodecPrivate is emptied after the mux. 5 min so the window rolls.
+if [[ ! -f "$out/Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.mkv" || "$force" == "--force" ]]; then
+	# shellcheck disable=SC2046
+	make Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.tmp.mkv $(video 1920x1080 300) \
+		-f lavfi -i "aevalsrc=exprs=${bed}|${bed}|${beep}|0|${bed}|${bed}:s=48000:c=5.1:d=300" \
+		-map 0:v -map 1:a -map 1:a \
+		-c:v libx265 -preset ultrafast -pix_fmt yuv420p10le -tag:v hev1 \
+		-x265-params "log-level=error:keyint=96:min-keyint=96:scenecut=0:open-gop=1:bframes=3:repeat-headers=1" \
+		-metadata:s:a:0 language=fre -metadata:s:a:1 language=eng -c:a eac3 -b:a 640k -ar 48000
+	python3 "$here/bare-hvcc.py" "$out/Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.tmp.mkv"
+	mv "$out/Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.tmp.mkv" "$out/Bench.Papa.2016.1080p.WEB.HEVC10.EAC3-IRIS.mkv"
+fi
 
 # Scenario 1: mono audio (must reach both ears).
 # shellcheck disable=SC2046
