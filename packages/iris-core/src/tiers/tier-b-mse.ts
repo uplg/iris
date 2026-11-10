@@ -283,10 +283,9 @@ export const mountTierB: EngineMount = async (opts) => {
 	// having released the VideoToolbox decoder while backgrounded; the reactive
 	// recovery for that lives in IrisPlayer, see the `visibilitychange` handler).
 	let hiddenAtWall = 0;
-	// Diagnostics for the Firefox "appendBuffer wedges in updating=true with no
-	// updateend/error" failure (FF bug 1120084). Records which op is in flight; a
-	// STALL showing `pendingOp=append updating=true` means the append is wedged
-	// (the recovery in `onWaiting` aborts it).
+	// Diagnostics: which op is in flight. A STALL showing `pendingOp=append
+	// updating=true` with an `opAge` past `WEDGED_OP_MS` is a wedged append
+	// (FF bug 1120084), which `unwedge` aborts.
 	let pendingOp: 'append' | 'remove' | null = null;
 	// Bytes the muxer has actually produced this generation. Reported in the
 	// STALL line: zero here means the muxer emitted nothing, so the fault is
@@ -530,10 +529,27 @@ export const mountTierB: EngineMount = async (opts) => {
 	const STALL_WATCHDOG_MS = 4_000;
 	let stallWatchdogId: ReturnType<typeof setTimeout> | null = null;
 
+	/** Aborts a wedged op (see `AppendQueue.unwedge`); the stall handler jumps the gap it
+	 *  leaves. True when it restarted the run instead (nothing left for the caller to do). */
+	const unwedge = (): boolean => {
+		if (!appendQueue.unwedge()) return false;
+		pendingOp = null;
+		console.warn('[iris-core] Tier B: aborted wedged SourceBuffer op');
+		// The abort reset the segment parser, so the next fragment opens a coded frame
+		// group on this run's next CRA — left a CRA by the splicer, which Gecko-mac drops
+		// with every frame after it (bug 2065822). Only a new run, opening on a spliced
+		// IDR again, gets frames stored.
+		if (splicing) {
+			console.warn('[iris-core] Tier B: unwedged under the CRA splice — restarting at the playhead');
+			void restartConversionFromSeek(effectivePlayhead());
+			return true;
+		}
+		return false;
+	};
+
 	const onWaiting = () => {
 		if (disposed || !sourceBuffer) return;
 		const t = video.currentTime;
-		const wedged = sourceBuffer.updating;
 		// Arm the watchdog before any early-return below: the frozen-feed
 		// case is precisely the one where the synchronous recovery paths
 		// all no-op (playhead still inside a buffered range, queue empty).
@@ -543,7 +559,11 @@ export const mountTierB: EngineMount = async (opts) => {
 			const snapFed = videoFedMax;
 			stallWatchdogId = setTimeout(() => {
 				stallWatchdogId = null;
-				if (disposed || videoFeedEnded || video.paused) return;
+				if (disposed) return;
+				// the op that was too young to call wedged when the stall fired
+				if (unwedge()) return;
+				appendQueue.pump();
+				if (videoFeedEnded || video.paused) return;
 				// ANY movement of either clock (including a user seek resetting
 				// them backwards) means something else is driving recovery.
 				if (Math.abs(video.currentTime - snapT) > 0.25 || videoFedMax !== snapFed) return;
@@ -570,7 +590,7 @@ export const mountTierB: EngineMount = async (opts) => {
 			`[iris-core] Tier B STALL t=${t.toFixed(1)}s ahead=${bufferedAheadSeconds().toFixed(0)}s ` +
 				`fedMax=${videoFedMax.toFixed(0)}s feedEnded=${videoFeedEnded} ` +
 				`readyState=${video.readyState} netState=${video.networkState} ` +
-				`pendingOp=${pendingOp ?? 'none'} updating=${sourceBuffer.updating} queue=${appendQueue.length} ` +
+				`pendingOp=${pendingOp ?? 'none'} updating=${sourceBuffer.updating} opAge=${appendQueue.opAgeMs.toFixed(0)}ms queue=${appendQueue.length} ` +
 				`err=${video.error ? `${video.error.code}:${video.error.message}` : 'none'} ` +
 				`sink=${sinkChunks}chunks/${(sinkBytes / 1e6).toFixed(1)}MB park=${gate.parked ?? 'none'} ` +
 				// Separates "no data reached the SourceBuffer" from "data is there but
@@ -581,31 +601,7 @@ export const mountTierB: EngineMount = async (opts) => {
 				`${video.getVideoPlaybackQuality?.().droppedVideoFrames ?? 'n/a'}dropped ` +
 				`ranges=[${bufferedRangesStr()}]`
 		);
-		// RECOVERY for a wedged op: if we're starved (`waiting`) yet the SourceBuffer
-		// is still `updating` (no `updateend`/`error` ever fired — Firefox bug
-		// 1120084 on an open-GOP fragment boundary), the append/remove is hung.
-		// `abort()` is the spec-defined reset: it ends the running append/remove
-		// algorithm, clears `updating`, and resets the segment parser so the next
-		// `appendBuffer` lands. The half-parsed fragment is discarded → a gap we
-		// jump below. Without this the pipeline stays frozen until a reload.
-		if (wedged) {
-			try {
-				sourceBuffer.abort();
-				pendingOp = null;
-				console.warn('[iris-core] Tier B: aborted wedged SourceBuffer op (FF unwedge)');
-			} catch {
-				/* MediaSource not open — dispose path will clean up */
-			}
-			// The abort reset the segment parser, so the next fragment opens a coded frame
-			// group on this run's next CRA — left a CRA by the splicer, which Gecko-mac drops
-			// with every frame after it (bug 2065822). Only a new run, opening on a spliced
-			// IDR again, gets frames stored.
-			if (splicing) {
-				console.warn('[iris-core] Tier B: unwedged under the CRA splice — restarting at the playhead');
-				void restartConversionFromSeek(effectivePlayhead());
-				return;
-			}
-		}
+		if (unwedge()) return;
 		evictPlayedRange(playedKeep, 0);
 		appendQueue.pump();
 		if (isTimeBuffered(t)) return;

@@ -4,7 +4,16 @@
  * engine pumps from its own events (`updateend`, `timeupdate`, a stall). A QuotaExceededError
  * keeps the chunk at the head for a later pump and lets the engine free room: no retry loop,
  * the next event retries.
+ *
+ * It also knows how long the SourceBuffer's current op (an append, or the engine's own
+ * `remove`) has been in flight, which is what tells a hung op from one merely under way.
  */
+
+/** An op this long in flight is hung: a healthy append or remove settles in milliseconds.
+ *  `updating` alone says nothing. A `waiting` fired by a seek lands while the first appends
+ *  of the new run are in flight, and aborting those throws their fragments away (WebKit
+ *  then starves at the seek point, stall after stall). */
+export const WEDGED_OP_MS = 2_000;
 
 export type AppendQueueOptions = {
 	/** False once the engine is disposed: nothing more is appended. */
@@ -25,7 +34,15 @@ export class AppendQueue {
 	readonly chunks: Uint8Array[] = [];
 	#sb: SourceBuffer | null = null;
 	#inFlight = false;
+	#opSince = 0;
 	#opts: AppendQueueOptions;
+	#opStarted = () => {
+		this.#opSince = performance.now();
+	};
+	#opSettled = () => {
+		// the engine's own `updateend` listener may have pumped the next append already
+		if (!this.#sb?.updating) this.#opSince = 0;
+	};
 	#settle = () => {
 		this.#inFlight = false;
 		this.#opts.onSettled?.();
@@ -41,16 +58,47 @@ export class AppendQueue {
 		this.detach();
 		this.#sb = sb;
 		this.#inFlight = false;
+		this.#opSince = 0;
+		sb.addEventListener('updatestart', this.#opStarted);
+		sb.addEventListener('updateend', this.#opSettled);
 		if (this.#opts.proxied) {
 			for (const e of ['updateend', 'error', 'abort']) sb.addEventListener(e, this.#settle);
 		}
 	}
 
 	detach(): void {
+		this.#sb?.removeEventListener('updatestart', this.#opStarted);
+		this.#sb?.removeEventListener('updateend', this.#opSettled);
 		if (this.#sb && this.#opts.proxied) {
 			for (const e of ['updateend', 'error', 'abort']) this.#sb.removeEventListener(e, this.#settle);
 		}
 		this.#sb = null;
+	}
+
+	/** How long the SourceBuffer's current op has been in flight; 0 when it is idle. */
+	get opAgeMs(): number {
+		if (!this.#sb?.updating) return 0;
+		// an op whose `updatestart` was never seen ages from the first look at it
+		if (this.#opSince === 0) this.#opSince = performance.now();
+		return performance.now() - this.#opSince;
+	}
+
+	/** Recovery for a hung op (Firefox bug 1120084: `updating` stays true, no `updateend`,
+	 *  no `error`). `abort()` is the spec's reset: it ends the running algorithm, clears
+	 *  `updating` and resets the segment parser so the next append lands; the half-parsed
+	 *  fragment is lost, a gap for the engine to jump. Call it from a stall: an op younger
+	 *  than `WEDGED_OP_MS` is left alone. True when an op was aborted. */
+	unwedge(): boolean {
+		const sb = this.#sb;
+		if (!sb || this.opAgeMs < WEDGED_OP_MS) return false;
+		try {
+			sb.abort();
+		} catch {
+			// MediaSource not open (the dispose path owns it), or a remove, which `abort` refuses
+			return false;
+		}
+		this.#opSince = 0;
+		return true;
 	}
 
 	get length(): number {
@@ -84,6 +132,7 @@ export class AppendQueue {
 			return false;
 		}
 		if (this.#opts.proxied) this.#inFlight = true;
+		this.#opSince = performance.now();
 		this.#opts.onAppend?.();
 		return true;
 	}

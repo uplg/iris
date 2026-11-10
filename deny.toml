@@ -16,6 +16,12 @@ ignore = [
     # server only verifies RS256 signatures with public keys and holds no RSA
     # private key. Drop this entry once rsa ships a fix.
     "RUSTSEC-2023-0071",
+    # Bundled SQLite < 3.54.0 can return stale process memory when it opens a
+    # database next to a crafted `-wal` of another page size. Transitive via
+    # sqlx 0.9.0, which caps libsqlite3-sys below 0.38 (the fix is 0.39).
+    # Unreachable here: the server only opens the database it wrote itself in
+    # its own data dir. Drop this entry once sqlx accepts libsqlite3-sys >= 0.39.
+    "RUSTSEC-2026-0459",
 ]
 
 [licenses]

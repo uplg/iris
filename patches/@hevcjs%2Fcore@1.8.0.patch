@@ -1,0 +1,32 @@
+diff --git a/dist/index.js b/dist/index.js
+index d58cf6f45324e4a24f5be59cd4ddf4db3d9a7001..16bdba372271a83c66dd2a390e16742dc278b46f 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -9,7 +9,10 @@ function pickH264Codec(w, h) {
+   if (pixels > 921600) return "avc1.64002a";
+   return "avc1.640028";
+ }
+-var LATENCY_MODES = ["realtime", "quality"];
++// [iris patch] Gecko accepts a realtime H.264 config (isConfigSupported true, configure() does
++// not throw) and refuses it afterwards through the error callback ("The given encoding is not
++// supported", measured on Firefox 159), which the synchronous fallback below never sees.
++var LATENCY_MODES = typeof navigator !== "undefined" && /Firefox\//.test(navigator.userAgent) ? ["quality", "realtime"] : ["realtime", "quality"];
+ var PROBE_WIDTH = 1280;
+ var PROBE_HEIGHT = 720;
+ function buildEncoderConfig(width, height, fps, bitrate, latencyMode) {
+diff --git a/dist/transcode-worker.js b/dist/transcode-worker.js
+index 5345bdae5dc427883b5698c8b802db4f0790fff6..abd05e4be445b0cd7d3d213fcd526de10297cc0b 100644
+--- a/dist/transcode-worker.js
++++ b/dist/transcode-worker.js
+@@ -10909,7 +10909,10 @@
+     if (pixels > 921600) return "avc1.64002a";
+     return "avc1.640028";
+   }
+-  var LATENCY_MODES = ["realtime", "quality"];
++  // [iris patch] Gecko accepts a realtime H.264 config (isConfigSupported true, configure() does
++  // not throw) and refuses it afterwards through the error callback ("The given encoding is not
++  // supported", measured on Firefox 159), which the synchronous fallback below never sees.
++  var LATENCY_MODES = typeof navigator !== "undefined" && /Firefox\//.test(navigator.userAgent) ? ["quality", "realtime"] : ["realtime", "quality"];
+   var PROBE_WIDTH = 1280;
+   var PROBE_HEIGHT = 720;
+   function buildEncoderConfig(width, height, fps, bitrate, latencyMode) {

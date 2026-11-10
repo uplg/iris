@@ -101,6 +101,17 @@ test(
 		expect(tier).toBe('B');
 		expect(reencoded, 'Safari plays E-AC-3 itself: no libav decode + AAC re-encode').toBe(!ec3);
 		expect(rate).toBeGreaterThan(0.85);
+		// WebKit has no audio tap on an MSE element (s14): the decoder's own byte count is
+		// the evidence that the Dolby track is decoded, not carried silently
+		const heard = async () => {
+			const a = (await videoState(page))!.audioBytes;
+			await page.waitForTimeout(2000);
+			const b = (await videoState(page))!.audioBytes;
+			return a === null || b === null ? null : b - a;
+		};
+		const decoded = await heard();
+		console.log(`[measure] iPad HEVC + E-AC-3: audio decoded over 2 s: ${decoded ?? 'n/a'} bytes`);
+		if (decoded !== null) expect(decoded, 'audio bytes decoded while playing').toBeGreaterThan(0);
 		// mid-file, where every keyframe is a CRA: a resume lands there
 		await revealByTap(page);
 		const box = (await page.getByRole('slider', { name: 'Seek' }).boundingBox())!;
@@ -111,6 +122,20 @@ test(
 		const after = (await videoState(page))!;
 		expect(after.error).toBeNull();
 		expect(after.currentTime - from).toBeGreaterThan(4);
+		expect(logs.matching(/aborted wedged SourceBuffer op/), 'a healthy append was aborted').toEqual([]);
+		// a MULTi rip: the other language, from the panel
+		await revealByTap(page);
+		await page.getByRole('button', { name: 'Audio and subtitles, C' }).tap();
+		const panel = page.getByRole('dialog', { name: 'Audio and subtitles' });
+		await panel.getByRole('group', { name: 'Audio' }).getByRole('radio').last().check();
+		await panel.getByRole('button', { name: 'Close' }).tap();
+		const switched = (await videoState(page))!.currentTime;
+		await expect.poll(async () => (await videoState(page))?.currentTime ?? 0, { timeout: 30_000 }).toBeGreaterThan(switched + 3);
+		expect((await videoState(page))!.error).toBeNull();
+		const decodedAfter = await heard();
+		console.log(`[measure] iPad HEVC + E-AC-3: second audio track, decoded over 2 s: ${decodedAfter ?? 'n/a'} bytes`);
+		if (decodedAfter !== null) expect(decodedAfter, 'audio bytes decoded on the second track').toBeGreaterThan(0);
+		expect(logs.matching(/tier B → /), 'the tier was demoted').toEqual([]);
 	}
 );
 

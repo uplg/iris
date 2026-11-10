@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codec header from the first keyframe.
 - **Dolby audio on Safari**: AC-3 / E-AC-3 goes through as it is, since Safari
   plays it itself, instead of being decoded and re-encoded in the page.
+- **Seeking on Safari** no longer leaves the picture buffering for seconds, or
+  for good: the player took data still on its way into the buffer for a stuck
+  write and threw it away, again at every stall.
 
 ## [1.7.1] - 2026-10-31
 
