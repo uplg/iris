@@ -11,7 +11,9 @@
 
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-FROM emscripten/emsdk:6.0.13 AS libav-builder
+ARG EMSDK_VERSION=7.0.0
+FROM emscripten/emsdk:${EMSDK_VERSION} AS libav-builder
+ARG EMSDK_VERSION
 WORKDIR /build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -47,7 +49,9 @@ WORKDIR /build/libav.js
 # (server-side ffmpeg HLS), which is still functional.
 RUN cd configs && node mkconfig.js iris \
     '["avformat","avcodec","avfilter","swresample","audio-filters","parser-aac","parser-ac3","parser-dca","decoder-ac3","decoder-eac3","decoder-flac","decoder-dca","decoder-pcm_s16le","decoder-pcm_s24le","decoder-pcm_s32le","decoder-pcm_f32le"]'
-RUN --mount=type=cache,target=/build/libav.js/build,sharing=locked \
+# The cache id carries the emsdk version: objects compiled by another
+# toolchain must not be relinked by this one.
+RUN --mount=type=cache,id=libav-build-emsdk-${EMSDK_VERSION},target=/build/libav.js/build,sharing=locked \
     make build-iris -j"$(nproc)" \
     && cp dist/libav-6.10.9.0-iris.wasm.wasm /libav-iris.wasm \
     && cp dist/libav-6.10.9.0-iris.wasm.mjs /libav-iris.wasm.mjs \
