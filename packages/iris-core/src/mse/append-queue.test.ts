@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AppendQueue } from './append-queue';
+import { AppendQueue, WEDGED_OP_MS } from './append-queue';
 
 class FakeSourceBuffer extends EventTarget {
 	updating = false;
@@ -13,6 +13,16 @@ class FakeSourceBuffer extends EventTarget {
 	land() {
 		this.updating = false;
 		this.dispatchEvent(new Event('updateend'));
+	}
+	aborted = 0;
+	abort() {
+		this.aborted += 1;
+		this.land();
+	}
+	/** The engine's own eviction, started outside the queue. */
+	remove() {
+		this.updating = true;
+		this.dispatchEvent(new Event('updatestart'));
 	}
 }
 
@@ -87,5 +97,55 @@ describe('AppendQueue', () => {
 		sb.dispatchEvent(new Event('abort'));
 		expect(sb.appended).toHaveLength(3);
 		expect(onSettled).toHaveBeenCalledTimes(2);
+	});
+
+	describe('a wedged op', () => {
+		const at = (ms: number) => vi.spyOn(performance, 'now').mockReturnValue(ms);
+
+		it('leaves an append that is merely in flight alone', () => {
+			const { sb, queue } = setup();
+			at(1000);
+			queue.push(chunk(1), chunk(2));
+			queue.pump();
+			at(1000 + WEDGED_OP_MS - 1);
+			expect(queue.unwedge()).toBe(false);
+			expect(sb.aborted).toBe(0);
+			vi.restoreAllMocks();
+		});
+
+		it('aborts an append still in flight after the limit, and the next one lands', () => {
+			const { sb, queue } = setup();
+			at(1000);
+			queue.push(chunk(1), chunk(2));
+			queue.pump();
+			at(1000 + WEDGED_OP_MS);
+			expect(queue.opAgeMs).toBe(WEDGED_OP_MS);
+			expect(queue.unwedge()).toBe(true);
+			expect(sb.aborted).toBe(1);
+			expect(queue.opAgeMs).toBe(0);
+			expect(queue.pump()).toBe(true);
+			vi.restoreAllMocks();
+		});
+
+		it("ages each op from its own start, the engine's remove included", () => {
+			const { sb, queue } = setup();
+			at(1000);
+			queue.push(chunk(1));
+			queue.pump();
+			sb.land();
+			at(9000);
+			sb.remove();
+			at(9010);
+			expect(queue.opAgeMs).toBe(10);
+			expect(queue.unwedge()).toBe(false);
+			vi.restoreAllMocks();
+		});
+
+		it('has nothing to abort on an idle buffer', () => {
+			const { sb, queue } = setup();
+			expect(queue.opAgeMs).toBe(0);
+			expect(queue.unwedge()).toBe(false);
+			expect(sb.aborted).toBe(0);
+		});
 	});
 });

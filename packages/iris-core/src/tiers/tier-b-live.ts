@@ -260,14 +260,7 @@ export const mountTierBLive: EngineMount = async (opts) => {
 	// Underrun: unwedge a hung append (FF bug 1120084 lore), jump a gap.
 	const onWaiting = () => {
 		if (disposed || !sourceBuffer) return;
-		if (sourceBuffer.updating) {
-			try {
-				sourceBuffer.abort();
-				console.warn('[iris-core] live: aborted wedged SourceBuffer op (FF unwedge)');
-			} catch {
-				/* MediaSource not open — dispose path owns it */
-			}
-		}
+		if (appendQueue.unwedge()) console.warn('[iris-core] live: aborted wedged SourceBuffer op');
 		appendQueue.pump();
 		jumpForwardGap();
 	};

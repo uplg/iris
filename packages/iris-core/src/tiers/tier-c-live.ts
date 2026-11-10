@@ -176,13 +176,7 @@ export const mountTierCLive: EngineMount = async (opts) => {
 	};
 	const onWaiting = () => {
 		if (disposed || !sourceBuffer) return;
-		if (sourceBuffer.updating) {
-			try {
-				sourceBuffer.abort();
-			} catch {
-				/* MediaSource not open */
-			}
-		}
+		if (appendQueue.unwedge()) console.warn('[iris-core] live-c: aborted wedged SourceBuffer op');
 		appendQueue.pump();
 		jumpForwardGap();
 	};
