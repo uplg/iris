@@ -182,8 +182,7 @@ mod tests {
         let ty = res
             .headers()
             .get(header::CONTENT_TYPE)
-            .map(|v| v.to_str().unwrap().to_owned())
-            .unwrap_or_default();
+            .map_or_default(|v| v.to_str().unwrap().to_owned());
         (res.status(), ty)
     }
 

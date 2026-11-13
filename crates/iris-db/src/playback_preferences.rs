@@ -36,12 +36,10 @@ pub async fn get(pool: &SqlitePool, user_id: UserId) -> Result<PlaybackPreferenc
     .bind(uuid)
     .fetch_optional(pool)
     .await?;
-    Ok(row
-        .map(|r| PlaybackPreferences {
-            audio_language: r.audio_language,
-            subtitle_language: r.subtitle_language,
-        })
-        .unwrap_or_default())
+    Ok(row.map_or_default(|r| PlaybackPreferences {
+        audio_language: r.audio_language,
+        subtitle_language: r.subtitle_language,
+    }))
 }
 
 /// Insert-or-replace a user's playback preferences. The client sends the full
@@ -103,12 +101,10 @@ pub async fn get_for_collection(
     .bind(collection_id)
     .fetch_optional(pool)
     .await?;
-    let own = row
-        .map(|r| PlaybackPreferences {
-            audio_language: r.audio_language,
-            subtitle_language: r.subtitle_language,
-        })
-        .unwrap_or_default();
+    let own = row.map_or_default(|r| PlaybackPreferences {
+        audio_language: r.audio_language,
+        subtitle_language: r.subtitle_language,
+    });
     let account = get(pool, user_id).await?;
     Ok(CollectionPreferences {
         merged: PlaybackPreferences {

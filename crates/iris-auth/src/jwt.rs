@@ -89,14 +89,20 @@ pub struct Issuer {
 }
 
 impl Issuer {
-    pub fn new(secret: &str, issuer: String, access_ttl_secs: i64, refresh_ttl_secs: i64) -> Self {
-        Self {
+    /// Fails on an empty secret, which nothing can sign with.
+    pub fn new(
+        secret: &str,
+        issuer: String,
+        access_ttl_secs: i64,
+        refresh_ttl_secs: i64,
+    ) -> Result<Self, JwtError> {
+        Ok(Self {
             issuer,
             access_ttl: Duration::seconds(access_ttl_secs),
             refresh_ttl: Duration::seconds(refresh_ttl_secs),
-            encoding: EncodingKey::from_secret(secret.as_bytes()),
-            decoding: DecodingKey::from_secret(secret.as_bytes()),
-        }
+            encoding: EncodingKey::from_secret(secret.as_bytes())?,
+            decoding: DecodingKey::from_secret(secret.as_bytes())?,
+        })
     }
 
     pub fn issue_access(&self, user_id: UserId, is_admin: bool) -> Result<String, JwtError> {
@@ -189,7 +195,7 @@ mod tests {
     use super::*;
 
     fn issuer() -> Issuer {
-        Issuer::new("secret", "iris-test".into(), 3600, 7 * 24 * 3600)
+        Issuer::new("secret", "iris-test".into(), 3600, 7 * 24 * 3600).unwrap()
     }
 
     /// Device sessions pass a TTL override; the JWT's own `exp` must carry

@@ -421,7 +421,8 @@ pub async fn run(config_path: PathBuf, providers_override: Option<PathBuf>) -> a
         engine,
         remuxer,
         gc,
-    );
+    )
+    .context("auth.jwt_secret")?;
 
     spawn_background_jobs(&app_state, pool.clone(), provider_registry);
 

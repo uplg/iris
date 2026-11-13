@@ -445,8 +445,7 @@ impl SearchProvider for C411 {
             .lock()
             .await
             .as_ref()
-            .map(|c| c.movies.clone())
-            .unwrap_or_default())
+            .map_or_default(|c| c.movies.clone()))
     }
 
     async fn featured_series(&self) -> Result<Vec<SearchResult>> {
@@ -456,8 +455,7 @@ impl SearchProvider for C411 {
             .lock()
             .await
             .as_ref()
-            .map(|c| c.series.clone())
-            .unwrap_or_default())
+            .map_or_default(|c| c.series.clone()))
     }
 }
 
@@ -582,20 +580,16 @@ impl TorrentDetailRaw {
             .and_then(|m| m.nfo_content.clone())
             .filter(|s| !s.is_empty());
         let media_info = nfo.as_deref().and_then(nfo::parse);
-        let tags = self
-            .metadata
-            .as_ref()
-            .map(|m| {
-                m.options
-                    .iter()
-                    .flat_map(|o| o.values.iter())
-                    .filter_map(|v| {
-                        let s = v.value.trim();
-                        (!s.is_empty()).then(|| s.to_string())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let tags = self.metadata.as_ref().map_or_default(|m| {
+            m.options
+                .iter()
+                .flat_map(|o| o.values.iter())
+                .filter_map(|v| {
+                    let s = v.value.trim();
+                    (!s.is_empty()).then(|| s.to_string())
+                })
+                .collect::<Vec<_>>()
+        });
         let category = build_category(self.category.as_ref(), self.metadata.as_ref());
         let exclusive = self.metadata.as_ref().is_some_and(|m| m.is_exclusive);
         let file_count = u32::try_from(self.files.len()).ok();

@@ -2467,8 +2467,7 @@ fn guess_mime(infohash: &str, idx: usize, engine: &iris_torrent::Engine) -> Stri
     let snapshot = engine.get_by_infohash(infohash);
     let path = snapshot
         .and_then(|s| s.files.into_iter().find(|f| f.index == idx))
-        .map(|f| f.path)
-        .unwrap_or_default();
+        .map_or_default(|f| f.path);
     mime_for_filename(&path)
 }
 

@@ -422,17 +422,13 @@ pub fn build_channels(
 
 /// `group-title` split on `;`, iptv-org's `Undefined` left out.
 fn categories_of(entry: &M3uEntry) -> Vec<String> {
-    entry
-        .attrs
-        .get("group-title")
-        .map(|g| {
-            g.split(';')
-                .map(str::trim)
-                .filter(|s| !s.is_empty() && *s != "Undefined")
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    entry.attrs.get("group-title").map_or_default(|g| {
+        g.split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "Undefined")
+            .map(str::to_string)
+            .collect()
+    })
 }
 
 /// Sources in election order; TNT channels first in Arcom order, then
@@ -545,8 +541,7 @@ pub fn merge_tuner_sources(channels: &mut [Channel], base_url: &str, grid: &[Tun
         let id_alias = ch
             .tvg_id
             .as_deref()
-            .map(|id| normalize(tvg_id_base(id)))
-            .unwrap_or_default();
+            .map_or_default(|id| normalize(tvg_id_base(id)));
         let name_alias = normalize(&ch.name);
         let Some(tc) = by_alias
             .get(&id_alias)

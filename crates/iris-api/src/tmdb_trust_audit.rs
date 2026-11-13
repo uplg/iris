@@ -236,10 +236,7 @@ pub fn render(report: &Report) -> String {
             } else {
                 old
             };
-            let trust = r
-                .trust
-                .map(|t| format!(" [{}]", t.as_str()))
-                .unwrap_or_default();
+            let trust = r.trust.map_or_default(|t| format!(" [{}]", t.as_str()));
             let _ = writeln!(
                 out,
                 "  {} ({}) — {ids} — {}{trust}",

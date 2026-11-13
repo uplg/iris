@@ -740,17 +740,13 @@ impl TorrentEnvelope {
         }
         let (poster_url, genre_tags) = match attrs.meta {
             Some(m) => {
-                let genres: Vec<String> = m
-                    .genres
-                    .as_deref()
-                    .map(|g| {
-                        g.split(',')
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(String::from)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let genres: Vec<String> = m.genres.as_deref().map_or_default(|g| {
+                    g.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                });
                 (m.poster.filter(|s| !s.is_empty()), genres)
             }
             None => (None, Vec::new()),

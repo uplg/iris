@@ -1224,8 +1224,7 @@ async fn run_shaka(
         // shaka refuses `language=und` (INVALID_ARGUMENT); without the field the
         // rendition just carries no LANGUAGE attribute
         let lang = known_language(&a.language)
-            .map(|l| format!("language={l},"))
-            .unwrap_or_default();
+            .map_or_default(|l| format!("language={l},"));
         format!(
             "in={input},stream=audio,{lang}init_segment={dir}/{name}_init.mp4,segment_template={dir}/{name}_$Number$.m4s,playlist_name={name}.m3u8,hls_group_id=audio,hls_name={name}",
             input = tmp.display(),

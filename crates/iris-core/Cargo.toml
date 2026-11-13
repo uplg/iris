@@ -14,7 +14,6 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
-url = { workspace = true }
 # Domain wire types derive `ToSchema` so the OpenAPI spec (assembled in
 # iris-api) describes them directly — see crates/iris-api/src/openapi.rs.
 utoipa = { workspace = true }
