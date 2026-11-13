@@ -278,8 +278,7 @@ fn normalize(raw: FfprobeOutput) -> MediaProbe {
     let format_name = raw
         .format
         .as_ref()
-        .map(|f| f.format_name.clone())
-        .unwrap_or_default();
+        .map_or_default(|f| f.format_name.clone());
     let duration = raw
         .format
         .as_ref()

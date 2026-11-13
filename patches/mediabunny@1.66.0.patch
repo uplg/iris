@@ -1,8 +1,8 @@
 diff --git a/dist/modules/src/isobmff/isobmff-muxer.js b/dist/modules/src/isobmff/isobmff-muxer.js
-index 9c51995f52ed6434b4169a69992d7631887f12e0..46141109375b812b5e699ea5b8f745177032249e 100644
+index 8d888423e2c4dc0eeb70a3b8892034f406ec6016..c218108c3a30ec7659bdfee5a586d426ca733e3b 100644
 --- a/dist/modules/src/isobmff/isobmff-muxer.js
 +++ b/dist/modules/src/isobmff/isobmff-muxer.js
-@@ -683,13 +683,24 @@ export class IsobmffMuxer extends Muxer {
+@@ -738,13 +738,24 @@ export class IsobmffMuxer extends Muxer {
              // (presentation timestamp & decode order are all you need), but it is a concept in ISOBMFF so we need to
              // model it.
              sample.decodeTimestamp = sortedTimestamps[i];

@@ -85,7 +85,7 @@ pub async fn get(pool: &SqlitePool, user_id: UserId) -> Result<UserPreferences, 
     .bind(uuid)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(PrefRow::into_domain).unwrap_or_default())
+    Ok(row.map_or_default(PrefRow::into_domain))
 }
 
 /// Insert-or-replace a user's preferences and return the stored value.

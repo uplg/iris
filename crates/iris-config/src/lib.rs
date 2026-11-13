@@ -743,8 +743,8 @@ impl AppConfig {
 
     /// What's wrong with `auth.jwt_secret`, if anything: anyone who knows or
     /// guesses it mints sessions for every account. `Err` refuses to start:
-    /// empty, or the placeholder from the example config, on a server that
-    /// isn't local. `Ok(Some(_))` is a warning: shorter than
+    /// empty (nothing can sign with it), or the placeholder from the example
+    /// config on a server that isn't local. `Ok(Some(_))` is a warning: shorter than
     /// [`MIN_JWT_SECRET_BYTES`], or the placeholder on a local dev server.
     pub fn jwt_secret_problem(&self) -> Result<Option<String>, String> {
         let secret = self.auth.jwt_secret.trim();
@@ -753,7 +753,7 @@ impl AppConfig {
             .iter()
             .any(|p| url.starts_with(p));
         let placeholder = secret.is_empty() || secret == EXAMPLE_JWT_SECRET;
-        if placeholder && !local {
+        if secret.is_empty() || (placeholder && !local) {
             return Err(format!(
                 "auth.jwt_secret is {}: set a random secret of at least {MIN_JWT_SECRET_BYTES} bytes \
                  (e.g. `openssl rand -base64 48`); changing it signs every session out",
@@ -813,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn a_weak_jwt_secret_warns_and_a_placeholder_refuses_outside_dev() {
+    fn a_weak_jwt_secret_warns_a_placeholder_refuses_outside_dev_and_an_empty_one_always() {
         let strong = "k".repeat(48);
         assert_eq!(
             with_secret("https://iris.example", &strong).jwt_secret_problem(),
@@ -830,11 +830,16 @@ mod tests {
                     .is_err(),
                 "{refused:?}"
             );
-            assert!(matches!(
-                with_secret("http://localhost:8080", refused).jwt_secret_problem(),
-                Ok(Some(_))
-            ));
         }
+        assert!(matches!(
+            with_secret("http://localhost:8080", "change-me-in-production").jwt_secret_problem(),
+            Ok(Some(_))
+        ));
+        assert!(
+            with_secret("http://localhost:8080", "  ")
+                .jwt_secret_problem()
+                .is_err()
+        );
     }
 
     /// A config with no `[live_tv]` section must still ship the curated FR

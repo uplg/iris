@@ -42,7 +42,7 @@ impl AppState {
         engine: Arc<Engine>,
         remuxer: RemuxManager,
         gc: Gc,
-    ) -> Self {
+    ) -> Result<Self, iris_auth::jwt::JwtError> {
         let tmdb = cfg
             .tmdb
             .as_ref()
@@ -58,7 +58,7 @@ impl AppState {
             cfg.server.public_url.clone(),
             cfg.auth.access_ttl_secs,
             cfg.auth.refresh_ttl_secs,
-        );
+        )?;
         // Live TV proxy/catalogue — config-gated; a build failure disables
         // the feature instead of blocking boot.
         let live_tv = cfg
@@ -95,7 +95,7 @@ impl AppState {
                 None
             }
         };
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner {
                 cfg,
                 db,
@@ -112,7 +112,7 @@ impl AppState {
                 passkeys,
                 session_cuts: crate::session_cut::SessionCuts::default(),
             }),
-        }
+        })
     }
 
     /// A state over `db` and `providers` whose engine never touches the
@@ -154,7 +154,7 @@ impl AppState {
             None,
             |_| {},
         );
-        Self::new(cfg, db, providers, engine, remuxer, gc)
+        Self::new(cfg, db, providers, engine, remuxer, gc).expect("test jwt secret")
     }
 
     /// The passkey service, or 404 when this server can't offer passkeys.

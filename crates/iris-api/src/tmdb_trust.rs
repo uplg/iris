@@ -850,8 +850,7 @@ pub(crate) mod tests {
             let fr = language.and_then(|_| self.searches_fr.get(query));
             Some(
                 fr.or_else(|| self.searches.get(query))
-                    .map(|v| v.iter().filter(|s| s.kind == kind).cloned().collect())
-                    .unwrap_or_default(),
+                    .map_or_default(|v| v.iter().filter(|s| s.kind == kind).cloned().collect()),
             )
         }
 

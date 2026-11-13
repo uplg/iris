@@ -1035,8 +1035,7 @@ pub(crate) async fn diagnose_tmdb(
     let parsed = iris_media::filename::parse(&row.name);
     let cleaned = parsed
         .as_ref()
-        .map(|p| iris_media::filename::series_key(&p.title))
-        .unwrap_or_default();
+        .map_or_default(|p| iris_media::filename::series_key(&p.title));
 
     let mut suggestions: Vec<TmdbDiagnoseSuggestion> = Vec::new();
     let mut picked: Option<TmdbDiagnoseSuggestion> = None;

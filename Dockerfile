@@ -110,7 +110,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 # every crate's dev-dependencies. `migrations/` lands in the app layer only:
 # `iris-db` embeds it via `sqlx::migrate!`, so it must invalidate that layer
 # and must not invalidate the deps layer.
-FROM lukemathwalker/cargo-chef:0.1.78-rust-1.99.1-trixie AS chef
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1.100.0-trixie AS chef
 WORKDIR /app
 ENV CARGO_TERM_COLOR=never
 COPY rust-toolchain.toml ./
@@ -138,7 +138,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # Runtime — Chainguard Wolfi (glibc)
 #
 # glibc (2.43) just like Debian, so the prebuilt glibc shaka-packager binary
-# and the glibc Rust binary (built above on rust 1.99.1 / trixie glibc 2.41 —
+# and the glibc Rust binary (built above on rust 1.100.0 / trixie glibc 2.41 —
 # older, so it runs fine on Wolfi's newer 2.43) work UNCHANGED. NOT Alpine:
 # musl would break the prebuilt shaka binary and hurt librqbit's allocation-
 # heavy throughput. Codec parity re-verified on ffmpeg 9.0.1 (2026-09-08):

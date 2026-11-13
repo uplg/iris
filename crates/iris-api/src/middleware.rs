@@ -32,8 +32,7 @@ impl IrisCaps {
     pub fn of<B>(req: &Request<B>) -> ClientCapabilities {
         req.extensions()
             .get::<Self>()
-            .map(|c| c.0.clone())
-            .unwrap_or_default()
+            .map_or_default(|c| c.0.clone())
     }
 }
 

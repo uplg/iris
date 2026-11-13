@@ -10,7 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-iris-core = { workspace = true }
 iris-config = { workspace = true }
 utoipa = { workspace = true }
 serde = { workspace = true }
@@ -20,6 +19,5 @@ tokio-util = { workspace = true }
 tokio-stream = "0.1.19"
 thiserror = { workspace = true }
 tracing = { workspace = true }
-anyhow = { workspace = true }
 futures = { workspace = true }
 bytes = { workspace = true }
