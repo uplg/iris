@@ -11,7 +11,7 @@
 
 # Recent emsdk — the image is multi-arch (linux/amd64 + linux/arm64)
 # so building on Apple Silicon doesn't go through qemu emulation.
-ARG EMSDK_VERSION=7.0.0
+ARG EMSDK_VERSION=7.0.1
 FROM emscripten/emsdk:${EMSDK_VERSION} AS libav-builder
 ARG EMSDK_VERSION
 WORKDIR /build
@@ -57,7 +57,7 @@ RUN --mount=type=cache,id=libav-build-emsdk-${EMSDK_VERSION},target=/build/libav
     && cp dist/libav-*-iris.wasm.wasm dist/libav-*-iris.wasm.mjs dist/libav-*-iris.wasm.js /libav-iris/
 
 # Frontend build (bun + Vite)
-FROM oven/bun:1.4.4 AS web-builder
+FROM oven/bun:1.4.5 AS web-builder
 WORKDIR /app
 # A bun workspace: the root lockfile, every member's manifest, AND the
 # patches directory before installing — bun resolves `patchedDependencies`
@@ -155,10 +155,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM cgr.dev/chainguard/wolfi-base AS runtime
 ARG TARGETARCH
 # `apk` here is Wolfi's package manager — glibc packages, NOT Alpine's musl.
-# `ffmpeg-9.0` is Wolfi's versioned package (it provides the bare `ffmpeg`
+# `ffmpeg-9.1` is Wolfi's versioned package (it provides the bare `ffmpeg`
 # name too, which is what a plain `apk add ffmpeg` resolves to today); naming
 # it keeps the line from silently jumping majors on the next rebuild.
-RUN apk add --no-cache ca-certificates-bundle ffmpeg-9.0 tini curl
+RUN apk add --no-cache ca-certificates-bundle ffmpeg-9.1 tini curl
 
 ARG SHAKA_VERSION=v3.9.3
 RUN set -eux; \
