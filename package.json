@@ -4,8 +4,5 @@
   "workspaces": [
     "web",
     "packages/*"
-  ],
-  "patchedDependencies": {
-    "@hevcjs/core@1.9.1": "patches/@hevcjs%2Fcore@1.9.1.patch"
-  }
+  ]
 }

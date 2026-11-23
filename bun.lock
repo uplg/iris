@@ -55,9 +55,6 @@
       },
     },
   },
-  "patchedDependencies": {
-    "@hevcjs/core@1.9.1": "patches/@hevcjs%2Fcore@1.9.1.patch",
-  },
   "packages": {
     "@blazediff/core": ["@blazediff/core@1.10.0", "", {}, "sha512-AOQff0zgR7cGsZL+4E7hVkmujoPUpm0J9xzWGWZj5wCjd3gmxESXAPfKyuzs93VdpQNFhHlBhfOjrcZ+XTERtQ=="],
 
