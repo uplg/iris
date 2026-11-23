@@ -16,7 +16,7 @@
 // bump fails the build until someone reviews the loader (the worker↔client
 // protocol can change across majors) and bumps `expectMajor` deliberately.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,7 +40,8 @@ if (outFlag < 0 || !process.argv[outFlag + 1]) {
 }
 const PUBLIC = resolve(process.cwd(), process.argv[outFlag + 1]);
 
-/** @type {{pkg: string, expectMajor: number, files: [string, string][]}[]} */
+/** `files` is a list, or a function of the installed package's dir when the names carry a version.
+ * @type {{pkg: string, expectMajor: number, files: [string, string][] | ((pkgRoot: string) => [string, string][])}[]} */
 const VENDOR = [
 	{
 		// libass-wasm — ASS/SSA subtitle overlay (subtitles-octopus worker).
@@ -83,24 +84,23 @@ const VENDOR = [
 		// left untouched (copyFileSync never wipes the dir).
 		// Loader: packages/iris-core/src/decode/libav-audio-decoder.ts via /libavjs/*.
 		//
-		// The version is embedded in the filename, so a libav.js bump makes these
-		// source paths vanish — the existence assertion then fails the build until
-		// both this manifest AND the loader's hardcoded filename are updated to
-		// the new version together (intentional: they must move in lockstep).
+		// The version is in the file names (and a fourth figure the package's own version
+		// lacks), so they are read from the installed dist: `libavVersion()` in the loader
+		// asks the library for the same figure.
 		pkg: 'libav.js',
 		expectMajor: 6,
-		files: [
-			['dist/libav-6.10.9.0-default.wasm.js', 'libavjs/libav-6.10.9.0-default.wasm.js'],
-			['dist/libav-6.10.9.0-default.wasm.mjs', 'libavjs/libav-6.10.9.0-default.wasm.mjs'],
-			['dist/libav-6.10.9.0-default.wasm.wasm', 'libavjs/libav-6.10.9.0-default.wasm.wasm']
-		]
+		files: (pkgRoot) => {
+			const built = readdirSync(join(pkgRoot, 'dist')).filter((f) => /^libav-[\d.]+-default\.wasm\.(js|mjs|wasm)$/.test(f));
+			if (built.length !== 3) return [['dist/libav-<version>-default.wasm.{js,mjs,wasm}', '']];
+			return built.map((f) => [`dist/${f}`, `libavjs/${f}`]);
+		}
 	}
 ];
 
 const checkOnly = process.argv.includes('--check');
 const problems = [];
 
-for (const { pkg, expectMajor, files } of VENDOR) {
+for (const { pkg, expectMajor, files: listed } of VENDOR) {
 	const pkgRoot = packageDir(pkg);
 	const pkgJsonPath = join(pkgRoot, 'package.json');
 	if (!existsSync(pkgJsonPath)) {
@@ -118,6 +118,7 @@ for (const { pkg, expectMajor, files } of VENDOR) {
 		continue;
 	}
 
+	const files = typeof listed === 'function' ? listed(pkgRoot) : listed;
 	for (const [srcRel, destRel] of files) {
 		const src = join(pkgRoot, srcRel);
 		const dest = join(PUBLIC, destRel);

@@ -34,5 +34,7 @@ export interface BenchState {
 	livePath: string | null;
 	/** The Iris libav.js variant (AC-3 / E-AC-3) is in the build: the E-AC-3 cases can run. */
 	libavIris: boolean;
+	/** Where the player looks for it (`/libavjs/libav-<version>-iris.wasm.mjs`), built or not. */
+	libavIrisPath: string;
 	dataDir: string;
 }

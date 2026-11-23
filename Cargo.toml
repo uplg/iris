@@ -72,15 +72,15 @@ reqwest = { version = "0.13.5", default-features = false, features = [
   "cookies",
   "form",
 ] }
-bytes = "1.12.1"
+bytes = "1.12.2"
 # Mozilla's CA root bundle, compiled into the binary — so outbound TLS trust
 # doesn't depend on the (stale/incomplete) CA store of the Wolfi runtime image.
-webpki-root-certs = "1.0.11"
+webpki-root-certs = "1.0.12"
 
 # Serde / config
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-toml = "1.2.1"
+toml = "1.2.2"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 
 # OpenAPI — utoipa derives the spec from the route handlers + serde types.
@@ -90,7 +90,7 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "chrono"] }
 
 # DB (latest stable)
-sqlx = { version = "0.9.0", default-features = false, features = [
+sqlx = { version = "0.9.1", default-features = false, features = [
   "runtime-tokio",
   "tls-rustls",
   "sqlite",
@@ -103,7 +103,7 @@ sqlx = { version = "0.9.0", default-features = false, features = [
 # Auth (latest stable)
 argon2 = "0.6.0"
 jsonwebtoken = { version = "12.0.0", default-features = false, features = ["aws_lc_rs"] }
-rand = "0.10.3"
+rand = "0.10.4"
 
 # Passkeys (optional second way in, next to passwords): same stack as
 # ariane/maison. `conditional-ui` = usernameless sign-in from autofill;
@@ -117,14 +117,14 @@ passkey = { version = "0.6.0", features = ["rust-crypto"] }
 
 # Errors / logging
 thiserror = "2.0.21"
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # Utility
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde", "clock"] }
-uuid = { version = "1.29.2", features = ["v4", "serde"] }
-url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.29.3", features = ["v4", "serde"] }
+url = { version = "2.5.9", features = ["serde"] }
 # Raw-byte percent-encoding for BitTorrent announce query strings
 # (`info_hash` / `peer_id` are 20 arbitrary bytes, not text). Same crate
 # librqbit encodes its own announces with, so ours match byte for byte.

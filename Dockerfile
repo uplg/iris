@@ -19,12 +19,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         git make python3 yasm nasm pkg-config xz-utils \
     && rm -rf /var/lib/apt/lists/*
-# Clone libav.js. The version is pinned to match what the web frontend
-# pulled in via `bun install libav.js` so the loader's expected
-# filename (`libav-6.10.9.0-iris.*`) matches the version emscripten
-# spits out.
+# Clone libav.js at the version the web frontend pulled in via
+# `bun install libav.js`: the library names its files by its own version
+# (`libav-<version>-iris.*`), and that is the name the loader asks for.
+# The one place the version is written here.
 ARG LIBAVJS_REPO=https://github.com/Yahweasel/libav.js
-ARG LIBAVJS_REF=v6.10.9.0
+ARG LIBAVJS_REF=v6.11.9.0.2
 RUN git clone --depth 1 --branch ${LIBAVJS_REF} ${LIBAVJS_REPO} /build/libav.js
 WORKDIR /build/libav.js
 # Custom variant config. `mkconfig.js` must run from inside `configs/`
@@ -53,9 +53,8 @@ RUN cd configs && node mkconfig.js iris \
 # toolchain must not be relinked by this one.
 RUN --mount=type=cache,id=libav-build-emsdk-${EMSDK_VERSION},target=/build/libav.js/build,sharing=locked \
     make build-iris -j"$(nproc)" \
-    && cp dist/libav-6.10.9.0-iris.wasm.wasm /libav-iris.wasm \
-    && cp dist/libav-6.10.9.0-iris.wasm.mjs /libav-iris.wasm.mjs \
-    && cp dist/libav-6.10.9.0-iris.wasm.js /libav-iris.wasm.js
+    && mkdir /libav-iris \
+    && cp dist/libav-*-iris.wasm.wasm dist/libav-*-iris.wasm.mjs dist/libav-*-iris.wasm.js /libav-iris/
 
 # Frontend build (bun + Vite)
 FROM oven/bun:1.4.4 AS web-builder
@@ -77,9 +76,7 @@ WORKDIR /app/web
 # Drop the iris-variant WASM into static/ so SvelteKit copies it into build.
 # (The npm-package libav.js wasm files in static/libavjs/ stay as the
 # fallback when the iris variant isn't present.)
-COPY --from=libav-builder /libav-iris.wasm static/libavjs/libav-6.10.9.0-iris.wasm.wasm
-COPY --from=libav-builder /libav-iris.wasm.mjs static/libavjs/libav-6.10.9.0-iris.wasm.mjs
-COPY --from=libav-builder /libav-iris.wasm.js static/libavjs/libav-6.10.9.0-iris.wasm.js
+COPY --from=libav-builder /libav-iris/ static/libavjs/
 # Per-deploy build id baked into the bundle + emitted to _app/version.json so
 # already-open tabs can detect a redeploy and offer a reload. `.git` is excluded
 # from the build context, so Vite can't read the sha itself — pass it as a build

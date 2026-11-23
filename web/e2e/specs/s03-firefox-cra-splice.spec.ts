@@ -55,7 +55,7 @@ test(
 );
 
 test('the libav.js variant probe tells a missing build from a served one', { tag: ['@firefox', '@chrome'] }, async ({ page, state }) => {
-	const res = await page.request.head('/libavjs/libav-6.10.9.0-iris.wasm.mjs');
+	const res = await page.request.head(state.libavIrisPath);
 	const type = res.headers()['content-type'] ?? '';
 	if (state.libavIris) {
 		expect(res.status()).toBe(200);
