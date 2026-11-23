@@ -47,7 +47,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import IrisChrome from './IrisChrome.svelte';
 	import SubtitleOverlay from './SubtitleOverlay.svelte';
-	import { toggleFullscreen } from './browser.ts';
+	import { leavePageFullscreen, toggleFullscreen } from './browser.ts';
 
 	let { view, place = 'page' }: { view: StageView; place?: 'page' | 'pip' } = $props();
 	let wrapper = $state<HTMLDivElement | null>(null);
@@ -92,12 +92,18 @@
 			view.media.read(h);
 		}, DOUBLE_CLICK_MS);
 	}
+	const fullscreen = () => void toggleFullscreen(wrapper, { overlay: !!view.activeOverlay });
 	function dblclick(e: MouseEvent) {
 		if (onControl(e)) return;
 		clearTimeout(clickTimer);
 		clickTimer = undefined;
-		void toggleFullscreen(wrapper);
+		fullscreen();
 	}
+	// a stage that goes away gives the page back
+	$effect(() => {
+		const el = wrapper;
+		if (el) return () => leavePageFullscreen(el);
+	});
 
 	const status = $derived(view.notice ?? (view.media.busy ? 'Buffering' : ''));
 </script>
@@ -128,6 +134,7 @@
 		activeAudioIndex={view.activeAudioIndex}
 		onAudioPick={(id) => view.onAudioPick(id)}
 		fullscreenTarget={wrapper}
+		onFullscreen={fullscreen}
 		pip={view.pip}
 		nextEpisode={view.nextEpisode}
 		debugInfo={view.debugInfo}
@@ -151,6 +158,19 @@
 		background: var(--stage);
 		color: var(--stage-ink);
 		border-radius: inherit;
+	}
+	/* full screen kept in the page (an iPhone with drawn subtitles: browser.ts) */
+	.stage:global([data-page-fullscreen]) {
+		position: fixed;
+		inset: 0;
+		z-index: 200;
+		width: auto;
+		height: auto;
+		border-radius: 0;
+	}
+	:global(html[data-stage-fullscreen]) {
+		overflow: hidden;
+		background: var(--stage);
 	}
 	/* the ring drawn inside: the page's frame clips anything outside the stage */
 	.stage:focus-visible {

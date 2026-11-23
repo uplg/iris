@@ -30,6 +30,7 @@ async function setup(init: Parameters<typeof fakeEngine>[0] = {}, extra: Record<
 			activeAudioIndex: 0,
 			onAudioPick,
 			fullscreenTarget: stage,
+			onFullscreen: vi.fn(),
 			pip: { supported: true, active: false, toggle: vi.fn(async () => undefined) },
 			onVisibleChange,
 			onVolumeChange,

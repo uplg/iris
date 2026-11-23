@@ -7,6 +7,7 @@
 		"#lib/*": "./src/lib/*"
 	},
 	"scripts": {
+		"icons": "scripts/icons.sh",
 		"sync-vendor": "bun ../packages/iris-core/sync-vendor.mjs --out static",
 		"gen-types": "bun install --cwd tools/api-gen && bun run --cwd tools/api-gen gen",
 		"gen-api": "cargo run -q -p iris-api --bin gen-openapi -- --write && bun run gen-types",
