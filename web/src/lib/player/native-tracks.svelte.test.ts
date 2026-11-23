@@ -55,3 +55,28 @@ describe('native subtitle on/off', () => {
 		expect(video.textTracks).toHaveLength(1);
 	});
 });
+
+describe('native track identity', () => {
+	it("carries the given name and a BCP 47 language, not the file's code", () => {
+		const video = document.createElement('video');
+		const map = new Map<number, HTMLTrackElement>();
+		const sub = {
+			stream_idx: 2,
+			codec: 'subrip',
+			lang: 'fre',
+			title: 'Full',
+			vttUrl: '/a.vtt',
+			label: 'French'
+		} as unknown as NativeSubtitleTrack;
+		const el = appendNativeTrack(video, sub, map);
+		expect(el.label).toBe('French');
+		expect(el.srclang).toBe('fr');
+	});
+
+	it('reports the track showing now', () => {
+		const { map, handle } = setup('/no-such-subtitle.vtt');
+		expect(handle.shownNativeSubtitle?.()).toBeNull();
+		map.get(2)!.track.mode = 'showing';
+		expect(handle.shownNativeSubtitle?.()).toBe(2);
+	});
+});

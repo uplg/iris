@@ -11,10 +11,16 @@
  * (C/D) keeps its own clock + decoder pipeline state.
  */
 
+import { normalizeLang } from './lang';
 import type { Manifest, SubtitleTrack } from './manifest-client';
 
 /** Native `<track>`-renderable subtitle with the URL rewritten to `.vtt`. */
-export type NativeSubtitleTrack = SubtitleTrack & { vttUrl: string };
+export type NativeSubtitleTrack = SubtitleTrack & {
+	vttUrl: string;
+	/** The name the player's own panel gives it: a menu outside Iris (the iPhone system
+	 *  player's) lists the `<track>` under it. */
+	label?: string;
+};
 
 export type EngineAudioTrack = {
 	/** Stable identifier — engine-specific (HLS rendition group id,
@@ -103,6 +109,9 @@ export type EngineHandle = {
 	 *  the track fetch in place. Engines without `<track>` elements
 	 *  (C/D) omit it. */
 	setNativeSubtitleSrc?: (streamIdx: number, url: string) => void;
+	/** The native subtitle showing now, by `stream_idx`: a menu outside Iris (the iPhone
+	 *  system player's) switches the `<track>`s without asking. */
+	shownNativeSubtitle?: () => number | null;
 
 	/** Ordered `[label, value]` pairs for the player's debug panel. Every
 	 *  engine describes itself: the panel renders whatever it is handed and
@@ -338,6 +347,10 @@ export function videoBackedHandle(
 			if (!el || el.getAttribute('src') === url) return;
 			el.src = url;
 		},
+		shownNativeSubtitle: () => {
+			for (const [idx, trackEl] of extras.nativeTrackMap ?? []) if (trackEl.track.mode === 'showing') return idx;
+			return null;
+		},
 		videoElement: () => video,
 		canvasElement: () => null
 	};
@@ -366,8 +379,9 @@ export function appendNativeTrack(
 	const el = document.createElement('track');
 	el.src = sub.vttUrl;
 	el.kind = 'subtitles';
-	el.label = sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
-	el.srclang = sub.lang ?? 'und';
+	el.label = sub.label ?? sub.title ?? sub.lang?.toUpperCase() ?? `Sub ${sub.stream_idx}`;
+	// a BCP 47 tag, not the file's `fre` / `eng`: the system menus name the language from it
+	el.srclang = normalizeLang(sub.lang) ?? 'und';
 	video.appendChild(el);
 	trackMap.set(sub.stream_idx, el);
 	return el;

@@ -34,6 +34,18 @@ describe('subtitle renderers', () => {
 		expect(overlay.map((t) => t.stream_idx)).toEqual([4]);
 	});
 
+	it('names a native track as the panel does, for the menus outside Iris', () => {
+		const subtitles = [
+			{ ...m.subtitles[0], stream_idx: 3, codec: 'subrip', lang: 'fre', title: 'Full', forced: false },
+			{ ...m.subtitles[0], stream_idx: 4, codec: 'subrip', lang: 'fre', title: 'Forced', forced: true },
+			{ ...m.subtitles[0], stream_idx: 5, codec: 'subrip', lang: 'eng', title: 'Full', forced: false }
+		];
+		const { native } = classifySubtitles({ ...m, subtitles });
+		expect(native.map((t) => t.label)).toEqual(subtitleLabels(subtitles));
+		expect(native[0].label).toMatch(/^French/);
+		expect(native[2].label).toMatch(/^English/);
+	});
+
 	it('versions a URL only when a token is known', () => {
 		expect(versioned('/a.vtt', undefined)).toBe('/a.vtt');
 		expect(versioned('/a.vtt', 'final')).toBe('/a.vtt?v=final');
