@@ -59,12 +59,11 @@ RUN --mount=type=cache,id=libav-build-emsdk-${EMSDK_VERSION},target=/build/libav
 # Frontend build (bun + Vite)
 FROM oven/bun:1.4.5 AS web-builder
 WORKDIR /app
-# A bun workspace: the root lockfile, every member's manifest, AND the
-# patches directory before installing — bun resolves `patchedDependencies`
-# paths during `install`, so the patch files must already exist on disk
-# (else `Couldn't find patch file: patches/<pkg>@<ver>.patch`).
+# A bun workspace: the root lockfile and every member's manifest before
+# installing. No dependency is patched today; if `patchedDependencies` comes
+# back, `COPY patches ./patches` goes here too (bun resolves the patch files
+# during `install`).
 COPY package.json bun.lock ./
-COPY patches ./patches
 COPY web/package.json ./web/
 COPY packages/iris-core/package.json ./packages/iris-core/
 COPY packages/iris-api/package.json ./packages/iris-api/
