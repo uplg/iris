@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(ty.contains("javascript"), "{ty}");
         for missing in [
-            "/libavjs/libav-6.10.9.0-iris.wasm.mjs",
+            "/libavjs/libav-iris.wasm.mjs",
             "/libass/x.wasm",
             "/hevcjs/x.js",
             "/libpgs/x.js",

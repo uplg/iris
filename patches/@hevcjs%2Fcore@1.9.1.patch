@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index d58cf6f45324e4a24f5be59cd4ddf4db3d9a7001..16bdba372271a83c66dd2a390e16742dc278b46f 100644
+index cf18f4e77f0d962f0b6079e54a1b95508658e291..873f570d3b16ea03a9e1f6d09291432b43f2336f 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -9,7 +9,10 @@ function pickH264Codec(w, h) {
@@ -13,9 +13,9 @@ index d58cf6f45324e4a24f5be59cd4ddf4db3d9a7001..16bdba372271a83c66dd2a390e16742d
 +var LATENCY_MODES = typeof navigator !== "undefined" && /Firefox\//.test(navigator.userAgent) ? ["quality", "realtime"] : ["realtime", "quality"];
  var PROBE_WIDTH = 1280;
  var PROBE_HEIGHT = 720;
- function buildEncoderConfig(width, height, fps, bitrate, latencyMode) {
+ var refusedLatencyModes = /* @__PURE__ */ new Set();
 diff --git a/dist/transcode-worker.js b/dist/transcode-worker.js
-index 5345bdae5dc427883b5698c8b802db4f0790fff6..abd05e4be445b0cd7d3d213fcd526de10297cc0b 100644
+index 26e33c489a5ff6a81929aea8a0f635f6bf5b0cfb..47a25fdbddaa4b45c4595fbdcb258afffc2825b9 100644
 --- a/dist/transcode-worker.js
 +++ b/dist/transcode-worker.js
 @@ -10909,7 +10909,10 @@
@@ -29,4 +29,4 @@ index 5345bdae5dc427883b5698c8b802db4f0790fff6..abd05e4be445b0cd7d3d213fcd526de1
 +  var LATENCY_MODES = typeof navigator !== "undefined" && /Firefox\//.test(navigator.userAgent) ? ["quality", "realtime"] : ["realtime", "quality"];
    var PROBE_WIDTH = 1280;
    var PROBE_HEIGHT = 720;
-   function buildEncoderConfig(width, height, fps, bitrate, latencyMode) {
+   var refusedLatencyModes = /* @__PURE__ */ new Set();

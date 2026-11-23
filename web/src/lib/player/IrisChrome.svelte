@@ -25,7 +25,7 @@
 	import TrackPanel from './TrackPanel.svelte';
 	import { actionFor, nextSpeed, ownedByControl, shortcutList, type PlayerAction } from './shortcuts.ts';
 	import { volumeText } from './spoken.ts';
-	import { toggleFullscreen } from './browser.ts';
+	import { isFullscreen, PAGE_FULLSCREEN_CHANGE } from './browser.ts';
 
 	interface Props {
 		handle: EngineHandle | null;
@@ -40,6 +40,7 @@
 		onAudioPick: (id: string) => void;
 		/** The stage: full screen target, where the keys are listened to. */
 		fullscreenTarget: HTMLElement | null;
+		onFullscreen: () => void;
 		pip: ChromePip;
 		nextEpisode?: NextEpisode | null;
 		/** Facts for the playback details, before what the engine reports. */
@@ -63,6 +64,7 @@
 		activeAudioIndex,
 		onAudioPick,
 		fullscreenTarget,
+		onFullscreen,
 		pip,
 		nextEpisode = null,
 		debugInfo = [],
@@ -146,9 +148,7 @@
 		refresh();
 		onsay?.(v.playbackRate === 1 ? 'Normal speed' : `Speed ${v.playbackRate}×`);
 	}
-	function fs() {
-		void toggleFullscreen(fullscreenTarget);
-	}
+	const fs = () => onFullscreen();
 	function openPanel(p: Panel) {
 		panel = panel === p ? 'none' : p;
 		if (panel === 'none') (p === 'tracks' ? tracksButton : shortcutsButton)?.focus();
@@ -184,6 +184,7 @@
 				return changeSpeed(a.step);
 			case 'escape':
 				if (panel !== 'none') closePanel();
+				else fs();
 				return;
 		}
 	}
@@ -197,8 +198,9 @@
 			if (ownedByControl(e.target, e.key)) return;
 			const a = actionFor(e, live);
 			if (!a) return;
-			// Escape with nothing open is the browser's (it leaves full screen)
-			if (a.kind === 'escape' && panel === 'none') return;
+			// Escape with nothing open is the browser's (it leaves full screen), except the full
+			// screen kept in the page, which only the player can leave
+			if (a.kind === 'escape' && panel === 'none' && el.dataset.pageFullscreen === undefined) return;
 			e.preventDefault();
 			run(a);
 		};
@@ -240,10 +242,14 @@
 		const el = fullscreenTarget;
 		if (!el) return;
 		const doc = el.ownerDocument;
-		const on = () => (fullscreen = doc.fullscreenElement === el);
+		const on = () => (fullscreen = isFullscreen(el));
 		on();
 		doc.addEventListener('fullscreenchange', on);
-		return () => doc.removeEventListener('fullscreenchange', on);
+		el.addEventListener(PAGE_FULLSCREEN_CHANGE, on);
+		return () => {
+			doc.removeEventListener('fullscreenchange', on);
+			el.removeEventListener(PAGE_FULLSCREEN_CHANGE, on);
+		};
 	});
 
 	// a pointer press outside an open panel closes it, and only that: the stage's click that

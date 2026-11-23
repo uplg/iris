@@ -394,13 +394,20 @@ Kotlin sealed class side. See memory `project_serde_kotlinx_discriminator`.
   `@iris/api/refusals` (by code; by message words only where the server sends
   no code yet). The Android TV app mirrors these words.
 - Patched dependencies (`patchedDependencies` in the root `package.json`,
-  files in `patches/`): mediabunny and @hevcjs/core. A version bump needs the
-  patch regenerated under the new key (`bun patch <pkg>`, edit, `bun patch
-  --commit`), never the old file renamed: bun applies a stale patch by line
-  offset and can land it in the wrong function (a corrupted dist, found only by
-  `bun run build`). Then grep the `[iris patch]` markers in
+  files in `patches/`): @hevcjs/core (mediabunny's open-GOP patch went with
+  1.66.3, fixed upstream; `mse/open-gop-mux.test.ts` holds it there). A version
+  bump needs the patch regenerated under the new key (`bun patch <pkg>`, edit,
+  `bun patch --commit`), never the old file renamed: bun applies a stale patch
+  by line offset and can land it in the wrong function (a corrupted dist, found
+  only by `bun run build`). `patch -p1` leaves `.orig` files that the commit
+  swallows: delete them first. Then grep the `[iris patch]` markers in
   `node_modules/.bun/<pkg>@<version>/…/dist` and run `bun run sync-vendor` in
   `web/` (hevc.js's worker is copied into `web/static`).
+- libav.js names its files by its own version. Nothing repeats it: `sync-vendor`
+  and the e2e harness read the names from the installed package, the loader asks
+  the library (`VER`). A bump is `package.json` plus `LIBAVJS_REF` in the
+  Dockerfile, then the `-iris` build again for local runs
+  (`docker build --target libav-builder`, files in `/libav-iris/`).
 
 ## UI rules
 

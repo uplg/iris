@@ -5,6 +5,10 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
 		<meta name="theme-color" content="#0e5e68" />
 		<link rel="icon" href="%sveltekit.assets%/brand.svg" type="image/svg+xml" />
+		<!-- added to a home screen, Iris opens without the browser's bars: on an iPhone that is
+		     where the player's in-page full screen takes the whole screen -->
+		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
+		<link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png" />
 		<link rel="preload" href="%sveltekit.assets%/fonts/CalSansVF.woff2" as="font" type="font/woff2" crossorigin />
 		<title>Iris</title>
 		<!-- the chosen theme before first paint: no flash of the other one -->

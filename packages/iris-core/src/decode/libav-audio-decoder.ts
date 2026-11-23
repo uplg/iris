@@ -35,6 +35,8 @@ const AV_SAMPLE_FMT_TO_MEDIABUNNY: Record<number, string> = {
 
 // Concrete libav.js public surface we touch — typed loosely because
 // libav.js doesn't ship TS types in any stable form.
+type LibavModule = { LibAV?: (opts: object) => Promise<LibavLike>; VER?: string };
+
 type LibavLike = {
 	ff_init_decoder: (name: string, config?: Record<string, unknown>) => Promise<[number, number, number, number]>;
 	ff_decode_multi: (
@@ -71,9 +73,9 @@ type DecodedFrame = {
  *  codecs) is deployed alongside the default variant. The build only
  *  ships it inside the Docker image (see `libav-builder` stage); dev
  *  servers running outside Docker fall back to `default`. */
-async function detectIrisVariant(): Promise<boolean> {
+async function detectIrisVariant(version: string): Promise<boolean> {
 	try {
-		const res = await fetch('/libavjs/libav-6.10.9.0-iris.wasm.mjs', {
+		const res = await fetch(`/libavjs/libav-${version}-iris.wasm.mjs`, {
 			method: 'HEAD',
 			cache: 'no-store'
 		});
@@ -90,7 +92,12 @@ export function isScriptResponse(res: Response): boolean {
 }
 
 const getLibav = onceUntilFailure(async (): Promise<LibavLike> => {
-	const variant = (await detectIrisVariant()) ? 'iris' : 'default';
+	const mod = (await import('libav.js')) as unknown as LibavModule & { default?: LibavModule };
+	const factory = mod.LibAV ?? mod.default?.LibAV;
+	const version = mod.VER ?? mod.default?.VER;
+	if (!factory || !version) throw new Error('libav.js: LibAV factory not found');
+	// the library names its own files by this version: the one place it is read
+	const variant = (await detectIrisVariant(version)) ? 'iris' : 'default';
 	if (variant === 'default') {
 		console.warn(
 			'[iris-core] Iris libav variant not found — falling back to `default` ' +
@@ -98,11 +105,6 @@ const getLibav = onceUntilFailure(async (): Promise<LibavLike> => {
 				'stage or `docker compose build` to produce the iris variant.'
 		);
 	}
-	const mod = await import('libav.js');
-	const factory =
-		(mod as unknown as { LibAV?: (opts: object) => Promise<LibavLike> }).LibAV ??
-		(mod as unknown as { default?: { LibAV?: (opts: object) => Promise<LibavLike> } }).default?.LibAV;
-	if (!factory) throw new Error('libav.js: LibAV factory not found');
 	// libav.js runs in its own worker: AC-3 / E-AC-3 / DTS decode off the UI thread, where
 	// it competed with the chrome, the animation frames and the MSE appends (phones on Tier
 	// B included). A browser that can't start that module worker keeps the main thread.

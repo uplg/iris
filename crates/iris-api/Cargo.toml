@@ -49,7 +49,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 
-clap = { version = "4.6.7", features = ["derive", "env"] }
+clap = { version = "4.6.9", features = ["derive", "env"] }
 # Cookie Max-Age plumbing (axum-extra cookies speak `time`, not chrono).
 time = "0.3.55"
 reqwest = { workspace = true }

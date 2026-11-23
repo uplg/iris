@@ -4,7 +4,7 @@
 // live HLS channel. Returns the teardown. Set IRIS_E2E_KEEP=1 to keep the temp dir and its log;
 // `bun e2e/harness/serve.ts` keeps a bench up, which runs with IRIS_E2E_REUSE=1 then use.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -143,8 +143,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 	// from npm: point IRIS_E2E_LIBAV_DIR at its three files to run the E-AC-3 cases
 	const libavDir = process.env.IRIS_E2E_LIBAV_DIR;
 	if (libavDir) {
-		for (const ext of ['js', 'mjs', 'wasm']) {
-			const name = `libav-6.10.9.0-iris.wasm.${ext}`;
+		for (const name of readdirSync(libavDir).filter((f) => /-iris\.wasm\.(js|mjs|wasm)$/.test(f))) {
 			copyFileSync(join(libavDir, name), join(web, 'static/libavjs', name));
 		}
 	}
@@ -263,8 +262,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 		console.warn(`[e2e] live channel unavailable: ${String(e)}`);
 	}
 
-	const libavIris = existsSync(join(web, 'build/libavjs/libav-6.10.9.0-iris.wasm.mjs'));
-	const state: BenchState = { baseUrl: base, email: EMAIL, password: PASSWORD, infohash, livePath, libavIris, dataDir: tmp };
+	// the name the player asks for: the installed libav.js's own, its `default` build swapped
+	const served = readdirSync(join(web, 'build/libavjs')).find((f) => f.endsWith('-default.wasm.mjs')) ?? '';
+	const libavIrisPath = `/libavjs/${served.replace('-default.', '-iris.')}`;
+	const libavIris = existsSync(join(web, 'build', libavIrisPath));
+	const state: BenchState = { baseUrl: base, email: EMAIL, password: PASSWORD, infohash, livePath, libavIris, libavIrisPath, dataDir: tmp };
 	writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 	process.env.IRIS_E2E_BASE_URL = base;
 	console.log(`[e2e] backend up at ${base} (data in ${tmp})`);

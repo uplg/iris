@@ -25,9 +25,7 @@ appends and stored nothing, which is the failure signature.
 AC-3 / E-AC-3 decode needs the Docker-built libav variant:
 
     docker build --target libav-builder -t iris-libav . && cid=$(docker create iris-libav)
-    docker cp $cid:/libav-iris.wasm      libavjs/libav-6.10.9.0-iris.wasm.wasm
-    docker cp $cid:/libav-iris.wasm.mjs  libavjs/libav-6.10.9.0-iris.wasm.mjs
-    docker cp $cid:/libav-iris.wasm.js   libavjs/libav-6.10.9.0-iris.wasm.js
+    docker cp $cid:/libav-iris/. libavjs/
 
 ## upstream/: the minimal reproducer
 

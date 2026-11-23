@@ -11,7 +11,7 @@
 	import { ui } from '#lib/ui.svelte.ts';
 	import { MediaState } from './media-state.svelte.ts';
 	import { DocumentPip, isDocumentPipSupported } from './document-pip.svelte.ts';
-	import { engineLoader } from './browser.ts';
+	import { engineLoader, keepScreenAwake } from './browser.ts';
 	import { liftCues } from './cues.ts';
 	import {
 		classifySubtitles,
@@ -270,6 +270,12 @@
 		const v = handle?.videoElement();
 		if (!v || subtitleOverlayKind(activeSubtitle) !== 'native') return;
 		return liftCues(v, controlsVisible);
+	});
+
+	// the screen stays on while it plays: a canvas tier, or the stage full screen in the page
+	// on an iPhone, is no <video> the system would keep awake for
+	$effect(() => {
+		if (!media.paused) return keepScreenAwake();
 	});
 
 	// OS media keys and lock screen, for every tier (canvas ones included)
