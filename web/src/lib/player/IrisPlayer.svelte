@@ -302,6 +302,24 @@
 		props.onActiveSubtitleChange?.(track ? track.stream_idx : null);
 	}
 
+	// a subtitle picked in the iPhone system player's own menu is the person's pick too: it
+	// flips the `<track>`s itself, so the panel and the kept choice follow. Only while the
+	// video is there: everywhere else the modes are Iris's alone.
+	$effect(() => {
+		const h = handle;
+		const v = h?.videoElement() as (HTMLVideoElement & { webkitDisplayingFullscreen?: boolean }) | null | undefined;
+		if (!h?.shownNativeSubtitle || !v) return;
+		const onChange = () => {
+			if (!v.webkitDisplayingFullscreen) return;
+			const shown = h.shownNativeSubtitle?.() ?? null;
+			const current = activeSubtitle?.stream_idx ?? null;
+			if (shown === current) return;
+			onSubtitlePick(shown === null ? null : (props.manifest.subtitles.find((s) => s.stream_idx === shown) ?? null));
+		};
+		v.textTracks.addEventListener('change', onChange);
+		return () => v.textTracks.removeEventListener('change', onChange);
+	});
+
 	function onAudioPick(id: string) {
 		const idx = Number(id);
 		if (!Number.isFinite(idx)) return;

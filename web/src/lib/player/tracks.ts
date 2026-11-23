@@ -21,10 +21,12 @@ export function subtitleOverlayKind(track: SubtitleTrack | null | undefined): Su
 export function classifySubtitles(manifest: Manifest): { native: NativeSubtitleTrack[]; overlay: SubtitleTrack[] } {
 	const native: NativeSubtitleTrack[] = [];
 	const overlay: SubtitleTrack[] = [];
-	for (const t of manifest.subtitles) {
+	// the panel's names on the `<track>`s too: one name per subtitle, wherever it is listed
+	const labels = subtitleLabels(manifest.subtitles);
+	for (const [i, t] of manifest.subtitles.entries()) {
 		const kind = subtitleOverlayKind(t);
 		if (kind === 'ass' || kind === 'pgs') overlay.push(t);
-		else if (kind === 'native') native.push({ ...t, vttUrl: nativeSubtitleUrl(manifest, t.stream_idx) });
+		else if (kind === 'native') native.push({ ...t, vttUrl: nativeSubtitleUrl(manifest, t.stream_idx), label: labels[i] });
 	}
 	return { native, overlay };
 }
